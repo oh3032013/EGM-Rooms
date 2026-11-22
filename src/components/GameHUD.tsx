@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { AudioLines, BookOpen, Check, Compass, Copy, Eye, Flame, Gamepad2, Hammer, LogOut, Maximize2, MessageSquare, Minimize2, Moon, PackageCheck, Pause, Satellite, Send, ShoppingBag, Trophy, Users, Volume2, VolumeX, Zap } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AudioLines, BookOpen, Check, Compass, Copy, Eye, Flame, Gamepad2, Hammer, Link2, LogOut, Maximize2, MessageSquare, Minimize2, Moon, PackageCheck, Pause, Satellite, Send, ShoppingBag, Trophy, Users, Volume2, VolumeX, Zap } from 'lucide-react';
 import { ITEMS } from '../game/constants';
 import {
   formatMorningSummaryText,
@@ -85,8 +85,10 @@ interface GameHUDProps {
   onDismissSummary: () => void;
   roomHud?: RoomHudState | null;
   chatOpen?: boolean;
+  unreadChatCount?: number;
   onToggleChat?: () => void;
   onSendChat?: (text: string) => void;
+  onToggleSleepVote?: () => void;
   onLeaveRoom?: () => void;
 }
 
@@ -122,13 +124,17 @@ export function GameHUD({
   onDismissSummary,
   roomHud = null,
   chatOpen = false,
+  unreadChatCount = 0,
   onToggleChat,
   onSendChat,
+  onToggleSleepVote,
   onLeaveRoom,
 }: GameHUDProps) {
   const t = UI_TEXT[lang];
   const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
   const [chatInput, setChatInput] = useState('');
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
   const activeItemId = hud.hotbar[hud.selectedHotbarIndex];
   const activeItem = activeItemId ? ITEMS[activeItemId] : null;
   const activeLabel = activeItemId ? getItemLabel(activeItemId, lang) : null;
@@ -136,12 +142,32 @@ export function GameHUD({
   const staminaPct = Math.max(0, Math.min(100, (hud.stamina / hud.maxStamina) * 100));
   const promptText = hud.nearPrompt ? getNearPromptLabel(hud.nearPrompt.action, lang) : null;
 
+  useEffect(() => {
+    if (chatOpen) {
+      const id = window.setTimeout(() => chatInputRef.current?.focus(), 40);
+      return () => window.clearTimeout(id);
+    }
+  }, [chatOpen]);
+
   const handleCopyRoomCode = async () => {
     if (!roomHud) return;
     try {
       await navigator.clipboard.writeText(roomHud.roomCode);
       setCopiedCode(true);
       setTimeout(() => setCopiedCode(false), 1800);
+    } catch {
+      // Ignore clipboard errors in restricted iframes
+    }
+  };
+
+  const handleCopyInviteLink = async () => {
+    if (!roomHud) return;
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('room', roomHud.roomCode);
+      await navigator.clipboard.writeText(url.toString());
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 1800);
     } catch {
       // Ignore clipboard errors in restricted iframes
     }
@@ -489,17 +515,31 @@ export function GameHUD({
                   {copiedCode ? <Check className="w-3 h-3 text-[#4ade80]" /> : <Copy className="w-3 h-3" />}
                   <span className="hidden sm:inline">{copiedCode ? t.codeCopiedToast : t.copyCodeBtn}</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCopyInviteLink()}
+                  title={t.copyLinkBtn}
+                  className="wood-button px-1.5 py-0.5 rounded text-[10px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                >
+                  {copiedLink ? <Check className="w-3 h-3 text-[#4ade80]" /> : <Link2 className="w-3 h-3 text-[#7dd3fc]" />}
+                  <span className="hidden md:inline">{copiedLink ? t.linkCopiedToast : t.copyLinkBtn}</span>
+                </button>
                 {onToggleChat && (
                   <button
                     type="button"
                     onClick={onToggleChat}
                     title={t.chatBtn}
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold inline-flex items-center gap-1 cursor-pointer ${
+                    className={`relative px-1.5 py-0.5 rounded text-[10px] font-semibold inline-flex items-center gap-1 cursor-pointer ${
                       chatOpen ? 'wood-button-primary' : 'wood-button'
                     }`}
                   >
                     <MessageSquare className="w-3 h-3" />
                     <span className="hidden sm:inline">{t.chatBtn}</span>
+                    {unreadChatCount > 0 && !chatOpen && (
+                      <span className="px-1 min-w-[14px] h-3.5 rounded-full bg-[#ef4444] text-white text-[9px] font-mono-tabular font-bold flex items-center justify-center">
+                        {unreadChatCount > 9 ? '9+' : unreadChatCount}
+                      </span>
+                    )}
                   </button>
                 )}
                 {onLeaveRoom && (
@@ -529,7 +569,7 @@ export function GameHUD({
         {roomHud && roomHud.sleepVotes.length > 0 && roomHud.players.length > 1 && (
           <div
             dir={lang === 'ar' ? 'rtl' : 'ltr'}
-            className="self-center pointer-events-auto wood-panel rounded-lg px-3 py-1.5 text-xs font-semibold text-[#bae6fd] flex items-center gap-2"
+            className="self-center pointer-events-auto wood-panel rounded-lg px-3 py-1.5 text-xs font-semibold text-[#bae6fd] flex flex-wrap items-center gap-2"
           >
             <Moon className="w-3.5 h-3.5 text-[#fde047]" />
             <span>
@@ -544,6 +584,19 @@ export function GameHUD({
                 String(Math.max(0, roomHud.players.length - roomHud.sleepVotes.length))
               )}
             </span>
+            {onToggleSleepVote && (
+              <button
+                type="button"
+                onClick={onToggleSleepVote}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold cursor-pointer ${
+                  roomHud.sleepVotes.includes(roomHud.playerId)
+                    ? 'wood-button text-[#fca5a5]'
+                    : 'wood-button-primary'
+                }`}
+              >
+                {roomHud.sleepVotes.includes(roomHud.playerId) ? t.sleepCancelBtn : t.sleepReadyBtn}
+              </button>
+            )}
           </div>
         )}
 
@@ -571,20 +624,25 @@ export function GameHUD({
               })}
             </div>
             <div className="max-h-32 overflow-y-auto space-y-1 text-xs pr-1">
-              {roomHud.chat.map((msg) => {
-                const pal = PLAYER_PALETTE[msg.colorIndex % PLAYER_PALETTE.length] ?? PLAYER_PALETTE[0];
-                return (
-                  <div key={msg.id} className="leading-snug break-words">
-                    <span className="font-bold" style={{ color: pal.badge }}>
-                      {msg.senderName}:{' '}
-                    </span>
-                    <span className="text-[#f5ebd6]">{msg.text}</span>
-                  </div>
-                );
-              })}
+              {roomHud.chat.length === 0 ? (
+                <div className="text-[11px] text-[#bfa688] italic py-1">{t.noChatYet}</div>
+              ) : (
+                roomHud.chat.map((msg) => {
+                  const pal = PLAYER_PALETTE[msg.colorIndex % PLAYER_PALETTE.length] ?? PLAYER_PALETTE[0];
+                  return (
+                    <div key={msg.id} className="leading-snug break-words">
+                      <span className="font-bold" style={{ color: pal.badge }}>
+                        {msg.senderName}:{' '}
+                      </span>
+                      <span className="text-[#f5ebd6]">{msg.text}</span>
+                    </div>
+                  );
+                })
+              )}
             </div>
             <form onSubmit={handleChatSubmit} className="flex gap-1.5">
               <input
+                ref={chatInputRef}
                 type="text"
                 maxLength={140}
                 value={chatInput}

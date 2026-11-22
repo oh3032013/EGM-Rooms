@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { AudioLines, Languages, Maximize2, Minimize2, Play, RotateCw, Users } from 'lucide-react';
-import { UI_TEXT, type Language } from '../game/i18n';
+import { LANGUAGE_OPTIONS, UI_TEXT, type Language } from '../game/i18n';
 import { PWAInstallButton } from './PWAInstallButton';
 import { TeamModal } from './TeamModal';
 
@@ -11,7 +11,7 @@ interface TitleScreenProps {
   isPortraitMobile: boolean;
   blindMode: boolean;
   blindCaption: string;
-  onToggleLanguage: () => void;
+  onSelectLanguage: (lang: Language) => void;
   onToggleFullscreen: () => void;
   onToggleBlindMode: () => void;
   onRequestLandscape: () => void;
@@ -27,7 +27,7 @@ export function TitleScreen({
   isPortraitMobile,
   blindMode,
   blindCaption,
-  onToggleLanguage,
+  onSelectLanguage,
   onToggleFullscreen,
   onToggleBlindMode,
   onRequestLandscape,
@@ -270,15 +270,22 @@ export function TitleScreen({
               {isFullscreen ? t.exitFullscreenBtn : t.fullscreenBtn}
             </span>
           </button>
-          <button
-            type="button"
-            onClick={onToggleLanguage}
-            aria-label={lang === 'ar' ? 'Switch to English' : 'التبديل إلى العربية'}
-            className="wood-button px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-md"
-          >
-            <Languages className="w-3.5 h-3.5 shrink-0" />
-            <span>{t.langSwitch}</span>
-          </button>
+          <div className="wood-button px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-md">
+            <Languages className="w-3.5 h-3.5 shrink-0 pointer-events-none" />
+            <select
+              value={lang}
+              aria-label={t.languageLabel}
+              data-testid="title-language-select"
+              onChange={(e) => onSelectLanguage(e.target.value as Language)}
+              className="bg-transparent text-inherit font-semibold text-xs cursor-pointer focus:outline-none pr-1"
+            >
+              {LANGUAGE_OPTIONS.map((opt) => (
+                <option key={opt.code} value={opt.code} className="bg-[#f5ebd6] text-[#2c1e14]">
+                  {opt.nativeName}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 

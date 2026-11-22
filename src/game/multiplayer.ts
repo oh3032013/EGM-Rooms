@@ -88,6 +88,7 @@ export interface FxPayload {
   textColor?: string;
   actionKind?: string;
   actionMessage?: string;
+  swingTool?: ToolType | null;
   cropHarvested?: ItemId;
   goldenBonus?: boolean;
   rotationBoosted?: boolean;
@@ -165,6 +166,7 @@ export type ServerToClientMessage =
       players: RemotePlayerState[];
       hostId: string;
       sleepVotes: string[];
+      teleportIds?: string[];
     }
   | {
       type: 'tick:entities';
@@ -214,10 +216,11 @@ export function savePlayerName(name: string): void {
 export function getOrCreateClientId(): string {
   if (typeof window === 'undefined') return 'server';
   try {
-    let id = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+    // Use sessionStorage so separate browser tabs get distinct player IDs while refreshes keep reconnecting smoothly
+    let id = window.sessionStorage.getItem(CLIENT_ID_STORAGE_KEY);
     if (!id) {
       id = `p_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
-      window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, id);
+      window.sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, id);
     }
     return id;
   } catch {

@@ -11,6 +11,7 @@ import {
 import {
   formatTimeLocalized,
   getItemLabel,
+  getLanguageOption,
   ITEM_AR,
   translateSeason,
   translateWeather,
@@ -83,8 +84,9 @@ export function speakAccessibility(
       window.speechSynthesis.cancel();
     }
     const utterance = new SpeechSynthesisUtterance(text);
-    const targetPrefix = lang === 'ar' ? 'ar' : 'en';
-    utterance.lang = lang === 'ar' ? 'ar-EG' : 'en-US';
+    const speechTag = getLanguageOption(lang).speechLang;
+    const targetPrefix = speechTag.split('-')[0].toLowerCase();
+    utterance.lang = speechTag;
     const voices = window.speechSynthesis.getVoices?.() ?? [];
     const matchedVoice = voices.find((v) => v.lang.toLowerCase().startsWith(targetPrefix));
     if (matchedVoice) {
@@ -99,8 +101,8 @@ export function speakAccessibility(
 }
 
 export function getCropDisplayName(cropType: CropType, lang: Language): string {
-  if (lang === 'ar') return ITEM_AR[cropType].name;
-  return CROPS[cropType].name;
+  if (lang === 'en') return CROPS[cropType].name;
+  return getItemLabel(cropType, lang).name;
 }
 
 export function getFacingTileCoords(world: GameWorldState): { tx: number; ty: number } {

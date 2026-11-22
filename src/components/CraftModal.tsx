@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
 import { CRAFT_RECIPES, ITEMS } from '../game/constants';
-import { getItemLabel, RECIPE_AR, UI_TEXT, type Language } from '../game/i18n';
+import { getItemLabel, getRecipeLabel, UI_TEXT, type Language } from '../game/i18n';
 import type { ItemId, PlaceableType } from '../game/types';
 import { ItemIcon } from './PixelIcons';
 
@@ -101,12 +101,12 @@ export function CraftModal({
                 }
               }
 
-              const recipeName =
-                lang === 'ar' ? (RECIPE_AR[recipe.id]?.name ?? recipe.name) : recipe.name;
-              const recipeDesc =
-                lang === 'ar'
-                  ? (RECIPE_AR[recipe.id]?.description ?? recipe.description)
-                  : recipe.description;
+              const { name: recipeName, description: recipeDesc } = getRecipeLabel(
+                recipe.id,
+                recipe.name,
+                recipe.description,
+                lang
+              );
 
               return (
                 <div

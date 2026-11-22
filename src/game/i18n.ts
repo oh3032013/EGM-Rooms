@@ -9,18 +9,47 @@ import type {
   WeatherType,
 } from './types';
 import { ITEMS } from './constants';
+import {
+  EXTRA_LOCALES,
+  LANGUAGE_OPTIONS,
+  type ExtraLanguage,
+  type LanguageOption,
+  type UiTextMap,
+} from './localesExtra';
 
-export type Language = 'en' | 'ar';
+export type Language = 'en' | 'ar' | ExtraLanguage;
+export { LANGUAGE_OPTIONS, type LanguageOption, type UiTextMap };
 
 const LANG_STORAGE_KEY = 'ecogrow_lang';
+
+const EXTRA_LANG_SET = new Set<string>(Object.keys(EXTRA_LOCALES));
+
+export function isValidLanguage(code: string | null | undefined): code is Language {
+  if (!code) return false;
+  return code === 'en' || code === 'ar' || EXTRA_LANG_SET.has(code);
+}
+
+export function isRtlLanguage(lang: Language): boolean {
+  return lang === 'ar';
+}
+
+export function getLanguageOption(lang: Language): LanguageOption {
+  return LANGUAGE_OPTIONS.find((opt) => opt.code === lang) ?? LANGUAGE_OPTIONS[0];
+}
+
+export function getLanguageSwitchMessage(lang: Language): string {
+  if (lang === 'ar') return 'تم التبديل إلى اللغة العربية';
+  if (lang === 'en') return 'Switched to English';
+  return EXTRA_LOCALES[lang].switchedMsg;
+}
 
 export function getInitialLanguage(): Language {
   if (typeof window === 'undefined') return 'ar';
   const param = new URLSearchParams(window.location.search).get('lang');
-  if (param === 'ar' || param === 'en') return param;
+  if (isValidLanguage(param)) return param;
   try {
     const stored = window.localStorage.getItem(LANG_STORAGE_KEY);
-    if (stored === 'ar' || stored === 'en') return stored;
+    if (isValidLanguage(stored)) return stored;
   } catch {
     // Ignore storage access errors
   }
@@ -40,12 +69,21 @@ export function formatTimeLocalized(timeMinutes: number, lang: Language): string
   const hrs24 = Math.floor(clamped / 60);
   const mins = Math.floor((clamped % 60) / 10) * 10;
   const hrs12 = hrs24 % 12 === 0 ? 12 : hrs24 % 12;
-  const period = lang === 'ar' ? (hrs24 >= 12 ? 'م' : 'ص') : hrs24 >= 12 ? 'PM' : 'AM';
+  let period: string;
+  if (lang === 'ar') {
+    period = hrs24 >= 12 ? 'م' : 'ص';
+  } else if (lang === 'en') {
+    period = hrs24 >= 12 ? 'PM' : 'AM';
+  } else {
+    const tp = EXTRA_LOCALES[lang].timePeriod;
+    period = hrs24 >= 12 ? tp.pm : tp.am;
+  }
   return `${hrs12}:${mins.toString().padStart(2, '0')} ${period}`;
 }
 
 export function translateSeason(season: Season, lang: Language): string {
   if (lang === 'en') return season;
+  if (lang !== 'ar') return EXTRA_LOCALES[lang].seasons[season];
   switch (season) {
     case 'Spring':
       return 'الربيع';
@@ -60,6 +98,7 @@ export function translateSeason(season: Season, lang: Language): string {
 
 export function translateWeather(weather: WeatherType, lang: Language): string {
   if (lang === 'en') return weather;
+  if (lang !== 'ar') return EXTRA_LOCALES[lang].weathers[weather];
   switch (weather) {
     case 'Clear':
       return 'صحو';
@@ -320,12 +359,28 @@ export const ITEM_AR: Record<
 
 export function getItemLabel(id: ItemId, lang: Language) {
   if (lang === 'ar') return ITEM_AR[id];
+  if (lang !== 'en') return EXTRA_LOCALES[lang].items[id];
   const def = ITEMS[id];
   return {
     name: def.name,
     description: def.description,
     roleClue: def.roleClue,
   };
+}
+
+export function getRecipeLabel(
+  id: PlaceableType | 'fertilizer',
+  fallbackName: string,
+  fallbackDesc: string,
+  lang: Language
+): { name: string; description: string } {
+  if (lang === 'ar') {
+    return RECIPE_AR[id] ?? { name: fallbackName, description: fallbackDesc };
+  }
+  if (lang !== 'en') {
+    return EXTRA_LOCALES[lang].recipes[id] ?? { name: fallbackName, description: fallbackDesc };
+  }
+  return { name: fallbackName, description: fallbackDesc };
 }
 
 export const RECIPE_AR: Partial<Record<PlaceableType | 'fertilizer', { name: string; description: string }>> = {
@@ -375,7 +430,7 @@ export const RECIPE_AR: Partial<Record<PlaceableType | 'fertilizer', { name: str
   },
 };
 
-export const MISSION_TEXT: Record<
+const BASE_MISSION_TEXT: Record<
   MissionId,
   { en: { title: string; desc: string }; ar: { title: string; desc: string } }
 > = {
@@ -581,7 +636,7 @@ export const MISSION_TEXT: Record<
   },
 };
 
-export const BADGE_TEXT: Record<
+const BASE_BADGE_TEXT: Record<
   BadgeId,
   { en: { title: string; desc: string }; ar: { title: string; desc: string } }
 > = {
@@ -637,8 +692,70 @@ export const BADGE_TEXT: Record<
   },
 };
 
+export const MISSION_TEXT: Record<
+  MissionId,
+  Record<Language, { title: string; desc: string }>
+> = (Object.keys(BASE_MISSION_TEXT) as MissionId[]).reduce((acc, id) => {
+  const entry = {
+    en: BASE_MISSION_TEXT[id].en,
+    ar: BASE_MISSION_TEXT[id].ar,
+  } as Record<Language, { title: string; desc: string }>;
+  for (const code of Object.keys(EXTRA_LOCALES) as ExtraLanguage[]) {
+    entry[code] = EXTRA_LOCALES[code].missions[id];
+  }
+  acc[id] = entry;
+  return acc;
+}, {} as Record<MissionId, Record<Language, { title: string; desc: string }>>);
+
+export const BADGE_TEXT: Record<
+  BadgeId,
+  Record<Language, { title: string; desc: string }>
+> = (Object.keys(BASE_BADGE_TEXT) as BadgeId[]).reduce((acc, id) => {
+  const entry = {
+    en: BASE_BADGE_TEXT[id].en,
+    ar: BASE_BADGE_TEXT[id].ar,
+  } as Record<Language, { title: string; desc: string }>;
+  for (const code of Object.keys(EXTRA_LOCALES) as ExtraLanguage[]) {
+    entry[code] = EXTRA_LOCALES[code].badges[id];
+  }
+  acc[id] = entry;
+  return acc;
+}, {} as Record<BadgeId, Record<Language, { title: string; desc: string }>>);
+
 export function formatMorningSummaryText(summary: DaySummary, lang: Language): string {
   if (lang === 'en') return summary.message;
+  if (lang !== 'ar') {
+    const m = EXTRA_LOCALES[lang].morning;
+    const notes: string[] = [];
+    if (summary.cropsGrown > 0) notes.push(m.cropsGrown.replace('{n}', String(summary.cropsGrown)));
+    if (summary.rainbowActive) notes.push(m.rainbow);
+    if ((summary.sprinklerWatered ?? 0) > 0) {
+      notes.push(m.sprinkler.replace('{n}', String(summary.sprinklerWatered)));
+    }
+    if ((summary.dripWatered ?? 0) > 0) {
+      notes.push(
+        m.drip
+          .replace('{n}', String(summary.dripWatered))
+          .replace('{l}', String(summary.waterSavedLiters ?? 0))
+      );
+    }
+    if ((summary.rainCollectedLiters ?? 0) > 0) {
+      notes.push(m.rain.replace('{l}', String(summary.rainCollectedLiters)));
+    }
+    if ((summary.eggsCollected ?? 0) > 0) notes.push(m.eggs.replace('{n}', String(summary.eggsCollected)));
+    if ((summary.milkCollected ?? 0) > 0) notes.push(m.milk.replace('{n}', String(summary.milkCollected)));
+    if ((summary.woolCollected ?? 0) > 0) notes.push(m.wool.replace('{n}', String(summary.woolCollected)));
+    if ((summary.honeyCollected ?? 0) > 0) notes.push(m.honey.replace('{n}', String(summary.honeyCollected)));
+    if ((summary.cheeseMade ?? 0) > 0) notes.push(m.cheese.replace('{n}', String(summary.cheeseMade)));
+    if ((summary.jamMade ?? 0) > 0) notes.push(m.jam.replace('{n}', String(summary.jamMade)));
+    if ((summary.windmillGold ?? 0) > 0) notes.push(m.windmill.replace('{n}', String(summary.windmillGold)));
+    if (summary.cropsWithered > 0) notes.push(m.withered.replace('{n}', String(summary.cropsWithered)));
+    if (summary.wildlifeDamage > 0) notes.push(m.wildlife.replace('{n}', String(summary.wildlifeDamage)));
+    if (notes.length === 0) {
+      notes.push(m.fallback.replace('{season}', translateSeason(summary.season, lang)));
+    }
+    return notes.join(' · ');
+  }
   const notes: string[] = [];
   if (summary.cropsGrown > 0) notes.push(`نما ${summary.cropsGrown} محصول`);
   if (summary.rainbowActive) notes.push('صباح قوس قزح!');
@@ -667,6 +784,31 @@ export function formatMorningSummaryText(summary: DaySummary, lang: Language): s
 export function formatFeedbackMessage(res: ActionFeedback, lang: Language): string | undefined {
   if (!res.message && res.kind !== 'harvest') return undefined;
   if (lang === 'en') return res.message;
+  if (lang !== 'ar') {
+    const pack = EXTRA_LOCALES[lang];
+    const fb = pack.feedback;
+    if (res.kind === 'harvest' && res.cropHarvested) {
+      const cropName = pack.items[res.cropHarvested].name;
+      if (res.goldenBonus) return fb.harvestBee.replace('{name}', cropName);
+      return (res.rotationBoosted ? fb.harvestFert : fb.harvestPlain).replace('{name}', cropName);
+    }
+    if (!res.message) return undefined;
+    if (fb.exact[res.message]) return fb.exact[res.message];
+    if (res.message.startsWith('Wishing Fountain gifted +1 ')) {
+      const raw = res.message.replace('Wishing Fountain gifted +1 ', '').replace('!', '');
+      const match = (Object.keys(ITEMS) as ItemId[]).find((k) => ITEMS[k].name === raw);
+      return match ? fb.wishingGift.replace('{name}', pack.items[match].name) : res.message;
+    }
+    if (res.message.startsWith('Drip row watered:')) {
+      return res.message.replace('Drip row watered:', fb.dripRow);
+    }
+    if (res.message.startsWith('Placed ')) {
+      const raw = res.message.replace('Placed ', '');
+      const match = (Object.keys(ITEMS) as ItemId[]).find((k) => ITEMS[k].name === raw);
+      return match ? fb.placed.replace('{name}', pack.items[match].name) : res.message;
+    }
+    return res.message;
+  }
 
   if (res.kind === 'harvest' && res.cropHarvested) {
     if (res.goldenBonus) {
@@ -789,6 +931,9 @@ export function getNearPromptLabel(
         return 'Press E or Tap to Sell at Shipping Bin';
     }
   }
+  if (lang !== 'ar') {
+    return EXTRA_LOCALES[lang].nearPrompts[action];
+  }
   switch (action) {
     case 'sleep':
       return 'اضغط E أو تفاعل للنوم في المنزل';
@@ -801,7 +946,7 @@ export function getNearPromptLabel(
   }
 }
 
-export const UI_TEXT = {
+const BASE_UI_TEXT: { en: UiTextMap; ar: UiTextMap } = {
   en: {
     brandTitle: 'EcoGrow Mission',
     saveYourFarm: 'Save Your Farm',
@@ -1009,18 +1154,25 @@ export const UI_TEXT = {
     roomBadgeLabel: 'Room',
     copyCodeBtn: 'Copy Code',
     codeCopiedToast: 'Room code copied!',
+    copyLinkBtn: 'Copy Link',
+    linkCopiedToast: 'Invite link copied!',
     leaveRoomBtn: 'Leave Room',
     chatBtn: 'Chat (T)',
     chatPlaceholder: 'Message your farm team...',
+    noChatYet: 'No messages yet — say hi to your farm team!',
     sendChatBtn: 'Send',
     sleepVoteReady: 'Rest Vote ({ready}/{total})',
     sleepVoteWaiting: 'Waiting for {left} farmer(s) to rest...',
+    sleepReadyBtn: 'Sleep Ready',
+    sleepCancelBtn: 'Cancel',
     playerJoinedToast: '{name} joined the farm!',
     playerLeftToast: '{name} left the farm',
     reconnectingToast: 'Reconnecting to room...',
     roomErrorNotFound: 'Room code not found. Check the code and try again.',
     roomErrorFull: 'This room is already full (Max 4 farmers).',
     roomErrorConnect: 'Could not connect to multiplayer server.',
+    roomErrorClosed: 'The room closed or the server restarted.',
+    roomErrorTimeout: 'Connection timed out. Please check the server and try again.',
     customServerLabel: 'Multiplayer Server URL (Optional)',
     customServerHint: 'Leave empty to use this site’s server. Useful for APK / EXE / Vercel.',
     serverDefaultBtn: 'Use Default',
@@ -1232,20 +1384,42 @@ export const UI_TEXT = {
     roomBadgeLabel: 'غرفة',
     copyCodeBtn: 'نسخ الكود',
     codeCopiedToast: 'تم نسخ كود الغرفة!',
+    copyLinkBtn: 'نسخ الرابط',
+    linkCopiedToast: 'تم نسخ رابط الدعوة!',
     leaveRoomBtn: 'مغادرة الغرفة',
     chatBtn: 'دردشة (T)',
     chatPlaceholder: 'اكتب رسالة لفريق المزرعة...',
+    noChatYet: 'لا توجد رسائل بعد — ألقِ التحية على فريقك!',
     sendChatBtn: 'إرسال',
     sleepVoteReady: 'تصويت النوم ({ready}/{total})',
     sleepVoteWaiting: 'بانتظار موافقة {left} مزارع للراحة وبداية اليوم التالي...',
+    sleepReadyBtn: 'موافق على النوم',
+    sleepCancelBtn: 'إلغاء',
     playerJoinedToast: 'انضم {name} إلى المزرعة!',
     playerLeftToast: 'غادر {name} المزرعة',
     reconnectingToast: 'جارٍ إعادة الاتصال بالغرفة...',
     roomErrorNotFound: 'كود الغرفة غير موجود. تأكد من الكود وحاول مرة أخرى.',
     roomErrorFull: 'الغرفة ممتلئة بالفعل (الحد الأقصى 4 مزارعين).',
     roomErrorConnect: 'تعذر الاتصال بسيرفر اللعب الجماعي.',
+    roomErrorClosed: 'تم إغلاق الغرفة أو إعادة تشغيل السيرفر.',
+    roomErrorTimeout: 'انتهت مهلة الاتصال بالسيرفر. حاول مرة أخرى.',
     customServerLabel: 'رابط سيرفر اللعب الجماعي (اختياري)',
     customServerHint: 'اتركه فارغاً لاستخدام سيرفر الموقع الحالي. مفيد لنسخة APK أو EXE أو Vercel.',
     serverDefaultBtn: 'الافتراضي',
   },
-} as const;
+};
+
+export const UI_TEXT: Record<Language, UiTextMap> = {
+  en: BASE_UI_TEXT.en,
+  ar: BASE_UI_TEXT.ar,
+  fr: EXTRA_LOCALES.fr.ui,
+  es: EXTRA_LOCALES.es.ui,
+  de: EXTRA_LOCALES.de.ui,
+  it: EXTRA_LOCALES.it.ui,
+  pt: EXTRA_LOCALES.pt.ui,
+  tr: EXTRA_LOCALES.tr.ui,
+  ru: EXTRA_LOCALES.ru.ui,
+  ja: EXTRA_LOCALES.ja.ui,
+  ko: EXTRA_LOCALES.ko.ui,
+  zh: EXTRA_LOCALES.zh.ui,
+};

@@ -43,6 +43,7 @@ import {
   formatMorningSummaryText,
   getInitialLanguage,
   getItemLabel,
+  getLanguageSwitchMessage,
   saveLanguagePreference,
   translateWeather,
   UI_TEXT,
@@ -238,7 +239,12 @@ export default function App() {
   );
   const worldRef = useRef<GameWorldState>(initialWorldRef.current);
 
-  const [phase, setPhase] = useState<GamePhase>(autostart ? 'playing' : 'title');
+  const initialInviteCode =
+    typeof window !== 'undefined'
+      ? (new URLSearchParams(window.location.search).get('room') ?? '').trim().toUpperCase()
+      : '';
+
+  const [phase, setPhase] = useState<GamePhase>(autostart && !initialInviteCode ? 'playing' : 'title');
   const [hasSavedFarm, setHasSavedFarm] = useState<boolean>(() => Boolean(loadSavedWorld()));
   const [activeModal, setActiveModal] = useState<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac'>('none');
   const [futureDispatch, setFutureDispatch] = useState<FutureDispatch | null>(null);
@@ -271,12 +277,14 @@ export default function App() {
   const [blindMode, setBlindMode] = useState<boolean>(() => getInitialBlindMode());
   const [blindCaption, setBlindCaption] = useState<string>('');
   const [gameMode, setGameMode] = useState<GameMode>('singleplayer');
-  const [showRoomsModal, setShowRoomsModal] = useState<boolean>(false);
+  const [showRoomsModal, setShowRoomsModal] = useState<boolean>(() => Boolean(initialInviteCode));
+  const [inviteRoomCode] = useState<string>(() => initialInviteCode);
   const [roomsLoading, setRoomsLoading] = useState<boolean>(false);
   const [roomsError, setRoomsError] = useState<string | null>(null);
   const [publicRooms, setPublicRooms] = useState<RoomSummary[]>([]);
   const [roomHud, setRoomHud] = useState<RoomHudState | null>(null);
   const [chatOpen, setChatOpen] = useState<boolean>(false);
+  const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
 
   const phaseRef = useRef<GamePhase>(phase);
   const modalRef = useRef<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac'>(activeModal);
@@ -286,11 +294,16 @@ export default function App() {
   const sprintActiveRef = useRef<boolean>(sprintActive);
   const gameModeRef = useRef<GameMode>(gameMode);
   const showRoomsModalRef = useRef<boolean>(showRoomsModal);
+  const chatOpenRef = useRef<boolean>(chatOpen);
+  const roomHudRef = useRef<RoomHudState | null>(roomHud);
   const remotePlayersRef = useRef<RemotePlayerState[]>([]);
+  const remoteTargetPlayersRef = useRef<RemotePlayerState[]>([]);
   const localPlayerMetaRef = useRef<LocalPlayerRenderMeta | undefined>(undefined);
   const wsRef = useRef<WebSocket | null>(null);
   const activeRoomRef = useRef<{ code: string; playerName: string; serverUrl?: string } | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+  const connectTimeoutRef = useRef<number | null>(null);
+  const reconnectAttemptsRef = useRef<number>(0);
   const lastMoveSentAtRef = useRef<number>(0);
   const lastMoveWasMovingRef = useRef<boolean>(false);
   const earnedBadgesRef = useRef<Set<string>>(new Set(getEarnedBadges(worldRef.current)));
@@ -305,6 +318,8 @@ export default function App() {
   sprintActiveRef.current = sprintActive;
   gameModeRef.current = gameMode;
   showRoomsModalRef.current = showRoomsModal;
+  chatOpenRef.current = chatOpen;
+  roomHudRef.current = roomHud;
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -399,18 +414,14 @@ export default function App() {
     document.documentElement.lang = lang;
   }, [lang]);
 
-  const toggleLanguage = useCallback(() => {
-    setLang((prev) => {
-      const next: Language = prev === 'en' ? 'ar' : 'en';
-      saveLanguagePreference(next);
-      if (blindModeRef.current) {
-        const msg =
-          next === 'ar' ? 'تم التبديل إلى اللغة العربية' : 'Switched to English';
-        setBlindCaption(msg);
-        speakAccessibility(msg, next, { interrupt: true });
-      }
-      return next;
-    });
+  const selectLanguage = useCallback((next: Language) => {
+    setLang(next);
+    saveLanguagePreference(next);
+    if (blindModeRef.current) {
+      const msg = getLanguageSwitchMessage(next);
+      setBlindCaption(msg);
+      speakAccessibility(msg, next, { interrupt: true });
+    }
   }, []);
 
   // Dynamically detect mobile/tablet viewport or touch input + portrait orientation
@@ -662,6 +673,13 @@ export default function App() {
       }
 
       if (fx.kind === 'tile') {
+        if (fx.actorId && fx.actorId !== getOrCreateClientId() && fx.actionKind !== 'error') {
+          const rp = remotePlayersRef.current.find((p) => p.id === fx.actorId);
+          if (rp) {
+            rp.swingTimer = 0.22;
+            rp.swingTool = fx.swingTool ?? null;
+          }
+        }
         const resMsg = formatFeedbackMessage(
           {
             performed: fx.actionKind !== 'error',
@@ -754,6 +772,11 @@ export default function App() {
       window.clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
+    if (connectTimeoutRef.current !== null) {
+      window.clearTimeout(connectTimeoutRef.current);
+      connectTimeoutRef.current = null;
+    }
+    reconnectAttemptsRef.current = 0;
     activeRoomRef.current = null;
     const ws = wsRef.current;
     wsRef.current = null;
@@ -765,51 +788,113 @@ export default function App() {
           // Ignore
         }
       }
+      ws.onopen = null;
       ws.onclose = null;
       ws.onerror = null;
       ws.onmessage = null;
       ws.close();
     }
     remotePlayersRef.current = [];
+    remoteTargetPlayersRef.current = [];
     localPlayerMetaRef.current = undefined;
     setRoomHud(null);
     setChatOpen(false);
+    setUnreadChatCount(0);
     gameModeRef.current = 'singleplayer';
     setGameMode('singleplayer');
   }, []);
 
   const connectAndSendRoomAction = useCallback(
-    (initialMsg: ClientToServerMessage, opts?: { serverUrl?: string; roomContext?: { code: string; playerName: string; serverUrl?: string } }) => {
+    (
+      initialMsg: ClientToServerMessage,
+      opts?: { serverUrl?: string; roomContext?: { code: string; playerName: string; serverUrl?: string } }
+    ) => {
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
+      if (connectTimeoutRef.current !== null) {
+        window.clearTimeout(connectTimeoutRef.current);
+        connectTimeoutRef.current = null;
+      }
       if (wsRef.current) {
+        wsRef.current.onopen = null;
         wsRef.current.onclose = null;
+        wsRef.current.onerror = null;
+        wsRef.current.onmessage = null;
         wsRef.current.close();
         wsRef.current = null;
       }
       setRoomsLoading(true);
       setRoomsError(null);
 
-      const wsUrl = resolveWebSocketUrl(opts?.serverUrl);
-      const ws = new WebSocket(wsUrl);
+      let ws: WebSocket;
+      try {
+        const wsUrl = resolveWebSocketUrl(opts?.serverUrl);
+        ws = new WebSocket(wsUrl);
+      } catch {
+        setRoomsLoading(false);
+        setRoomsError(UI_TEXT[langRef.current].roomErrorConnect);
+        return;
+      }
       wsRef.current = ws;
+
+      connectTimeoutRef.current = window.setTimeout(() => {
+        if (ws.readyState === WebSocket.CONNECTING) {
+          ws.onclose = null;
+          ws.close();
+          setRoomsLoading(false);
+          if (!activeRoomRef.current) {
+            setRoomsError(UI_TEXT[langRef.current].roomErrorTimeout);
+          } else if (reconnectAttemptsRef.current >= 5) {
+            disconnectMultiplayer(false);
+            setActiveModal('none');
+            setPhase('title');
+            setShowRoomsModal(true);
+            setRoomsError(UI_TEXT[langRef.current].roomErrorClosed);
+          }
+        }
+      }, 10_000);
+
+      const syncRemoteTargets = (remotes: RemotePlayerState[], resetSmooth: boolean) => {
+        remoteTargetPlayersRef.current = remotes;
+        if (resetSmooth) {
+          remotePlayersRef.current = remotes.map((r) => ({ ...r }));
+          return;
+        }
+        const existingMap = new Map(remotePlayersRef.current.map((p) => [p.id, p]));
+        remotePlayersRef.current = remotes.map((target) => {
+          const prev = existingMap.get(target.id);
+          if (!prev) return { ...target };
+          return {
+            ...target,
+            x: prev.x,
+            y: prev.y,
+            swingTimer: Math.max(prev.swingTimer, target.swingTimer),
+            swingTool: prev.swingTimer > target.swingTimer ? prev.swingTool : target.swingTool,
+          };
+        });
+      };
 
       const applySyncedWorld = (
         serverWorld: GameWorldState,
         players: RemotePlayerState[],
         myId: string,
-        preserveLocalPosition: boolean
+        preserveLocalPosition: boolean,
+        teleportIds?: string[]
       ) => {
         const me = players.find((p) => p.id === myId);
         const prev = worldRef.current.player;
+        const shouldTeleport =
+          !preserveLocalPosition ||
+          serverWorld.day !== worldRef.current.day ||
+          Boolean(teleportIds?.includes(myId));
         if (me) {
-          serverWorld.player.x = preserveLocalPosition ? prev.x : me.x;
-          serverWorld.player.y = preserveLocalPosition ? prev.y : me.y;
-          serverWorld.player.facingX = preserveLocalPosition ? prev.facingX : me.facingX;
-          serverWorld.player.facingY = preserveLocalPosition ? prev.facingY : me.facingY;
-          serverWorld.player.walkCycle = preserveLocalPosition ? prev.walkCycle : me.walkCycle;
+          serverWorld.player.x = shouldTeleport ? me.x : prev.x;
+          serverWorld.player.y = shouldTeleport ? me.y : prev.y;
+          serverWorld.player.facingX = shouldTeleport ? me.facingX : prev.facingX;
+          serverWorld.player.facingY = shouldTeleport ? me.facingY : prev.facingY;
+          serverWorld.player.walkCycle = shouldTeleport ? me.walkCycle : prev.walkCycle;
           serverWorld.player.health = me.health;
           serverWorld.player.maxHealth = me.maxHealth;
           serverWorld.player.stamina = me.stamina;
@@ -820,11 +905,19 @@ export default function App() {
           localPlayerMetaRef.current = { name: me.name, colorIndex: me.colorIndex };
         }
         worldRef.current = serverWorld;
-        remotePlayersRef.current = players.filter((p) => p.id !== myId);
+        syncRemoteTargets(
+          players.filter((p) => p.id !== myId),
+          !preserveLocalPosition
+        );
         syncHud();
       };
 
       ws.onopen = () => {
+        if (connectTimeoutRef.current !== null) {
+          window.clearTimeout(connectTimeoutRef.current);
+          connectTimeoutRef.current = null;
+        }
+        reconnectAttemptsRef.current = 0;
         ws.send(JSON.stringify(initialMsg));
       };
 
@@ -845,12 +938,22 @@ export default function App() {
         if (msg.type === 'room:error') {
           setRoomsLoading(false);
           const t = UI_TEXT[langRef.current];
+          const wasInRoom = Boolean(activeRoomRef.current);
           const friendly =
             msg.code === 'NOT_FOUND'
-              ? t.roomErrorNotFound
+              ? wasInRoom
+                ? t.roomErrorClosed
+                : t.roomErrorNotFound
               : msg.code === 'ROOM_FULL'
               ? t.roomErrorFull
               : msg.message;
+          if (wasInRoom) {
+            disconnectMultiplayer(false);
+            setActiveModal('none');
+            setPhase('title');
+            audioEngine.pauseAmbientMusic();
+            setShowRoomsModal(true);
+          }
           setRoomsError(friendly);
           return;
         }
@@ -859,6 +962,7 @@ export default function App() {
           setRoomsLoading(false);
           setRoomsError(null);
           setShowRoomsModal(false);
+          reconnectAttemptsRef.current = 0;
           gameModeRef.current = 'multiplayer';
           setGameMode('multiplayer');
           activeRoomRef.current = {
@@ -877,6 +981,7 @@ export default function App() {
           setMorningSummary(null);
           setFutureDispatch(null);
           setActiveModal('none');
+          setUnreadChatCount(0);
           setRoomHud({
             roomCode: msg.roomCode,
             roomName: msg.roomName,
@@ -895,7 +1000,7 @@ export default function App() {
 
         if (msg.type === 'world:sync') {
           const myId = getOrCreateClientId();
-          applySyncedWorld(msg.world, msg.players, myId, true);
+          applySyncedWorld(msg.world, msg.players, myId, true, msg.teleportIds);
           setRoomHud((prev) =>
             prev
               ? {
@@ -930,7 +1035,10 @@ export default function App() {
             world.player.waterLevel = me.waterLevel;
             world.player.maxWaterLevel = me.maxWaterLevel;
           }
-          remotePlayersRef.current = msg.players.filter((p) => p.id !== myId);
+          syncRemoteTargets(
+            msg.players.filter((p) => p.id !== myId),
+            false
+          );
           return;
         }
 
@@ -943,12 +1051,29 @@ export default function App() {
           setRoomHud((prev) =>
             prev ? { ...prev, chat: [...prev.chat.slice(-39), msg.message] } : prev
           );
+          if (!chatOpenRef.current && msg.message.senderId !== getOrCreateClientId()) {
+            setUnreadChatCount((c) => c + 1);
+            audioEngine.playSfx('click');
+            const preview =
+              msg.message.text.length > 26
+                ? `${msg.message.text.slice(0, 26)}…`
+                : msg.message.text;
+            addFloatingText(
+              worldRef.current.player.x * TILE_SIZE,
+              (worldRef.current.player.y - 1.55) * TILE_SIZE,
+              `${msg.message.senderName}: ${preview}`,
+              '#bae6fd'
+            );
+          }
           return;
         }
 
         if (msg.type === 'player:presence') {
           const myId = getOrCreateClientId();
-          remotePlayersRef.current = msg.players.filter((p) => p.id !== myId);
+          syncRemoteTargets(
+            msg.players.filter((p) => p.id !== myId),
+            false
+          );
           setRoomHud((prev) =>
             prev
               ? {
@@ -973,6 +1098,10 @@ export default function App() {
       };
 
       ws.onerror = () => {
+        if (connectTimeoutRef.current !== null) {
+          window.clearTimeout(connectTimeoutRef.current);
+          connectTimeoutRef.current = null;
+        }
         setRoomsLoading(false);
         if (!activeRoomRef.current) {
           setRoomsError(UI_TEXT[langRef.current].roomErrorConnect);
@@ -980,7 +1109,21 @@ export default function App() {
       };
 
       ws.onclose = () => {
+        if (connectTimeoutRef.current !== null) {
+          window.clearTimeout(connectTimeoutRef.current);
+          connectTimeoutRef.current = null;
+        }
         if (gameModeRef.current === 'multiplayer' && activeRoomRef.current) {
+          if (reconnectAttemptsRef.current >= 5) {
+            disconnectMultiplayer(false);
+            setActiveModal('none');
+            setPhase('title');
+            audioEngine.pauseAmbientMusic();
+            setShowRoomsModal(true);
+            setRoomsError(UI_TEXT[langRef.current].roomErrorClosed);
+            return;
+          }
+          reconnectAttemptsRef.current += 1;
           const ctx = activeRoomRef.current;
           setRoomHud((prev) => (prev ? { ...prev, reconnecting: true } : prev));
           reconnectTimerRef.current = window.setTimeout(() => {
@@ -995,33 +1138,40 @@ export default function App() {
                 { serverUrl: ctx.serverUrl, roomContext: ctx }
               );
             }
-          }, 1800);
+          }, 1500 * reconnectAttemptsRef.current);
         }
       };
     },
-    [addFloatingText, checkNewBadges, handleServerFx, syncHud]
+    [addFloatingText, checkNewBadges, disconnectMultiplayer, handleServerFx, syncHud]
   );
 
-  const refreshPublicRooms = useCallback(async (serverUrl?: string) => {
-    setRoomsLoading(true);
-    setRoomsError(null);
+  const refreshPublicRooms = useCallback(async (serverUrl?: string, silent = false) => {
+    if (!silent) {
+      setRoomsLoading(true);
+      setRoomsError(null);
+    }
     try {
       const base = resolveHttpApiBase(serverUrl);
       const res = await fetch(`${base}/api/rooms`);
       if (!res.ok) throw new Error('Failed to load rooms');
       const data = (await res.json()) as { rooms?: RoomSummary[] };
       setPublicRooms(Array.isArray(data.rooms) ? data.rooms : []);
+      if (silent) setRoomsError(null);
     } catch {
-      setRoomsError(UI_TEXT[langRef.current].roomErrorConnect);
+      if (!silent) {
+        setRoomsError(UI_TEXT[langRef.current].roomErrorConnect);
+      }
     } finally {
-      setRoomsLoading(false);
+      if (!silent) {
+        setRoomsLoading(false);
+      }
     }
   }, []);
 
   const triggerSleep = useCallback(() => {
     if (gameModeRef.current === 'multiplayer') {
       const myId = getOrCreateClientId();
-      const alreadyVoted = roomHud?.sleepVotes.includes(myId) ?? false;
+      const alreadyVoted = roomHudRef.current?.sleepVotes.includes(myId) ?? false;
       sendWs({ type: 'action:sleep_vote', ready: !alreadyVoted });
       return;
     }
@@ -1065,7 +1215,7 @@ export default function App() {
         true
       );
     }
-  }, [announceBlind, checkNewBadges, roomHud, saveFarm, sendWs, syncHud]);
+  }, [announceBlind, checkNewBadges, saveFarm, sendWs, syncHud]);
 
   const startNewFarm = useCallback(() => {
     disconnectMultiplayer(false);
@@ -1427,7 +1577,11 @@ export default function App() {
 
       if (key === 't' && gameModeRef.current === 'multiplayer' && modalRef.current === 'none') {
         e.preventDefault();
-        setChatOpen((prev) => !prev);
+        setChatOpen((prev) => {
+          const next = !prev;
+          if (next) setUnreadChatCount(0);
+          return next;
+        });
         return;
       }
 
@@ -1865,7 +2019,31 @@ export default function App() {
           });
         }
 
-        // 4. Smooth Camera Follow + Clamp to Map Bounds
+        // 4. Smoothly interpolate remote co-op players at 60Hz
+        if (gameModeRef.current === 'multiplayer' && remotePlayersRef.current.length > 0) {
+          const targets = new Map(remoteTargetPlayersRef.current.map((t) => [t.id, t]));
+          const alpha = Math.min(1, dt * 14);
+          for (const rp of remotePlayersRef.current) {
+            const target = targets.get(rp.id);
+            if (target) {
+              rp.x += (target.x - rp.x) * alpha;
+              rp.y += (target.y - rp.y) * alpha;
+              rp.facingX = target.facingX;
+              rp.facingY = target.facingY;
+              rp.walkCycle = target.walkCycle;
+              rp.hitFlashTimer = target.hitFlashTimer;
+              rp.health = target.health;
+              rp.stamina = target.stamina;
+              rp.waterLevel = target.waterLevel;
+              rp.selectedHotbarIndex = target.selectedHotbarIndex;
+              if (rp.swingTimer > 0) {
+                rp.swingTimer = Math.max(0, rp.swingTimer - dt);
+              }
+            }
+          }
+        }
+
+        // 5. Smooth Camera Follow + Clamp to Map Bounds
         const targetCamX = world.player.x * TILE_SIZE;
         const targetCamY = world.player.y * TILE_SIZE;
         cameraRef.current.x += (targetCamX - cameraRef.current.x) * Math.min(1, dt * 8);
@@ -1952,8 +2130,11 @@ export default function App() {
             : null;
           if (
             prev.timeClock === nextClock &&
+            prev.day === world.day &&
+            prev.gold === world.player.gold &&
             prev.health === world.player.health &&
             prev.stamina === world.player.stamina &&
+            prev.waterLevel === world.player.waterLevel &&
             prev.nightWarning === nextNightWarn &&
             (prev.nearPrompt?.action ?? null) === nextPromptAction
           ) {
@@ -2023,7 +2204,7 @@ export default function App() {
           isPortraitMobile={isPortraitMobile}
           blindMode={blindMode}
           blindCaption={blindCaption}
-          onToggleLanguage={toggleLanguage}
+          onSelectLanguage={selectLanguage}
           onToggleFullscreen={() => void toggleFullscreen()}
           onToggleBlindMode={toggleBlindMode}
           onRequestLandscape={() => void requestOptimalDisplay(true)}
@@ -2043,7 +2224,8 @@ export default function App() {
           loading={roomsLoading}
           error={roomsError}
           rooms={publicRooms}
-          onRefreshRooms={(serverUrl) => void refreshPublicRooms(serverUrl)}
+          initialRoomCode={inviteRoomCode}
+          onRefreshRooms={(serverUrl, silent) => void refreshPublicRooms(serverUrl, silent)}
           onCreateRoom={({ playerName, roomName, isPublic, serverUrl }) => {
             connectAndSendRoomAction(
               {
@@ -2094,8 +2276,16 @@ export default function App() {
           sprintActive={sprintActive}
           roomHud={gameMode === 'multiplayer' ? roomHud : null}
           chatOpen={chatOpen}
-          onToggleChat={() => setChatOpen((v) => !v)}
+          unreadChatCount={unreadChatCount}
+          onToggleChat={() =>
+            setChatOpen((v) => {
+              const next = !v;
+              if (next) setUnreadChatCount(0);
+              return next;
+            })
+          }
           onSendChat={(text) => sendWs({ type: 'action:chat', text })}
+          onToggleSleepVote={triggerSleep}
           onLeaveRoom={() => {
             disconnectMultiplayer(true);
             setActiveModal('none');
@@ -2437,7 +2627,7 @@ export default function App() {
             touchManualOverrideRef.current = true;
             setTouchControlsEnabled((prev) => !prev);
           }}
-          onToggleLanguage={toggleLanguage}
+          onSelectLanguage={selectLanguage}
           onToggleBlindMode={toggleBlindMode}
           onResume={() => {
             if (worldRef.current.outcome === 'restored') {

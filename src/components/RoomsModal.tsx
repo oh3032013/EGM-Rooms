@@ -14,7 +14,8 @@ interface RoomsModalProps {
   loading: boolean;
   error: string | null;
   rooms: RoomSummary[];
-  onRefreshRooms: (serverUrl?: string) => void;
+  initialRoomCode?: string;
+  onRefreshRooms: (serverUrl?: string, silent?: boolean) => void;
   onCreateRoom: (opts: {
     playerName: string;
     roomName: string;
@@ -30,6 +31,7 @@ export function RoomsModal({
   loading,
   error,
   rooms,
+  initialRoomCode = '',
   onRefreshRooms,
   onCreateRoom,
   onJoinRoom,
@@ -42,12 +44,28 @@ export function RoomsModal({
   });
   const [roomName, setRoomName] = useState<string>('');
   const [isPublic, setIsPublic] = useState<boolean>(true);
-  const [roomCode, setRoomCode] = useState<string>('');
+  const [roomCode, setRoomCode] = useState<string>(() => initialRoomCode.trim().toUpperCase());
   const [showServerConfig, setShowServerConfig] = useState<boolean>(false);
   const [serverUrl, setServerUrl] = useState<string>(() => getSavedMultiplayerServerUrl());
 
   useEffect(() => {
-    onRefreshRooms(serverUrl);
+    if (initialRoomCode) {
+      setTab('join');
+      setRoomCode(initialRoomCode.trim().toUpperCase());
+    }
+  }, [initialRoomCode]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      onRefreshRooms(serverUrl, false);
+    }, 250);
+    const pollId = window.setInterval(() => {
+      onRefreshRooms(serverUrl, true);
+    }, 5000);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(pollId);
+    };
   }, [onRefreshRooms, serverUrl]);
 
   const handleSaveName = (val: string) => {

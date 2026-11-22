@@ -187,13 +187,14 @@ export function createMultiplayerServer(
     }
   }
 
-  function syncWorldToRoom(room: ServerRoom): void {
+  function syncWorldToRoom(room: ServerRoom, teleportIds?: string[]): void {
     broadcastToRoom(room, {
       type: 'world:sync',
       world: room.world,
       players: getConnectedPlayers(room).map(toPublicPlayer),
       hostId: room.hostId,
       sleepVotes: Array.from(room.sleepVotes),
+      ...(teleportIds && teleportIds.length > 0 ? { teleportIds } : {}),
     });
   }
 
@@ -262,7 +263,7 @@ export function createMultiplayerServer(
       p.health = Math.min(p.maxHealth, p.health + 35);
       idx++;
     }
-    syncWorldToRoom(room);
+    syncWorldToRoom(room, Array.from(room.players.keys()));
     broadcastFx(room, {
       kind: 'day_advanced',
       sfx: 'morning',
@@ -571,6 +572,7 @@ export function createMultiplayerServer(
     applyPlayerIntoWorld(room, player);
 
     if (msg.type === 'action:tile') {
+      if (!Number.isInteger(msg.tx) || !Number.isInteger(msg.ty)) return;
       if (
         Number.isInteger(msg.selectedHotbarIndex) &&
         msg.selectedHotbarIndex >= 0 &&
@@ -593,6 +595,7 @@ export function createMultiplayerServer(
           wy,
           actionKind: res.kind,
           actionMessage: res.message,
+          swingTool: player.swingTool,
           cropHarvested: res.cropHarvested,
           goldenBonus: res.goldenBonus,
           rotationBoosted: res.rotationBoosted,
@@ -830,16 +833,29 @@ export function createMultiplayerServer(
         }
       }
 
-      // Target active host/first player for wildlife AI
-      const targetPlayer = activePlayers[0];
+      // Target connected player closest to active wildlife (fallback to first connected farmer)
+      let targetPlayer = activePlayers[0];
+      if (world.wildlife.length > 0 && activePlayers.length > 1) {
+        let bestDist = Infinity;
+        for (const candidate of activePlayers) {
+          for (const w of world.wildlife) {
+            const d = Math.hypot(candidate.x - w.x, candidate.y - w.y);
+            if (d < bestDist) {
+              bestDist = d;
+              targetPlayer = candidate;
+            }
+          }
+        }
+      }
       applyPlayerIntoWorld(room, targetPlayer);
 
-      let worldTilesChanged = false;
+      let worldNeedsSync = false;
+      const teleportIds: string[] = [];
       stepWildlife(
         world,
         dt,
         (tx, ty) => {
-          worldTilesChanged = true;
+          worldNeedsSync = true;
           broadcastFx(room, {
             kind: 'crop_eaten',
             wx: (tx + 0.5) * TILE_SIZE,
@@ -854,6 +870,8 @@ export function createMultiplayerServer(
             targetPlayer.x = FARMHOUSE_DOOR.x + 0.5;
             targetPlayer.y = FARMHOUSE_DOOR.y + 0.7;
             world.player.gold = Math.max(0, world.player.gold - 10);
+            teleportIds.push(targetPlayer.id);
+            worldNeedsSync = true;
           }
           broadcastFx(room, {
             kind: 'hurt',
@@ -881,8 +899,8 @@ export function createMultiplayerServer(
         continue;
       }
 
-      if (worldTilesChanged) {
-        syncWorldToRoom(room);
+      if (worldNeedsSync) {
+        syncWorldToRoom(room, teleportIds);
       }
 
       broadcastToRoom(room, {
@@ -931,10 +949,18 @@ export function createMultiplayerServer(
   const server = http.createServer(app);
   const wss = new WebSocketServer({ noServer: true });
 
+  const aliveSockets = new WeakMap<WebSocket, boolean>();
+
   wss.on('connection', (ws) => {
+    aliveSockets.set(ws, true);
     socketMeta.set(ws, { roomCode: null, playerId: null });
 
+    ws.on('pong', () => {
+      aliveSockets.set(ws, true);
+    });
+
     ws.on('message', (raw) => {
+      aliveSockets.set(ws, true);
       try {
         const parsed = JSON.parse(raw.toString()) as ClientToServerMessage;
         if (parsed && typeof parsed.type === 'string') {
@@ -964,11 +990,28 @@ export function createMultiplayerServer(
   });
 
   const intervalId = setInterval(tickRooms, 100);
+  const heartbeatId = setInterval(() => {
+    for (const client of wss.clients) {
+      if (aliveSockets.get(client) === false) {
+        client.terminate();
+        continue;
+      }
+      aliveSockets.set(client, false);
+      try {
+        client.ping();
+      } catch {
+        // Ignore closed socket ping errors
+      }
+    }
+  }, 25_000);
 
   return {
     app,
     server,
     wss,
-    stopSimulation: () => clearInterval(intervalId),
+    stopSimulation: () => {
+      clearInterval(intervalId);
+      clearInterval(heartbeatId);
+    },
   };
 }

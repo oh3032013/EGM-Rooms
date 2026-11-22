@@ -1,5 +1,5 @@
-import { Award } from 'lucide-react';
-import { BADGE_TEXT, UI_TEXT, type Language } from '../game/i18n';
+import { Award, Languages } from 'lucide-react';
+import { BADGE_TEXT, LANGUAGE_OPTIONS, UI_TEXT, type Language } from '../game/i18n';
 import type { BadgeId, FarmStats } from '../game/types';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -13,7 +13,7 @@ interface StatusModalProps {
   touchControlsEnabled: boolean;
   blindMode: boolean;
   onToggleTouchControls: () => void;
-  onToggleLanguage: () => void;
+  onSelectLanguage: (lang: Language) => void;
   onToggleBlindMode: () => void;
   onResume: () => void;
   onRestart: () => void;
@@ -31,7 +31,7 @@ export function StatusModal({
   touchControlsEnabled,
   blindMode,
   onToggleTouchControls,
-  onToggleLanguage,
+  onSelectLanguage,
   onToggleBlindMode,
   onResume,
   onRestart,
@@ -127,13 +127,23 @@ export function StatusModal({
             >
               {t.touchControlsLabel}: {touchControlsEnabled ? t.on : t.off}
             </button>
-            <button
-              type="button"
-              onClick={onToggleLanguage}
-              className="px-3.5 py-2 rounded-lg border border-[#b3925d] bg-[#ebd8b5] text-xs font-semibold text-[#2c1e14] hover:bg-[#e0c79b] cursor-pointer whitespace-nowrap"
-            >
-              {t.languageLabel}: {t.langSwitch}
-            </button>
+            <label className="px-3 py-2 rounded-lg border border-[#b3925d] bg-[#ebd8b5] text-xs font-semibold text-[#2c1e14] hover:bg-[#e0c79b] flex items-center gap-1.5 whitespace-nowrap">
+              <Languages className="w-3.5 h-3.5 shrink-0" />
+              <span>{t.languageLabel}:</span>
+              <select
+                value={lang}
+                aria-label={t.languageLabel}
+                data-testid="pause-language-select"
+                onChange={(e) => onSelectLanguage(e.target.value as Language)}
+                className="bg-transparent font-bold text-[#2c1e14] cursor-pointer focus:outline-none"
+              >
+                {LANGUAGE_OPTIONS.map((opt) => (
+                  <option key={opt.code} value={opt.code} className="bg-[#f5ebd6] text-[#2c1e14]">
+                    {opt.nativeName}
+                  </option>
+                ))}
+              </select>
+            </label>
             <PWAInstallButton compact lang={lang} />
           </div>
         )}
