@@ -65,6 +65,27 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+export interface VoicePeerState {
+  enabled: boolean;
+  muted: boolean;
+  speaking: boolean;
+}
+
+export type VoiceSignalPayload =
+  | {
+      kind: 'offer' | 'answer';
+      sdp: { type: 'offer' | 'answer' | 'pranswer' | 'rollback'; sdp?: string };
+    }
+  | {
+      kind: 'ice';
+      candidate: {
+        candidate?: string;
+        sdpMid?: string | null;
+        sdpMLineIndex?: number | null;
+        usernameFragment?: string | null;
+      };
+    };
+
 export interface FxPayload {
   kind:
     | 'tile'
@@ -143,7 +164,9 @@ export type ClientToServerMessage =
   | { type: 'action:order_fulfill' }
   | { type: 'action:buy_animal'; kind: 'chicken' | 'cow' | 'sheep' | 'dog' }
   | { type: 'action:sleep_vote'; ready: boolean }
-  | { type: 'action:chat'; text: string };
+  | { type: 'action:chat'; text: string }
+  | { type: 'voice:state'; enabled: boolean; muted: boolean; speaking?: boolean }
+  | { type: 'voice:signal'; targetId: string; signal: VoiceSignalPayload };
 
 export type ServerToClientMessage =
   | { type: 'rooms:list'; rooms: RoomSummary[] }
@@ -158,6 +181,7 @@ export type ServerToClientMessage =
       players: RemotePlayerState[];
       sleepVotes: string[];
       chat: ChatMessage[];
+      voiceStates?: Record<string, VoicePeerState>;
     }
   | { type: 'room:error'; code: string; message: string }
   | {
@@ -189,7 +213,10 @@ export type ServerToClientMessage =
       hostId: string;
       players: RemotePlayerState[];
       sleepVotes: string[];
-    };
+      voiceStates?: Record<string, VoicePeerState>;
+    }
+  | { type: 'voice:peer_state'; playerId: string; state: VoicePeerState }
+  | { type: 'voice:signal'; fromId: string; signal: VoiceSignalPayload };
 
 const SERVER_URL_STORAGE_KEY = 'ecogrow_mp_server_url';
 const PLAYER_NAME_STORAGE_KEY = 'ecogrow_mp_player_name';

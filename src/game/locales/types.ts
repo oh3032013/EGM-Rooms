@@ -234,6 +234,20 @@ export interface UiTextMap {
   customServerLabel: string;
   customServerHint: string;
   serverDefaultBtn: string;
+  voiceJoinBtn: string;
+  voiceLeaveBtn: string;
+  voiceMicOnBtn: string;
+  voiceMicOffBtn: string;
+  voiceDeafenBtn: string;
+  voiceUndeafenBtn: string;
+  voiceActiveLabel: string;
+  voiceSpeakingLabel: string;
+  voiceMutedLabel: string;
+  voiceErrorPermission: string;
+  voiceErrorUnsupported: string;
+  voiceListenOnlyToast: string;
+  voiceMutePeerBtn: string;
+  voiceUnmutePeerBtn: string;
 }
 
 export interface LocalePack {

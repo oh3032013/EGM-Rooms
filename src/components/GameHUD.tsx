@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AudioLines, BookOpen, Check, Compass, Copy, Eye, Flame, Gamepad2, Hammer, Link2, LogOut, Maximize2, MessageSquare, Minimize2, Moon, PackageCheck, Pause, Satellite, Send, ShoppingBag, Trophy, Users, Volume2, VolumeX, Zap } from 'lucide-react';
+import { AudioLines, BookOpen, Check, Compass, Copy, Eye, Flame, Gamepad2, Hammer, Headphones, Link2, LogOut, Maximize2, MessageSquare, Mic, MicOff, Minimize2, Moon, PackageCheck, Pause, PhoneOff, Satellite, Send, ShoppingBag, Trophy, Users, Volume2, VolumeX, X, Zap } from 'lucide-react';
 import { ITEMS } from '../game/constants';
 import {
   formatMorningSummaryText,
@@ -11,7 +11,12 @@ import {
   UI_TEXT,
   type Language,
 } from '../game/i18n';
-import { PLAYER_PALETTE, type ChatMessage, type RemotePlayerState } from '../game/multiplayer';
+import {
+  PLAYER_PALETTE,
+  type ChatMessage,
+  type RemotePlayerState,
+  type VoicePeerState,
+} from '../game/multiplayer';
 import type { DaySummary, ItemId, Season, TimePhase, WeatherType } from '../game/types';
 import { BoltIcon, CoinIcon, HeartIcon, ItemIcon, TimeIcon, WeatherIcon } from './PixelIcons';
 
@@ -23,6 +28,7 @@ export interface RoomHudState {
   players: RemotePlayerState[];
   sleepVotes: string[];
   chat: ChatMessage[];
+  voiceStates: Record<string, VoicePeerState>;
   reconnecting: boolean;
 }
 
@@ -86,10 +92,24 @@ interface GameHUDProps {
   roomHud?: RoomHudState | null;
   chatOpen?: boolean;
   unreadChatCount?: number;
+  voiceLocal?: {
+    enabled: boolean;
+    muted: boolean;
+    speaking: boolean;
+    deafened: boolean;
+    hasMic: boolean;
+    notice: string | null;
+    locallyMutedPeers: string[];
+  };
   onToggleChat?: () => void;
   onSendChat?: (text: string) => void;
   onToggleSleepVote?: () => void;
   onLeaveRoom?: () => void;
+  onJoinOrToggleVoiceMic?: () => void;
+  onLeaveVoice?: () => void;
+  onToggleVoiceDeafen?: () => void;
+  onTogglePeerVoiceMute?: (peerId: string) => void;
+  onDismissVoiceNotice?: () => void;
 }
 
 export function GameHUD({
@@ -125,10 +145,16 @@ export function GameHUD({
   roomHud = null,
   chatOpen = false,
   unreadChatCount = 0,
+  voiceLocal,
   onToggleChat,
   onSendChat,
   onToggleSleepVote,
   onLeaveRoom,
+  onJoinOrToggleVoiceMic,
+  onLeaveVoice,
+  onToggleVoiceDeafen,
+  onTogglePeerVoiceMute,
+  onDismissVoiceNotice,
 }: GameHUDProps) {
   const t = UI_TEXT[lang];
   const [copiedCode, setCopiedCode] = useState(false);
@@ -524,6 +550,71 @@ export function GameHUD({
                   {copiedLink ? <Check className="w-3 h-3 text-[#4ade80]" /> : <Link2 className="w-3 h-3 text-[#7dd3fc]" />}
                   <span className="hidden md:inline">{copiedLink ? t.linkCopiedToast : t.copyLinkBtn}</span>
                 </button>
+                {onJoinOrToggleVoiceMic && (
+                  voiceLocal?.enabled ? (
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        data-testid="voice-mic-btn"
+                        onClick={onJoinOrToggleVoiceMic}
+                        title={voiceLocal.muted ? t.voiceMicOffBtn : t.voiceMicOnBtn}
+                        aria-label={voiceLocal.muted ? t.voiceMicOffBtn : t.voiceMicOnBtn}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-semibold inline-flex items-center gap-1 cursor-pointer transition-all ${
+                          voiceLocal.muted
+                            ? 'bg-[#7f1d1d] border border-[#f87171] text-[#fecaca]'
+                            : voiceLocal.speaking
+                            ? 'bg-[#166534] border border-[#4ade80] text-white ring-2 ring-[#4ade80]/70'
+                            : 'wood-button-primary'
+                        }`}
+                      >
+                        {voiceLocal.muted ? <MicOff className="w-3 h-3" /> : <Mic className="w-3 h-3" />}
+                        <span className="hidden sm:inline">
+                          {voiceLocal.muted ? t.voiceMutedLabel : voiceLocal.speaking ? t.voiceSpeakingLabel : t.voiceActiveLabel}
+                        </span>
+                      </button>
+                      {onToggleVoiceDeafen && (
+                        <button
+                          type="button"
+                          data-testid="voice-deafen-btn"
+                          onClick={onToggleVoiceDeafen}
+                          title={voiceLocal.deafened ? t.voiceUndeafenBtn : t.voiceDeafenBtn}
+                          aria-label={voiceLocal.deafened ? t.voiceUndeafenBtn : t.voiceDeafenBtn}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold inline-flex items-center cursor-pointer ${
+                            voiceLocal.deafened
+                              ? 'bg-[#7f1d1d] border border-[#f87171] text-[#fecaca]'
+                              : 'wood-button'
+                          }`}
+                        >
+                          {voiceLocal.deafened ? <VolumeX className="w-3 h-3" /> : <Headphones className="w-3 h-3 text-[#86efac]" />}
+                        </button>
+                      )}
+                      {onLeaveVoice && (
+                        <button
+                          type="button"
+                          data-testid="voice-leave-btn"
+                          onClick={onLeaveVoice}
+                          title={t.voiceLeaveBtn}
+                          aria-label={t.voiceLeaveBtn}
+                          className="wood-button px-1.5 py-0.5 rounded text-[10px] font-semibold inline-flex items-center text-[#fca5a5] cursor-pointer"
+                        >
+                          <PhoneOff className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      data-testid="voice-join-btn"
+                      onClick={onJoinOrToggleVoiceMic}
+                      title={t.voiceJoinBtn}
+                      aria-label={t.voiceJoinBtn}
+                      className="wood-button px-1.5 py-0.5 rounded text-[10px] font-semibold inline-flex items-center gap-1 cursor-pointer text-[#86efac]"
+                    >
+                      <Mic className="w-3 h-3" />
+                      <span className="hidden sm:inline">{t.voiceJoinBtn}</span>
+                    </button>
+                  )
+                )}
                 {onToggleChat && (
                   <button
                     type="button"
@@ -550,6 +641,25 @@ export function GameHUD({
                     className="wood-button px-1.5 py-0.5 rounded text-[10px] font-semibold inline-flex items-center gap-1 text-[#fca5a5] cursor-pointer"
                   >
                     <LogOut className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {roomHud && voiceLocal?.notice && (
+              <div
+                dir={lang === 'ar' ? 'rtl' : 'ltr'}
+                className="wood-panel rounded-md px-2.5 py-1 text-[11px] font-semibold text-[#fde047] pointer-events-auto flex items-center gap-2"
+              >
+                <span>{voiceLocal.notice}</span>
+                {onDismissVoiceNotice && (
+                  <button
+                    type="button"
+                    onClick={onDismissVoiceNotice}
+                    className="text-[#fdf3dc]/70 hover:text-white cursor-pointer"
+                    aria-label={t.cancel}
+                  >
+                    <X className="w-3 h-3" />
                   </button>
                 )}
               </div>
@@ -608,10 +718,23 @@ export function GameHUD({
             <div className="flex flex-wrap gap-1 border-b border-[#6b482e] pb-1.5">
               {roomHud.players.map((rp) => {
                 const pal = PLAYER_PALETTE[rp.colorIndex % PLAYER_PALETTE.length] ?? PLAYER_PALETTE[0];
+                const isSelf = rp.id === roomHud.playerId;
+                const vs = isSelf
+                  ? voiceLocal?.enabled
+                    ? {
+                        enabled: true,
+                        muted: voiceLocal.muted,
+                        speaking: voiceLocal.speaking,
+                      }
+                    : undefined
+                  : roomHud.voiceStates[rp.id];
+                const peerLocallyMuted = !isSelf && Boolean(voiceLocal?.locallyMutedPeers.includes(rp.id));
                 return (
                   <span
                     key={rp.id}
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#24170f] border border-[#593c26] text-[10px] font-bold text-[#fdf3dc]"
+                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#24170f] border text-[10px] font-bold text-[#fdf3dc] ${
+                      vs?.enabled && vs.speaking ? 'border-[#4ade80] ring-1 ring-[#4ade80]/60' : 'border-[#593c26]'
+                    }`}
                   >
                     <span
                       className="w-2 h-2 rounded-full shrink-0"
@@ -619,6 +742,28 @@ export function GameHUD({
                     />
                     <span>{rp.name}</span>
                     {rp.id === roomHud.hostId && <span className="text-[#fde047]">★</span>}
+                    {vs?.enabled && (
+                      vs.muted ? (
+                        <MicOff className="w-2.5 h-2.5 text-[#fca5a5]" />
+                      ) : (
+                        <Mic className={`w-2.5 h-2.5 ${vs.speaking ? 'text-[#4ade80] animate-pulse' : 'text-[#86efac]'}`} />
+                      )
+                    )}
+                    {!isSelf && voiceLocal?.enabled && vs?.enabled && onTogglePeerVoiceMute && (
+                      <button
+                        type="button"
+                        onClick={() => onTogglePeerVoiceMute(rp.id)}
+                        title={peerLocallyMuted ? t.voiceUnmutePeerBtn : t.voiceMutePeerBtn}
+                        aria-label={peerLocallyMuted ? t.voiceUnmutePeerBtn : t.voiceMutePeerBtn}
+                        className="ml-0.5 text-[#fdf3dc]/70 hover:text-white cursor-pointer"
+                      >
+                        {peerLocallyMuted ? (
+                          <VolumeX className="w-2.5 h-2.5 text-[#fca5a5]" />
+                        ) : (
+                          <Volume2 className="w-2.5 h-2.5 text-[#86efac]" />
+                        )}
+                      </button>
+                    )}
                   </span>
                 );
               })}

@@ -14,7 +14,7 @@ import {
   WELL_POS,
 } from './constants';
 import { getSeason, getTile, getTimePhase } from './rules';
-import { PLAYER_PALETTE, type RemotePlayerState } from './multiplayer';
+import { PLAYER_PALETTE, type RemotePlayerState, type VoicePeerState } from './multiplayer';
 import type {
   FarmChicken,
   FarmTile,
@@ -142,6 +142,7 @@ export interface CameraState {
 export interface LocalPlayerRenderMeta {
   name: string;
   colorIndex: number;
+  voice?: VoicePeerState;
 }
 
 export function renderGameWorld(
@@ -156,7 +157,8 @@ export function renderGameWorld(
   elapsedSec: number,
   isTitleBackdrop: boolean,
   remotePlayers: RemotePlayerState[] = [],
-  localPlayerMeta?: LocalPlayerRenderMeta
+  localPlayerMeta?: LocalPlayerRenderMeta,
+  voiceStates?: Record<string, VoicePeerState>
 ): void {
   const season = getSeason(state.seasonIndex);
   const pal = SEASON_PALETTES[season];
@@ -372,13 +374,15 @@ export function renderGameWorld(
           state.player,
           elapsedSec,
           localPlayerMeta?.colorIndex ?? 0,
-          localPlayerMeta?.name
+          localPlayerMeta?.name,
+          localPlayerMeta?.voice
         ),
     });
     for (const rp of remotePlayers) {
+      const rpVoice = voiceStates?.[rp.id];
       drawList.push({
         sortY: rp.y * TILE_SIZE + 4,
-        draw: () => drawFarmerEntity(ctx, rp, elapsedSec, rp.colorIndex, rp.name),
+        draw: () => drawFarmerEntity(ctx, rp, elapsedSec, rp.colorIndex, rp.name, rpVoice),
       });
     }
   }
@@ -1312,7 +1316,8 @@ function drawFarmerEntity(
   >,
   elapsedSec: number,
   colorIndex = 0,
-  label?: string
+  label?: string,
+  voice?: VoicePeerState
 ): void {
   const palette = PLAYER_PALETTE[colorIndex % PLAYER_PALETTE.length] ?? PLAYER_PALETTE[0];
   const cx = Math.round(p.x * TILE_SIZE);
@@ -1374,18 +1379,40 @@ function drawFarmerEntity(
     ctx.save();
     ctx.font = 'bold 9px "Plus Jakarta Sans", "Cairo", sans-serif';
     const metrics = ctx.measureText(label);
-    const boxW = Math.ceil(metrics.width) + 8;
+    const hasVoiceIcon = Boolean(voice?.enabled);
+    const voicePad = hasVoiceIcon ? 10 : 0;
+    const boxW = Math.ceil(metrics.width) + 8 + voicePad;
     const boxX = Math.round(cx - boxW / 2);
     const boxY = cy - 35 + bob;
     ctx.fillStyle = 'rgba(20, 14, 9, 0.78)';
     ctx.fillRect(boxX, boxY, boxW, 11);
-    ctx.strokeStyle = palette.badge;
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = voice?.speaking ? '#4ade80' : palette.badge;
+    ctx.lineWidth = voice?.speaking ? 1.5 : 1;
     ctx.strokeRect(boxX, boxY, boxW, 11);
     ctx.fillStyle = '#fdf3dc';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(label, cx, boxY + 5.5);
+    ctx.fillText(label, cx - voicePad / 2, boxY + 5.5);
+
+    if (hasVoiceIcon && voice) {
+      const ix = boxX + boxW - 9;
+      const iy = boxY + 3;
+      if (voice.speaking) {
+        const b1 = 2 + Math.round(Math.abs(Math.sin(elapsedSec * 14)) * 3);
+        const b2 = 3 + Math.round(Math.abs(Math.sin(elapsedSec * 14 + 1.4)) * 3);
+        const b3 = 2 + Math.round(Math.abs(Math.sin(elapsedSec * 14 + 2.8)) * 3);
+        ctx.fillStyle = '#4ade80';
+        ctx.fillRect(ix, iy + 5 - b1, 1.5, b1);
+        ctx.fillRect(ix + 2.5, iy + 5 - b2, 1.5, b2);
+        ctx.fillRect(ix + 5, iy + 5 - b3, 1.5, b3);
+      } else if (voice.muted) {
+        ctx.fillStyle = '#f87171';
+        ctx.fillRect(ix + 2, iy + 1, 3, 4);
+      } else {
+        ctx.fillStyle = '#86efac';
+        ctx.fillRect(ix + 2, iy + 1, 3, 4);
+      }
+    }
     ctx.restore();
   }
 }

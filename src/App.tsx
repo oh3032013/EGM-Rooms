@@ -61,7 +61,9 @@ import {
   type RemotePlayerState,
   type RoomSummary,
   type ServerToClientMessage,
+  type VoicePeerState,
 } from './game/multiplayer';
+import { VoiceChatManager } from './game/voiceChat';
 import {
   advanceDay,
   buyDairyCow,
@@ -285,6 +287,23 @@ export default function App() {
   const [roomHud, setRoomHud] = useState<RoomHudState | null>(null);
   const [chatOpen, setChatOpen] = useState<boolean>(false);
   const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
+  const [voiceLocal, setVoiceLocal] = useState<{
+    enabled: boolean;
+    muted: boolean;
+    speaking: boolean;
+    deafened: boolean;
+    hasMic: boolean;
+    notice: string | null;
+    locallyMutedPeers: string[];
+  }>({
+    enabled: false,
+    muted: false,
+    speaking: false,
+    deafened: false,
+    hasMic: false,
+    notice: null,
+    locallyMutedPeers: [],
+  });
 
   const phaseRef = useRef<GamePhase>(phase);
   const modalRef = useRef<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac'>(activeModal);
@@ -296,6 +315,9 @@ export default function App() {
   const showRoomsModalRef = useRef<boolean>(showRoomsModal);
   const chatOpenRef = useRef<boolean>(chatOpen);
   const roomHudRef = useRef<RoomHudState | null>(roomHud);
+  const voiceStatesRef = useRef<Record<string, VoicePeerState>>({});
+  const voiceManagerRef = useRef<VoiceChatManager | null>(null);
+  const voiceNoticeTimerRef = useRef<number | null>(null);
   const remotePlayersRef = useRef<RemotePlayerState[]>([]);
   const remoteTargetPlayersRef = useRef<RemotePlayerState[]>([]);
   const localPlayerMetaRef = useRef<LocalPlayerRenderMeta | undefined>(undefined);
@@ -600,6 +622,108 @@ export default function App() {
     }
   }, []);
 
+  const showVoiceNotice = useCallback((text: string) => {
+    if (voiceNoticeTimerRef.current !== null) {
+      window.clearTimeout(voiceNoticeTimerRef.current);
+      voiceNoticeTimerRef.current = null;
+    }
+    setVoiceLocal((prev) => ({ ...prev, notice: text }));
+    voiceNoticeTimerRef.current = window.setTimeout(() => {
+      voiceNoticeTimerRef.current = null;
+      setVoiceLocal((prev) => (prev.notice === text ? { ...prev, notice: null } : prev));
+    }, 6000);
+  }, []);
+
+  const getVoiceManager = useCallback((): VoiceChatManager => {
+    if (!voiceManagerRef.current) {
+      voiceManagerRef.current = new VoiceChatManager({
+        onSendSignal: (targetId, signal) => {
+          sendWs({ type: 'voice:signal', targetId, signal });
+        },
+        onStateChange: (st) => {
+          setVoiceLocal((prev) => ({
+            ...prev,
+            enabled: st.enabled,
+            muted: st.muted,
+            speaking: st.speaking,
+            deafened: st.deafened,
+            hasMic: st.hasMic,
+          }));
+          if (localPlayerMetaRef.current) {
+            localPlayerMetaRef.current = {
+              ...localPlayerMetaRef.current,
+              voice: {
+                enabled: st.enabled,
+                muted: st.muted,
+                speaking: st.speaking,
+              },
+            };
+          }
+          sendWs({
+            type: 'voice:state',
+            enabled: st.enabled,
+            muted: st.muted,
+            speaking: st.speaking,
+          });
+        },
+        onNotice: (code) => {
+          const t = UI_TEXT[langRef.current];
+          if (code === 'UNSUPPORTED') showVoiceNotice(t.voiceErrorUnsupported);
+          else if (code === 'LISTEN_ONLY') showVoiceNotice(t.voiceListenOnlyToast);
+          else showVoiceNotice(t.voiceErrorPermission);
+        },
+      });
+    }
+    return voiceManagerRef.current;
+  }, [sendWs, showVoiceNotice]);
+
+  useEffect(() => {
+    return () => {
+      if (voiceNoticeTimerRef.current !== null) {
+        window.clearTimeout(voiceNoticeTimerRef.current);
+      }
+      voiceManagerRef.current?.leave();
+    };
+  }, []);
+
+  const handleJoinOrToggleVoiceMic = useCallback(async () => {
+    if (gameModeRef.current !== 'multiplayer' || !roomHudRef.current) return;
+    const mgr = getVoiceManager();
+    audioEngine.playSfx('click');
+    if (!mgr.isEnabled()) {
+      const myId = getOrCreateClientId();
+      const activePeers = Object.entries(voiceStatesRef.current)
+        .filter(([id, s]) => id !== myId && s.enabled)
+        .map(([id]) => id);
+      await mgr.join(myId, activePeers);
+    } else {
+      await mgr.toggleMute();
+    }
+  }, [getVoiceManager]);
+
+  const handleLeaveVoice = useCallback(() => {
+    audioEngine.playSfx('click');
+    voiceManagerRef.current?.leave();
+  }, []);
+
+  const handleToggleVoiceDeafen = useCallback(() => {
+    audioEngine.playSfx('click');
+    voiceManagerRef.current?.toggleDeafen();
+  }, []);
+
+  const handleTogglePeerVoiceMute = useCallback((peerId: string) => {
+    const mgr = voiceManagerRef.current;
+    if (!mgr) return;
+    audioEngine.playSfx('click');
+    const nowMuted = mgr.togglePeerMute(peerId);
+    setVoiceLocal((prev) => {
+      const next = new Set(prev.locallyMutedPeers);
+      if (nowMuted) next.add(peerId);
+      else next.delete(peerId);
+      return { ...prev, locallyMutedPeers: Array.from(next) };
+    });
+  }, []);
+
   const handleServerFx = useCallback(
     (fx: FxPayload) => {
       const world = worldRef.current;
@@ -794,6 +918,21 @@ export default function App() {
       ws.onmessage = null;
       ws.close();
     }
+    voiceManagerRef.current?.leave();
+    voiceStatesRef.current = {};
+    if (voiceNoticeTimerRef.current !== null) {
+      window.clearTimeout(voiceNoticeTimerRef.current);
+      voiceNoticeTimerRef.current = null;
+    }
+    setVoiceLocal({
+      enabled: false,
+      muted: false,
+      speaking: false,
+      deafened: false,
+      hasMic: false,
+      notice: null,
+      locallyMutedPeers: [],
+    });
     remotePlayersRef.current = [];
     remoteTargetPlayersRef.current = [];
     localPlayerMetaRef.current = undefined;
@@ -902,7 +1041,11 @@ export default function App() {
           serverWorld.player.waterLevel = me.waterLevel;
           serverWorld.player.maxWaterLevel = me.maxWaterLevel;
           serverWorld.player.selectedHotbarIndex = prev.selectedHotbarIndex;
-          localPlayerMetaRef.current = { name: me.name, colorIndex: me.colorIndex };
+          localPlayerMetaRef.current = {
+            name: me.name,
+            colorIndex: me.colorIndex,
+            voice: localPlayerMetaRef.current?.voice,
+          };
         }
         worldRef.current = serverWorld;
         syncRemoteTargets(
@@ -982,6 +1125,22 @@ export default function App() {
           setFutureDispatch(null);
           setActiveModal('none');
           setUnreadChatCount(0);
+          const initialVoiceStates = msg.voiceStates ?? {};
+          voiceStatesRef.current = initialVoiceStates;
+          if (voiceManagerRef.current?.isEnabled()) {
+            const activeVoicePeers = Object.entries(initialVoiceStates)
+              .filter(([id, s]) => id !== msg.playerId && s.enabled)
+              .map(([id]) => id);
+            voiceManagerRef.current.syncPeers(activeVoicePeers);
+            ws.send(
+              JSON.stringify({
+                type: 'voice:state',
+                enabled: true,
+                muted: voiceManagerRef.current.isMuted(),
+                speaking: false,
+              } satisfies ClientToServerMessage)
+            );
+          }
           setRoomHud({
             roomCode: msg.roomCode,
             roomName: msg.roomName,
@@ -990,6 +1149,7 @@ export default function App() {
             players: msg.players,
             sleepVotes: msg.sleepVotes,
             chat: msg.chat,
+            voiceStates: initialVoiceStates,
             reconnecting: false,
           });
           setPhase('playing');
@@ -1074,6 +1234,13 @@ export default function App() {
             msg.players.filter((p) => p.id !== myId),
             false
           );
+          if (msg.voiceStates) {
+            voiceStatesRef.current = msg.voiceStates;
+            const activeVoicePeers = Object.entries(msg.voiceStates)
+              .filter(([id, s]) => id !== myId && s.enabled)
+              .map(([id]) => id);
+            voiceManagerRef.current?.syncPeers(activeVoicePeers);
+          }
           setRoomHud((prev) =>
             prev
               ? {
@@ -1081,6 +1248,7 @@ export default function App() {
                   hostId: msg.hostId,
                   players: msg.players,
                   sleepVotes: msg.sleepVotes,
+                  voiceStates: msg.voiceStates ?? prev.voiceStates,
                 }
               : prev
           );
@@ -1094,6 +1262,36 @@ export default function App() {
             toast,
             msg.event === 'joined' ? '#86efac' : '#fca5a5'
           );
+          return;
+        }
+
+        if (msg.type === 'voice:peer_state') {
+          const myId = getOrCreateClientId();
+          const nextVoiceStates = {
+            ...voiceStatesRef.current,
+            [msg.playerId]: msg.state,
+          };
+          voiceStatesRef.current = nextVoiceStates;
+          const activeVoicePeers = Object.entries(nextVoiceStates)
+            .filter(([id, s]) => id !== myId && s.enabled)
+            .map(([id]) => id);
+          voiceManagerRef.current?.syncPeers(activeVoicePeers);
+          setRoomHud((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  voiceStates: {
+                    ...prev.voiceStates,
+                    [msg.playerId]: msg.state,
+                  },
+                }
+              : prev
+          );
+          return;
+        }
+
+        if (msg.type === 'voice:signal') {
+          void voiceManagerRef.current?.handleSignal(msg.fromId, msg.signal);
         }
       };
 
@@ -1585,6 +1783,12 @@ export default function App() {
         return;
       }
 
+      if (key === 'v' && gameModeRef.current === 'multiplayer' && modalRef.current === 'none') {
+        e.preventDefault();
+        void handleJoinOrToggleVoiceMic();
+        return;
+      }
+
       if (key === 'm') {
         const nextMuted = !audioEngine.isMuted();
         audioEngine.setMuted(nextMuted);
@@ -1746,6 +1950,7 @@ export default function App() {
     handleBlindScan,
     handleBlindStatus,
     handleInteract,
+    handleJoinOrToggleVoiceMic,
     handleTileClickAction,
     hasSavedFarm,
     saveFarm,
@@ -2102,7 +2307,8 @@ export default function App() {
             elapsedRef.current,
             currentPhase === 'title',
             gameModeRef.current === 'multiplayer' ? remotePlayersRef.current : [],
-            gameModeRef.current === 'multiplayer' ? localPlayerMetaRef.current : undefined
+            gameModeRef.current === 'multiplayer' ? localPlayerMetaRef.current : undefined,
+            gameModeRef.current === 'multiplayer' ? voiceStatesRef.current : undefined
           );
         }
       }
@@ -2277,6 +2483,7 @@ export default function App() {
           roomHud={gameMode === 'multiplayer' ? roomHud : null}
           chatOpen={chatOpen}
           unreadChatCount={unreadChatCount}
+          voiceLocal={gameMode === 'multiplayer' ? voiceLocal : undefined}
           onToggleChat={() =>
             setChatOpen((v) => {
               const next = !v;
@@ -2286,6 +2493,11 @@ export default function App() {
           }
           onSendChat={(text) => sendWs({ type: 'action:chat', text })}
           onToggleSleepVote={triggerSleep}
+          onJoinOrToggleVoiceMic={() => void handleJoinOrToggleVoiceMic()}
+          onLeaveVoice={handleLeaveVoice}
+          onToggleVoiceDeafen={handleToggleVoiceDeafen}
+          onTogglePeerVoiceMute={handleTogglePeerVoiceMute}
+          onDismissVoiceNotice={() => setVoiceLocal((prev) => ({ ...prev, notice: null }))}
           onLeaveRoom={() => {
             disconnectMultiplayer(true);
             setActiveModal('none');

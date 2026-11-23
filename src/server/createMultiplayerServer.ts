@@ -18,6 +18,7 @@ import type {
   RemotePlayerState,
   RoomSummary,
   ServerToClientMessage,
+  VoicePeerState,
 } from '../game/multiplayer.ts';
 import { MAX_ROOM_PLAYERS, PLAYER_PALETTE } from '../game/multiplayer.ts';
 import {
@@ -51,6 +52,9 @@ interface RoomClient extends RemotePlayerState {
   ws: WebSocket | null;
   connected: boolean;
   disconnectedAt: number | null;
+  voiceEnabled: boolean;
+  voiceMuted: boolean;
+  voiceSpeaking: boolean;
 }
 
 interface ServerRoom {
@@ -121,6 +125,19 @@ export function createMultiplayerServer(
 
   function getConnectedPlayers(room: ServerRoom): RoomClient[] {
     return Array.from(room.players.values()).filter((p) => p.connected);
+  }
+
+  function getRoomVoiceStates(room: ServerRoom): Record<string, VoicePeerState> {
+    const out: Record<string, VoicePeerState> = {};
+    for (const p of room.players.values()) {
+      if (!p.connected) continue;
+      out[p.id] = {
+        enabled: p.voiceEnabled,
+        muted: p.voiceMuted,
+        speaking: p.voiceEnabled && !p.voiceMuted && p.voiceSpeaking,
+      };
+    }
+    return out;
   }
 
   function getPublicRoomSummaries(): RoomSummary[] {
@@ -299,6 +316,9 @@ export function createMultiplayerServer(
       player.connected = false;
       player.ws = null;
       player.disconnectedAt = Date.now();
+      player.voiceEnabled = false;
+      player.voiceMuted = false;
+      player.voiceSpeaking = false;
     }
     room.sleepVotes.delete(playerId);
 
@@ -317,6 +337,7 @@ export function createMultiplayerServer(
         hostId: room.hostId,
         players: remaining.map(toPublicPlayer),
         sleepVotes: Array.from(room.sleepVotes),
+        voiceStates: getRoomVoiceStates(room),
       });
       if (room.sleepVotes.size > 0 && room.sleepVotes.size >= remaining.length) {
         performSleepForRoom(room);
@@ -369,6 +390,9 @@ export function createMultiplayerServer(
         ws,
         connected: true,
         disconnectedAt: null,
+        voiceEnabled: false,
+        voiceMuted: false,
+        voiceSpeaking: false,
       };
 
       const room: ServerRoom = {
@@ -400,6 +424,7 @@ export function createMultiplayerServer(
         players: [toPublicPlayer(player)],
         sleepVotes: [],
         chat: room.chat,
+        voiceStates: getRoomVoiceStates(room),
       });
       broadcastRoomsListToLobby();
       return;
@@ -438,6 +463,9 @@ export function createMultiplayerServer(
         existing.connected = true;
         existing.disconnectedAt = null;
         existing.name = playerName;
+        existing.voiceEnabled = false;
+        existing.voiceMuted = false;
+        existing.voiceSpeaking = false;
         player = existing;
       } else {
         const offset = connectedList.length;
@@ -464,6 +492,9 @@ export function createMultiplayerServer(
           ws,
           connected: true,
           disconnectedAt: null,
+          voiceEnabled: false,
+          voiceMuted: false,
+          voiceSpeaking: false,
         };
         room.players.set(player.id, player);
       }
@@ -476,6 +507,7 @@ export function createMultiplayerServer(
       meta.playerId = player.id;
 
       const publicPlayers = getConnectedPlayers(room).map(toPublicPlayer);
+      const voiceStates = getRoomVoiceStates(room);
       sendToClient(ws, {
         type: 'room:joined',
         roomCode: room.code,
@@ -487,6 +519,7 @@ export function createMultiplayerServer(
         players: publicPlayers,
         sleepVotes: Array.from(room.sleepVotes),
         chat: room.chat,
+        voiceStates,
       });
 
       broadcastToRoom(
@@ -499,6 +532,7 @@ export function createMultiplayerServer(
           hostId: room.hostId,
           players: publicPlayers,
           sleepVotes: Array.from(room.sleepVotes),
+          voiceStates,
         },
         player.id
       );
@@ -548,6 +582,38 @@ export function createMultiplayerServer(
       room.chat.push(chatMsg);
       if (room.chat.length > 40) room.chat.shift();
       broadcastToRoom(room, { type: 'chat:message', message: chatMsg });
+      return;
+    }
+
+    if (msg.type === 'voice:state') {
+      player.voiceEnabled = Boolean(msg.enabled);
+      player.voiceMuted = Boolean(msg.muted);
+      player.voiceSpeaking = player.voiceEnabled && !player.voiceMuted && Boolean(msg.speaking);
+      broadcastToRoom(
+        room,
+        {
+          type: 'voice:peer_state',
+          playerId: player.id,
+          state: {
+            enabled: player.voiceEnabled,
+            muted: player.voiceMuted,
+            speaking: player.voiceSpeaking,
+          },
+        },
+        player.id
+      );
+      return;
+    }
+
+    if (msg.type === 'voice:signal') {
+      if (typeof msg.targetId !== 'string' || !msg.signal || typeof msg.signal !== 'object') return;
+      const target = room.players.get(msg.targetId);
+      if (!target || !target.connected || target.id === player.id) return;
+      sendToClient(target.ws, {
+        type: 'voice:signal',
+        fromId: player.id,
+        signal: msg.signal,
+      });
       return;
     }
 
