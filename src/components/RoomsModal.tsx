@@ -56,13 +56,17 @@ export function RoomsModal({
   }, [initialRoomCode]);
 
   useEffect(() => {
+    let active = true;
     const timer = window.setTimeout(() => {
-      onRefreshRooms(serverUrl, false);
+      if (active) onRefreshRooms(serverUrl, false);
     }, 250);
     const pollId = window.setInterval(() => {
+      if (!active) return;
+      if (document.visibilityState === 'hidden' || navigator.onLine === false) return;
       onRefreshRooms(serverUrl, true);
-    }, 5000);
+    }, 6000);
     return () => {
+      active = false;
       window.clearTimeout(timer);
       window.clearInterval(pollId);
     };
@@ -98,21 +102,21 @@ export function RoomsModal({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center p-3 sm:p-4 bg-black/65"
+      className="fixed inset-0 z-40 flex items-center justify-center safe-area-modal bg-black/65"
       role="dialog"
       aria-modal="true"
       aria-label={t.roomsModalTitle}
       dir={lang === 'ar' ? 'rtl' : 'ltr'}
     >
-      <div className="parchment-panel rounded-xl w-full max-w-xl max-h-[90vh] flex flex-col overflow-hidden">
+      <div className="parchment-panel rounded-xl w-full max-w-xl max-h-[92dvh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-start justify-between gap-3 px-5 py-4 border-b-2 border-[#d4ba8f] bg-[#ebd8b5]">
-          <div className="flex items-center gap-2.5">
+        <div className="flex items-start justify-between gap-3 px-4 sm:px-5 py-3.5 sm:py-4 border-b-2 border-[#d4ba8f] bg-[#ebd8b5] shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-9 h-9 rounded-lg bg-[#3d7a47] border-2 border-[#63a86a] flex items-center justify-center text-white shrink-0">
               <Users className="w-5 h-5" />
             </div>
-            <div>
-              <h2 className="font-display text-xl sm:text-2xl font-bold text-[#2c1e14] leading-tight">
+            <div className="min-w-0">
+              <h2 className="font-display text-lg sm:text-2xl font-bold text-[#2c1e14] leading-tight truncate">
                 {t.roomsModalTitle}
               </h2>
               <p className="text-xs text-[#694d36]">{t.roomsModalSub}</p>
@@ -129,7 +133,7 @@ export function RoomsModal({
         </div>
 
         {/* Body */}
-        <div className="p-4 sm:p-5 overflow-y-auto space-y-4">
+        <div className="p-4 sm:p-5 overflow-y-auto modal-scroll space-y-4">
           {/* Farmer Name */}
           <div>
             <label className="block text-xs font-bold text-[#4a3220] mb-1">
@@ -240,7 +244,7 @@ export function RoomsModal({
                 <label className="block text-xs font-bold text-[#4a3220]">
                   {t.joinByCodeLabel}
                 </label>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap sm:flex-nowrap gap-2">
                   <input
                     type="text"
                     maxLength={8}
@@ -248,13 +252,13 @@ export function RoomsModal({
                     onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
                     placeholder={t.roomCodePlaceholder}
                     data-testid="room-code-input"
-                    className="flex-1 px-3 py-2 rounded-lg bg-[#fff9ec] border-2 border-[#b89763] font-mono-tabular uppercase tracking-wider text-sm font-bold text-[#2c1e14] focus:outline-none focus:border-[#3d7a47]"
+                    className="flex-1 min-w-[140px] px-3 py-2 rounded-lg bg-[#fff9ec] border-2 border-[#b89763] font-mono-tabular uppercase tracking-wider text-sm font-bold text-[#2c1e14] focus:outline-none focus:border-[#3d7a47]"
                   />
                   <button
                     type="submit"
                     disabled={loading || !roomCode.trim()}
                     data-testid="join-code-submit"
-                    className="wood-button-primary px-4 py-2 rounded-lg text-xs sm:text-sm font-bold cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                    className="wood-button-primary px-4 py-2 rounded-lg text-xs sm:text-sm font-bold cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
                   >
                     {t.joinRoomBtn}
                   </button>
@@ -263,7 +267,7 @@ export function RoomsModal({
 
               {/* Public Rooms List */}
               <div>
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                   <span className="text-xs font-bold text-[#4a3220]">{t.publicRoomsHeader}</span>
                   <button
                     type="button"
@@ -280,11 +284,11 @@ export function RoomsModal({
                     {t.noPublicRooms}
                   </div>
                 ) : (
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                  <div className="space-y-2 max-h-48 overflow-y-auto modal-scroll">
                     {rooms.map((rm) => (
                       <div
                         key={rm.code}
-                        className="flex items-center justify-between gap-3 p-3 rounded-lg bg-[#fbf2e1] border-2 border-[#d6be96]"
+                        className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 p-3 rounded-lg bg-[#fbf2e1] border-2 border-[#d6be96]"
                       >
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
@@ -343,7 +347,7 @@ export function RoomsModal({
             </button>
             {showServerConfig && (
               <div className="mt-2 space-y-1.5 p-2.5 rounded-lg bg-[#fbf2e1] border border-[#d6be96]">
-                <div className="flex gap-2">
+                <div className="flex flex-wrap sm:flex-nowrap gap-2">
                   <input
                     type="text"
                     dir="ltr"
@@ -352,8 +356,8 @@ export function RoomsModal({
                       setServerUrl(e.target.value);
                       saveMultiplayerServerUrl(e.target.value);
                     }}
-                    placeholder="https://your-ecogrow-server.onrender.com"
-                    className="flex-1 px-2.5 py-1.5 rounded bg-white border border-[#b89763] text-xs font-mono-tabular text-[#2c1e14] focus:outline-none focus:border-[#3d7a47]"
+                    placeholder="https://ecogrowmission.up.railway.app"
+                    className="flex-1 min-w-[160px] px-2.5 py-1.5 rounded bg-white border border-[#b89763] text-xs font-mono-tabular text-[#2c1e14] focus:outline-none focus:border-[#3d7a47]"
                   />
                   <button
                     type="button"
@@ -361,7 +365,7 @@ export function RoomsModal({
                       setServerUrl('');
                       saveMultiplayerServerUrl('');
                     }}
-                    className="px-2.5 py-1.5 rounded bg-[#e6cfa8] border border-[#b89763] text-[11px] font-bold text-[#3d2817] cursor-pointer"
+                    className="px-2.5 py-1.5 rounded bg-[#e6cfa8] border border-[#b89763] text-[11px] font-bold text-[#3d2817] cursor-pointer whitespace-nowrap shrink-0"
                   >
                     {t.serverDefaultBtn}
                   </button>

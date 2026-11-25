@@ -20,7 +20,7 @@ import type {
   ServerToClientMessage,
   VoicePeerState,
 } from '../game/multiplayer.ts';
-import { MAX_ROOM_PLAYERS, PLAYER_PALETTE } from '../game/multiplayer.ts';
+import { COOP_EMOTES, MAX_ROOM_PLAYERS, PLAYER_PALETTE } from '../game/multiplayer.ts';
 import {
   advanceDay,
   buyDairyCow,
@@ -69,7 +69,16 @@ interface ServerRoom {
   wildlifeSpawnTimer: number;
   lastTickMs: number;
   emptySinceMs: number | null;
+  dirtyEntities: boolean;
+  lastEntityBroadcastMs: number;
+  tickSeq: number;
 }
+
+const MAX_ROOMS = 200;
+const DISCONNECTED_PLAYER_TTL_MS = 300_000;
+const EMPTY_ROOM_TTL_MS = 60_000;
+const ACTIVE_BROADCAST_INTERVAL_MS = 120;
+const IDLE_CLOCK_SYNC_INTERVAL_MS = 1000;
 
 export interface MultiplayerServerOptions {
   serveStaticDist?: boolean;
@@ -86,7 +95,10 @@ export function createMultiplayerServer(
   options: MultiplayerServerOptions = {}
 ): MultiplayerServerHandle {
   const rooms = new Map<string, ServerRoom>();
-  const socketMeta = new Map<WebSocket, { roomCode: string | null; playerId: string | null }>();
+  const socketMeta = new Map<
+    WebSocket,
+    { roomCode: string | null; playerId: string | null; msgWindowStart: number; msgCount: number }
+  >();
 
   function generateRoomCode(): string {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -281,13 +293,17 @@ export function createMultiplayerServer(
       idx++;
     }
     syncWorldToRoom(room, Array.from(room.players.keys()));
+    room.lastEntityBroadcastMs = Date.now();
+    room.dirtyEntities = false;
     broadcastFx(room, {
       kind: 'day_advanced',
       sfx: 'morning',
       daySummary: summary,
       messageFrom2040: summary.messageFrom2040,
     });
-    broadcastRoomsListToLobby();
+    if (room.isPublic) {
+      broadcastRoomsListToLobby();
+    }
   }
 
   function assignNextColorIndex(room: ServerRoom): number {
@@ -343,12 +359,26 @@ export function createMultiplayerServer(
         performSleepForRoom(room);
       }
     }
-    broadcastRoomsListToLobby();
+    if (room.isPublic) {
+      broadcastRoomsListToLobby();
+    }
   }
 
   function handleRoomMessage(ws: WebSocket, msg: ClientToServerMessage): void {
     const meta = socketMeta.get(ws);
     if (!meta) return;
+
+    if (msg.type === 'net:ping') {
+      if (Number.isFinite(msg.seq) && Number.isFinite(msg.clientSentAt)) {
+        sendToClient(ws, {
+          type: 'net:pong',
+          seq: Math.floor(msg.seq),
+          clientSentAt: msg.clientSentAt,
+          serverTime: Date.now(),
+        });
+      }
+      return;
+    }
 
     if (msg.type === 'room:list') {
       sendToClient(ws, { type: 'rooms:list', rooms: getPublicRoomSummaries() });
@@ -357,6 +387,14 @@ export function createMultiplayerServer(
 
     if (msg.type === 'room:create') {
       detachPlayerFromRoom(ws, true);
+      if (rooms.size >= MAX_ROOMS) {
+        sendToClient(ws, {
+          type: 'room:error',
+          code: 'SERVER_BUSY',
+          message: 'Server room capacity reached. Try joining an existing room.',
+        });
+        return;
+      }
       const code = generateRoomCode();
       const playerName = (msg.playerName || 'Farmer').trim().slice(0, 18) || 'Farmer';
       const roomName =
@@ -395,6 +433,7 @@ export function createMultiplayerServer(
         voiceSpeaking: false,
       };
 
+      const now = Date.now();
       const room: ServerRoom = {
         code,
         name: roomName,
@@ -405,8 +444,11 @@ export function createMultiplayerServer(
         sleepVotes: new Set(),
         chat: [],
         wildlifeSpawnTimer: 4,
-        lastTickMs: Date.now(),
+        lastTickMs: now,
         emptySinceMs: null,
+        dirtyEntities: false,
+        lastEntityBroadcastMs: now,
+        tickSeq: 0,
       };
 
       rooms.set(code, room);
@@ -426,7 +468,9 @@ export function createMultiplayerServer(
         chat: room.chat,
         voiceStates: getRoomVoiceStates(room),
       });
-      broadcastRoomsListToLobby();
+      if (room.isPublic) {
+        broadcastRoomsListToLobby();
+      }
       return;
     }
 
@@ -536,7 +580,9 @@ export function createMultiplayerServer(
         },
         player.id
       );
-      broadcastRoomsListToLobby();
+      if (room.isPublic) {
+        broadcastRoomsListToLobby();
+      }
       return;
     }
 
@@ -551,19 +597,39 @@ export function createMultiplayerServer(
     if (!room || !player) return;
 
     if (msg.type === 'player:move') {
+      let changed = false;
       if (Number.isFinite(msg.x) && Number.isFinite(msg.y)) {
-        player.x = Math.max(0.5, Math.min(room.world.width - 0.5, msg.x));
-        player.y = Math.max(0.5, Math.min(room.world.height - 0.5, msg.y));
+        const nx = Math.round(Math.max(0.5, Math.min(room.world.width - 0.5, msg.x)) * 100) / 100;
+        const ny = Math.round(Math.max(0.5, Math.min(room.world.height - 0.5, msg.y)) * 100) / 100;
+        if (Math.abs(nx - player.x) > 0.005 || Math.abs(ny - player.y) > 0.005) {
+          player.x = nx;
+          player.y = ny;
+          changed = true;
+        }
       }
-      if (Number.isFinite(msg.facingX)) player.facingX = msg.facingX;
-      if (Number.isFinite(msg.facingY)) player.facingY = msg.facingY;
-      if (Number.isFinite(msg.walkCycle)) player.walkCycle = msg.walkCycle;
+      if (Number.isFinite(msg.facingX) && Math.abs(msg.facingX - player.facingX) > 0.02) {
+        player.facingX = Math.max(-1, Math.min(1, msg.facingX));
+        changed = true;
+      }
+      if (Number.isFinite(msg.facingY) && Math.abs(msg.facingY - player.facingY) > 0.02) {
+        player.facingY = Math.max(-1, Math.min(1, msg.facingY));
+        changed = true;
+      }
+      if (Number.isFinite(msg.walkCycle) && Math.abs(msg.walkCycle - player.walkCycle) > 0.05) {
+        player.walkCycle = msg.walkCycle % (Math.PI * 200);
+        changed = true;
+      }
       if (
         Number.isInteger(msg.selectedHotbarIndex) &&
         msg.selectedHotbarIndex >= 0 &&
-        msg.selectedHotbarIndex < 9
+        msg.selectedHotbarIndex < 9 &&
+        msg.selectedHotbarIndex !== player.selectedHotbarIndex
       ) {
         player.selectedHotbarIndex = msg.selectedHotbarIndex;
+        changed = true;
+      }
+      if (changed) {
+        room.dirtyEntities = true;
       }
       return;
     }
@@ -585,10 +651,31 @@ export function createMultiplayerServer(
       return;
     }
 
+    if (msg.type === 'action:emote') {
+      if (COOP_EMOTES.includes(msg.emote)) {
+        broadcastFx(room, {
+          kind: 'emote',
+          actorId: player.id,
+          text: msg.emote,
+        });
+      }
+      return;
+    }
+
     if (msg.type === 'voice:state') {
-      player.voiceEnabled = Boolean(msg.enabled);
-      player.voiceMuted = Boolean(msg.muted);
-      player.voiceSpeaking = player.voiceEnabled && !player.voiceMuted && Boolean(msg.speaking);
+      const nextEnabled = Boolean(msg.enabled);
+      const nextMuted = Boolean(msg.muted);
+      const nextSpeaking = nextEnabled && !nextMuted && Boolean(msg.speaking);
+      if (
+        nextEnabled === player.voiceEnabled &&
+        nextMuted === player.voiceMuted &&
+        nextSpeaking === player.voiceSpeaking
+      ) {
+        return;
+      }
+      player.voiceEnabled = nextEnabled;
+      player.voiceMuted = nextMuted;
+      player.voiceSpeaking = nextSpeaking;
       broadcastToRoom(
         room,
         {
@@ -607,8 +694,13 @@ export function createMultiplayerServer(
 
     if (msg.type === 'voice:signal') {
       if (typeof msg.targetId !== 'string' || !msg.signal || typeof msg.signal !== 'object') return;
+      if (msg.signal.kind !== 'offer' && msg.signal.kind !== 'answer' && msg.signal.kind !== 'ice') {
+        return;
+      }
       const target = room.players.get(msg.targetId);
       if (!target || !target.connected || target.id === player.id) return;
+      const serializedSize = JSON.stringify(msg.signal).length;
+      if (serializedSize > 16_384) return;
       sendToClient(target.ws, {
         type: 'voice:signal',
         fromId: player.id,
@@ -703,11 +795,9 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'action:shop_buy') {
-      const res = buyShopItem(
-        room.world,
-        msg.itemId as ItemId,
-        Math.max(1, Math.min(99, msg.qty || 1))
-      );
+      const rawQty = Number(msg.qty);
+      const qty = Number.isFinite(rawQty) ? Math.max(1, Math.min(99, Math.floor(rawQty))) : 1;
+      const res = buyShopItem(room.world, msg.itemId as ItemId, qty);
       extractPlayerFromWorld(room, player);
       if (res.ok) {
         syncWorldToRoom(room);
@@ -719,11 +809,9 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'action:shop_sell') {
-      const res = sellCropItem(
-        room.world,
-        msg.itemId as ItemId,
-        Math.max(1, Math.min(999, msg.qty || 1))
-      );
+      const rawQty = Number(msg.qty);
+      const qty = Number.isFinite(rawQty) ? Math.max(1, Math.min(999, Math.floor(rawQty))) : 1;
+      const res = sellCropItem(room.world, msg.itemId as ItemId, qty);
       extractPlayerFromWorld(room, player);
       if (res.ok) {
         syncWorldToRoom(room);
@@ -852,11 +940,22 @@ export function createMultiplayerServer(
   function tickRooms(): void {
     const now = Date.now();
     for (const [code, room] of rooms.entries()) {
+      // Prune stale disconnected player slots after 5 minutes
+      for (const [pid, p] of room.players.entries()) {
+        if (!p.connected && p.disconnectedAt && now - p.disconnectedAt > DISCONNECTED_PLAYER_TTL_MS) {
+          room.players.delete(pid);
+          room.sleepVotes.delete(pid);
+        }
+      }
+
       const activePlayers = getConnectedPlayers(room);
       if (activePlayers.length === 0) {
-        if (room.emptySinceMs && now - room.emptySinceMs > 60_000) {
+        if (room.emptySinceMs && now - room.emptySinceMs > EMPTY_ROOM_TTL_MS) {
+          const wasPublic = room.isPublic;
           rooms.delete(code);
-          broadcastRoomsListToLobby();
+          if (wasPublic) {
+            broadcastRoomsListToLobby();
+          }
         }
         room.lastTickMs = now;
         continue;
@@ -886,8 +985,14 @@ export function createMultiplayerServer(
 
       // Decay player swing & hit flash timers
       for (const p of activePlayers) {
-        if (p.swingTimer > 0) p.swingTimer = Math.max(0, p.swingTimer - dt);
-        if (p.hitFlashTimer > 0) p.hitFlashTimer = Math.max(0, p.hitFlashTimer - dt);
+        if (p.swingTimer > 0) {
+          p.swingTimer = Math.max(0, p.swingTimer - dt);
+          room.dirtyEntities = true;
+        }
+        if (p.hitFlashTimer > 0) {
+          p.hitFlashTimer = Math.max(0, p.hitFlashTimer - dt);
+          room.dirtyEntities = true;
+        }
       }
 
       // Night wildlife spawning
@@ -895,7 +1000,9 @@ export function createMultiplayerServer(
         room.wildlifeSpawnTimer -= dt;
         if (room.wildlifeSpawnTimer <= 0) {
           room.wildlifeSpawnTimer = 5.5 + Math.random() * 4;
-          spawnNightWildlife(world);
+          if (spawnNightWildlife(world)) {
+            room.dirtyEntities = true;
+          }
         }
       }
 
@@ -931,6 +1038,7 @@ export function createMultiplayerServer(
         (dmg) => {
           targetPlayer.health = world.player.health;
           targetPlayer.hitFlashTimer = 0.25;
+          room.dirtyEntities = true;
           if (targetPlayer.health <= 0) {
             targetPlayer.health = Math.round(targetPlayer.maxHealth * 0.6);
             targetPlayer.x = FARMHOUSE_DOOR.x + 0.5;
@@ -960,6 +1068,16 @@ export function createMultiplayerServer(
         });
       });
 
+      if (
+        world.wildlife.length > 0 ||
+        world.chickens.some((c) => c.vx !== 0 || c.vy !== 0) ||
+        (world.cows ?? []).some((c) => c.vx !== 0 || c.vy !== 0) ||
+        (world.sheep ?? []).some((s) => s.vx !== 0 || s.vy !== 0) ||
+        Boolean(world.dog && (world.dog.vx !== 0 || world.dog.vy !== 0))
+      ) {
+        room.dirtyEntities = true;
+      }
+
       if (world.timeMinutes >= DAY_END_MINUTES) {
         performSleepForRoom(room);
         continue;
@@ -967,19 +1085,33 @@ export function createMultiplayerServer(
 
       if (worldNeedsSync) {
         syncWorldToRoom(room, teleportIds);
+        room.lastEntityBroadcastMs = now;
+        room.dirtyEntities = false;
+        continue;
       }
 
-      broadcastToRoom(room, {
-        type: 'tick:entities',
-        timeMinutes: world.timeMinutes,
-        weather: world.weather,
-        players: activePlayers.map(toPublicPlayer),
-        wildlife: world.wildlife,
-        chickens: world.chickens,
-        cows: world.cows ?? [],
-        sheep: world.sheep ?? [],
-        dog: world.dog ?? null,
-      });
+      const elapsedSinceBroadcast = now - room.lastEntityBroadcastMs;
+      const shouldBroadcastEntities =
+        (room.dirtyEntities && elapsedSinceBroadcast >= ACTIVE_BROADCAST_INTERVAL_MS) ||
+        elapsedSinceBroadcast >= IDLE_CLOCK_SYNC_INTERVAL_MS;
+
+      if (shouldBroadcastEntities) {
+        room.lastEntityBroadcastMs = now;
+        room.dirtyEntities = false;
+        room.tickSeq += 1;
+        broadcastToRoom(room, {
+          type: 'tick:entities',
+          seq: room.tickSeq,
+          timeMinutes: world.timeMinutes,
+          weather: world.weather,
+          players: activePlayers.map(toPublicPlayer),
+          wildlife: world.wildlife,
+          chickens: world.chickens,
+          cows: world.cows ?? [],
+          sheep: world.sheep ?? [],
+          dog: world.dog ?? null,
+        });
+      }
     }
   }
 
@@ -1013,13 +1145,13 @@ export function createMultiplayerServer(
   }
 
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
   const aliveSockets = new WeakMap<WebSocket, boolean>();
 
   wss.on('connection', (ws) => {
     aliveSockets.set(ws, true);
-    socketMeta.set(ws, { roomCode: null, playerId: null });
+    socketMeta.set(ws, { roomCode: null, playerId: null, msgWindowStart: Date.now(), msgCount: 0 });
 
     ws.on('pong', () => {
       aliveSockets.set(ws, true);
@@ -1027,6 +1159,17 @@ export function createMultiplayerServer(
 
     ws.on('message', (raw) => {
       aliveSockets.set(ws, true);
+      const meta = socketMeta.get(ws);
+      if (meta) {
+        const now = Date.now();
+        if (now - meta.msgWindowStart >= 1000) {
+          meta.msgWindowStart = now;
+          meta.msgCount = 1;
+        } else {
+          meta.msgCount += 1;
+          if (meta.msgCount > 80) return; // Drop burst spam beyond 80 msgs/sec
+        }
+      }
       try {
         const parsed = JSON.parse(raw.toString()) as ClientToServerMessage;
         if (parsed && typeof parsed.type === 'string') {
@@ -1052,6 +1195,8 @@ export function createMultiplayerServer(
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
+    } else {
+      socket.destroy();
     }
   });
 
@@ -1078,6 +1223,15 @@ export function createMultiplayerServer(
     stopSimulation: () => {
       clearInterval(intervalId);
       clearInterval(heartbeatId);
+      for (const client of wss.clients) {
+        try {
+          client.terminate();
+        } catch {
+          // Ignore
+        }
+      }
+      rooms.clear();
+      socketMeta.clear();
     },
   };
 }

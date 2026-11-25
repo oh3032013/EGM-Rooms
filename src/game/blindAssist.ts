@@ -562,7 +562,7 @@ export function getTitleGuidanceText(lang: Language): string {
   if (lang === 'ar') {
     return 'تم تفعيل وضع المكفوفين باللغة العربية. اضغط ابدأ الآن لدخول المزرعة. داخل اللعب استخدم أزرار فحص وتوجيه والحالة، أو من لوحة المفاتيح: الأسهم للحركة، المسطرة لاستخدام الأداة، وحرف تفاعل أو E عند المباني والبئر.';
   }
-  return 'Blind accessibility mode enabled. Press Enter or Start Now to begin. In game: F scans ahead, G gives step-by-step compass guidance, R reads full status, Space uses tool, E interacts, and V toggles Blind Mode.';
+  return 'Blind accessibility mode enabled. Press Enter or Start Now to begin. In game: F scans ahead, G gives step-by-step compass guidance, R reads full status, Space uses tool, E interacts, and V (or Shift+V in co-op) toggles Blind Mode.';
 }
 
 export function getTileSignatureForBlind(world: GameWorldState, tx: number, ty: number): string {

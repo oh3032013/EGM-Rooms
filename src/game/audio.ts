@@ -1,14 +1,51 @@
 // Procedural Web Audio API synthesizer for cozy farming ambience & crisp SFX
 
+export type NocturnalCueKind = 'hoot' | 'rustle';
+
+export function pickNocturnalCueKind(
+  wildlifeCount: number,
+  step: number,
+  rng: () => number = Math.random
+): NocturnalCueKind {
+  // When nocturnal wildlife are prowling nearby, weight slightly toward grass/leaf rustling;
+  // alternate periodically so distant woodland hoots and close rustles both breathe at night.
+  const rustleBias = wildlifeCount > 0 ? 0.65 : 0.48;
+  const roll = rng();
+  if (step % 3 === 0 && roll < 0.72) return 'hoot';
+  return roll < rustleBias ? 'rustle' : 'hoot';
+}
+
 class CozyAudioEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
   private musicGain: GainNode | null = null;
   private sfxGain: GainNode | null = null;
+  private ambientGain: GainNode | null = null;
   private muted = false;
   private musicTimer: number | null = null;
+  private nocturnalTimer: number | null = null;
+  private nightPhaseActive = false;
+  private nocturnalWildlifeCount = 0;
+  private nocturnalStep = 0;
   private stepIndex = 0;
   private isPlayingState = false;
+  private visibilityListenerAttached = false;
+  private readonly handleVisibilityChange = () => {
+    if (!this.ctx) return;
+    if (document.visibilityState === 'hidden') {
+      this.clearNocturnalTimer();
+      if (this.ctx.state === 'running') {
+        void this.ctx.suspend().catch(() => {});
+      }
+    } else if (this.isPlayingState) {
+      if (!this.muted && this.ctx.state === 'suspended') {
+        void this.ctx.resume().catch(() => {});
+      }
+      if (this.nightPhaseActive) {
+        this.scheduleNextNocturnalCue(1500);
+      }
+    }
+  };
 
   // Cozy C major pentatonic notes (Hz)
   private readonly melodyNotes = [
@@ -29,6 +66,7 @@ class CozyAudioEngine {
   private readonly bassNotes = [130.81, 130.81, 174.61, 196.0]; // C3, C3, F3, G3
 
   public init(): void {
+    if (typeof window === 'undefined') return;
     if (this.ctx) {
       if (this.ctx.state === 'suspended') {
         void this.ctx.resume();
@@ -50,6 +88,15 @@ class CozyAudioEngine {
     this.sfxGain = this.ctx.createGain();
     this.sfxGain.gain.value = 0.5;
     this.sfxGain.connect(this.masterGain);
+
+    this.ambientGain = this.ctx.createGain();
+    this.ambientGain.gain.value = 0.34;
+    this.ambientGain.connect(this.masterGain);
+
+    if (!this.visibilityListenerAttached && typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.handleVisibilityChange);
+      this.visibilityListenerAttached = true;
+    }
   }
 
   public setMuted(mute: boolean): void {
@@ -66,7 +113,10 @@ class CozyAudioEngine {
   public startAmbientMusic(): void {
     this.isPlayingState = true;
     this.init();
-    if (this.musicTimer !== null) return;
+    if (this.nightPhaseActive && this.nocturnalTimer === null) {
+      this.scheduleNextNocturnalCue(1400);
+    }
+    if (this.musicTimer !== null || typeof window === 'undefined') return;
 
     this.musicTimer = window.setInterval(() => {
       if (!this.isPlayingState || this.muted || !this.ctx || !this.musicGain) return;
@@ -112,13 +162,138 @@ class CozyAudioEngine {
 
   public pauseAmbientMusic(): void {
     this.isPlayingState = false;
+    this.clearNocturnalTimer();
   }
 
   public stopAmbientMusic(): void {
     this.isPlayingState = false;
+    this.nightPhaseActive = false;
+    this.nocturnalWildlifeCount = 0;
+    this.clearNocturnalTimer();
     if (this.musicTimer !== null) {
       clearInterval(this.musicTimer);
       this.musicTimer = null;
+    }
+  }
+
+  public setNightAmbience(active: boolean, wildlifeCount = 0): void {
+    const cleanCount = Number.isFinite(wildlifeCount) ? Math.max(0, Math.floor(wildlifeCount)) : 0;
+    if (this.nightPhaseActive === active && this.nocturnalWildlifeCount === cleanCount) {
+      if (active && this.isPlayingState && this.nocturnalTimer === null) {
+        this.scheduleNextNocturnalCue(1400);
+      }
+      return;
+    }
+    this.nightPhaseActive = active;
+    this.nocturnalWildlifeCount = cleanCount;
+    if (!active) {
+      this.clearNocturnalTimer();
+      return;
+    }
+    if (this.isPlayingState && this.nocturnalTimer === null) {
+      this.scheduleNextNocturnalCue(1200 + Math.random() * 1400);
+    }
+  }
+
+  public getNightAmbienceState(): {
+    active: boolean;
+    wildlifeCount: number;
+    scheduled: boolean;
+  } {
+    return {
+      active: this.nightPhaseActive,
+      wildlifeCount: this.nocturnalWildlifeCount,
+      scheduled: this.nocturnalTimer !== null,
+    };
+  }
+
+  public playNocturnalAmbientCue(kind?: NocturnalCueKind, intensity = 1): void {
+    this.init();
+    if (this.muted || !this.ctx || !this.ambientGain) return;
+    if (this.ctx.state === 'suspended') {
+      void this.ctx.resume();
+    }
+    if (this.ctx.state !== 'running') return;
+
+    const cue = kind ?? pickNocturnalCueKind(this.nocturnalWildlifeCount, this.nocturnalStep);
+    const scale = Math.max(0.5, Math.min(1.3, Number.isFinite(intensity) ? intensity : 1));
+    const now = this.ctx.currentTime;
+
+    if (cue === 'hoot') {
+      const vol = 0.055 * scale;
+      const baseFreq = 370 + Math.random() * 48;
+      // Soft two-syllable woodland owl hoot
+      this.tone(baseFreq, baseFreq * 0.9, 0.14, 'sine', vol * 0.78, now, this.ambientGain);
+      this.tone(baseFreq * 1.03, baseFreq * 0.83, 0.42, 'sine', vol, now + 0.24, this.ambientGain);
+      this.tone(
+        baseFreq * 2.06,
+        baseFreq * 1.66,
+        0.26,
+        'triangle',
+        vol * 0.14,
+        now + 0.24,
+        this.ambientGain
+      );
+      return;
+    }
+
+    // 'rustle': delicate nocturnal foliage / grass brush bursts
+    const vol = 0.052 * scale;
+    this.noiseBurst(0.065, 900 + Math.random() * 350, vol * 0.85, now, this.ambientGain, 1.8);
+    this.noiseBurst(0.08, 1150 + Math.random() * 450, vol, now + 0.09, this.ambientGain, 1.7);
+    this.noiseBurst(0.055, 780 + Math.random() * 300, vol * 0.65, now + 0.19, this.ambientGain, 1.9);
+  }
+
+  private clearNocturnalTimer(): void {
+    if (this.nocturnalTimer !== null) {
+      if (typeof window !== 'undefined') {
+        window.clearTimeout(this.nocturnalTimer);
+      } else {
+        clearTimeout(this.nocturnalTimer);
+      }
+      this.nocturnalTimer = null;
+    }
+  }
+
+  private scheduleNextNocturnalCue(delayOverrideMs?: number): void {
+    if (!this.nightPhaseActive || !this.isPlayingState || typeof window === 'undefined') return;
+    if (this.nocturnalTimer !== null) return;
+
+    const baseDelayMs =
+      this.nocturnalWildlifeCount > 0
+        ? 3600 + Math.random() * 3400
+        : 5200 + Math.random() * 4300;
+    const delayMs = Math.max(400, Math.round(delayOverrideMs ?? baseDelayMs));
+
+    this.nocturnalTimer = window.setTimeout(() => {
+      this.nocturnalTimer = null;
+      if (!this.nightPhaseActive || !this.isPlayingState) return;
+      if (!this.muted && this.ctx && this.ctx.state === 'running') {
+        const cue = pickNocturnalCueKind(this.nocturnalWildlifeCount, this.nocturnalStep);
+        const intensity =
+          this.nocturnalWildlifeCount > 0
+            ? Math.min(1.25, 0.92 + this.nocturnalWildlifeCount * 0.08)
+            : 0.85;
+        this.playNocturnalAmbientCue(cue, intensity);
+        this.nocturnalStep += 1;
+      }
+      this.scheduleNextNocturnalCue();
+    }, delayMs);
+  }
+
+  public dispose(): void {
+    this.stopAmbientMusic();
+    if (this.visibilityListenerAttached && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+      this.visibilityListenerAttached = false;
+    }
+    if (this.ctx) {
+      void this.ctx.close().catch(() => {});
+      this.ctx = null;
+      this.masterGain = null;
+      this.musicGain = null;
+      this.sfxGain = null;
+      this.ambientGain = null;
     }
   }
 
@@ -143,7 +318,8 @@ class CozyAudioEngine {
       | 'fish'
       | 'levelup'
       | 'wish'
-      | 'bark',
+      | 'bark'
+      | 'pet',
     comboLevel = 2
   ): void {
     this.init();
@@ -188,6 +364,11 @@ class CozyAudioEngine {
     if (kind === 'bark') {
       this.tone(280, 180, 0.08, 'sawtooth', 0.15, now);
       this.tone(320, 210, 0.09, 'sawtooth', 0.16, now + 0.11);
+      return;
+    }
+    if (kind === 'pet') {
+      this.tone(587.33 * pitchJitter, 783.99, 0.09, 'sine', 0.17, now);
+      this.tone(783.99 * pitchJitter, 1046.5, 0.14, 'triangle', 0.16, now + 0.08);
       return;
     }
     if (kind === 'combo') {
@@ -302,9 +483,10 @@ class CozyAudioEngine {
     duration: number,
     type: OscillatorType,
     volume: number,
-    startTime: number
+    startTime: number,
+    targetGain: GainNode | null = this.sfxGain
   ): void {
-    if (!this.ctx || !this.sfxGain) return;
+    if (!this.ctx || !targetGain) return;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
     osc.type = type;
@@ -316,13 +498,20 @@ class CozyAudioEngine {
     gain.gain.linearRampToValueAtTime(volume, startTime + 0.012);
     gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
     osc.connect(gain);
-    gain.connect(this.sfxGain);
+    gain.connect(targetGain);
     osc.start(startTime);
     osc.stop(startTime + duration + 0.02);
   }
 
-  private noiseBurst(duration: number, cutoffHz: number, volume: number, startTime: number): void {
-    if (!this.ctx || !this.sfxGain) return;
+  private noiseBurst(
+    duration: number,
+    cutoffHz: number,
+    volume: number,
+    startTime: number,
+    targetGain: GainNode | null = this.sfxGain,
+    q = 1.2
+  ): void {
+    if (!this.ctx || !targetGain) return;
     const sampleRate = this.ctx.sampleRate;
     const length = Math.floor(sampleRate * duration);
     const buffer = this.ctx.createBuffer(1, length, sampleRate);
@@ -336,7 +525,7 @@ class CozyAudioEngine {
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'bandpass';
     filter.frequency.value = cutoffHz;
-    filter.Q.value = 1.2;
+    filter.Q.value = q;
 
     const gain = this.ctx.createGain();
     gain.gain.setValueAtTime(volume, startTime);
@@ -344,7 +533,7 @@ class CozyAudioEngine {
 
     src.connect(filter);
     filter.connect(gain);
-    gain.connect(this.sfxGain);
+    gain.connect(targetGain);
     src.start(startTime);
     src.stop(startTime + duration + 0.02);
   }

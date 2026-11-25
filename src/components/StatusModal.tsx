@@ -56,18 +56,18 @@ export function StatusModal({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black/65"
+      className="fixed inset-0 z-40 flex items-center justify-center safe-area-modal bg-black/65"
       role="dialog"
       aria-modal="true"
       aria-label={title}
       dir={lang === 'ar' ? 'rtl' : 'ltr'}
     >
-      <div className="parchment-panel rounded-xl w-full max-w-md p-6 text-center">
-        <h2 className="font-display text-3xl font-bold text-[#2c1e14] mb-1.5">{title}</h2>
-        <p className="text-sm text-[#694d36] mb-5">{subtitle}</p>
+      <div className="parchment-panel rounded-xl w-full max-w-md max-h-[92dvh] overflow-y-auto modal-scroll p-4 sm:p-6 text-center">
+        <h2 className="font-display text-2xl sm:text-3xl font-bold text-[#2c1e14] mb-1.5">{title}</h2>
+        <p className="text-xs sm:text-sm text-[#694d36] mb-4 sm:mb-5">{subtitle}</p>
 
         {/* Mastery / Progress Metrics */}
-        <div className="grid grid-cols-3 gap-2.5 mb-4">
+        <div className="grid grid-cols-3 gap-2 sm:gap-2.5 mb-4">
           <div className="p-2.5 rounded-lg bg-[#fbf2e1] border border-[#d6be96]">
             <div className="text-[11px] uppercase tracking-wide text-[#75563b]">{t.daysStat}</div>
             <div className="font-mono-tabular font-bold text-lg text-[#2c1e14]">

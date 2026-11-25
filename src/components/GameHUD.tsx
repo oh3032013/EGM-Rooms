@@ -12,8 +12,10 @@ import {
   type Language,
 } from '../game/i18n';
 import {
+  COOP_EMOTES,
   PLAYER_PALETTE,
   type ChatMessage,
+  type CoopEmote,
   type RemotePlayerState,
   type VoicePeerState,
 } from '../game/multiplayer';
@@ -103,6 +105,7 @@ interface GameHUDProps {
   };
   onToggleChat?: () => void;
   onSendChat?: (text: string) => void;
+  onSendEmote?: (emote: CoopEmote) => void;
   onToggleSleepVote?: () => void;
   onLeaveRoom?: () => void;
   onJoinOrToggleVoiceMic?: () => void;
@@ -148,6 +151,7 @@ export function GameHUD({
   voiceLocal,
   onToggleChat,
   onSendChat,
+  onSendEmote,
   onToggleSleepVote,
   onLeaveRoom,
   onJoinOrToggleVoiceMic,
@@ -161,6 +165,8 @@ export function GameHUD({
   const [copiedLink, setCopiedLink] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const chatInputRef = useRef<HTMLInputElement | null>(null);
+  const copiedCodeTimerRef = useRef<number | null>(null);
+  const copiedLinkTimerRef = useRef<number | null>(null);
   const activeItemId = hud.hotbar[hud.selectedHotbarIndex];
   const activeItem = activeItemId ? ITEMS[activeItemId] : null;
   const activeLabel = activeItemId ? getItemLabel(activeItemId, lang) : null;
@@ -175,12 +181,23 @@ export function GameHUD({
     }
   }, [chatOpen]);
 
+  useEffect(() => {
+    return () => {
+      if (copiedCodeTimerRef.current !== null) window.clearTimeout(copiedCodeTimerRef.current);
+      if (copiedLinkTimerRef.current !== null) window.clearTimeout(copiedLinkTimerRef.current);
+    };
+  }, []);
+
   const handleCopyRoomCode = async () => {
     if (!roomHud) return;
     try {
       await navigator.clipboard.writeText(roomHud.roomCode);
       setCopiedCode(true);
-      setTimeout(() => setCopiedCode(false), 1800);
+      if (copiedCodeTimerRef.current !== null) window.clearTimeout(copiedCodeTimerRef.current);
+      copiedCodeTimerRef.current = window.setTimeout(() => {
+        copiedCodeTimerRef.current = null;
+        setCopiedCode(false);
+      }, 1800);
     } catch {
       // Ignore clipboard errors in restricted iframes
     }
@@ -193,7 +210,11 @@ export function GameHUD({
       url.searchParams.set('room', roomHud.roomCode);
       await navigator.clipboard.writeText(url.toString());
       setCopiedLink(true);
-      setTimeout(() => setCopiedLink(false), 1800);
+      if (copiedLinkTimerRef.current !== null) window.clearTimeout(copiedLinkTimerRef.current);
+      copiedLinkTimerRef.current = window.setTimeout(() => {
+        copiedLinkTimerRef.current = null;
+        setCopiedLink(false);
+      }, 1800);
     } catch {
       // Ignore clipboard errors in restricted iframes
     }
@@ -208,15 +229,13 @@ export function GameHUD({
   };
 
   return (
-    <div
-      dir="ltr"
-      className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-2 sm:p-4 [@media(max-height:500px)]:p-1.5"
-    >
+    <div dir="ltr" className="fixed inset-0 z-10 pointer-events-none safe-area-pad">
+      <div className="w-full h-full flex flex-col justify-between sm:p-2 [@media(max-height:540px)]:p-0">
       {/* Top Perimeter Clusters + Top-Docked Blind Bar & Morning Report */}
-      <div className="flex flex-col gap-1.5 sm:gap-2">
-        <div className="flex items-start justify-between gap-2 sm:gap-3">
+      <div className="flex flex-col gap-1.5 sm:gap-2 min-w-0">
+        <div className="flex items-start justify-between gap-1.5 sm:gap-3 min-w-0">
           {/* Top-Left: Vitality, Stamina, Gold & Homestead Progress */}
-          <div className="wood-panel rounded-lg px-2 sm:px-3.5 py-1.5 sm:py-2.5 [@media(max-height:500px)]:py-1.5 [@media(max-height:500px)]:px-2.5 pointer-events-auto min-w-[126px] sm:min-w-[210px] [@media(max-height:500px)]:min-w-[172px]">
+          <div className="wood-panel rounded-lg px-2 sm:px-3.5 py-1.5 sm:py-2.5 [@media(max-height:540px)]:py-1.5 [@media(max-height:540px)]:px-2.5 pointer-events-auto min-w-[118px] sm:min-w-[210px] [@media(max-height:540px)]:min-w-[164px] shrink-0">
             <div className="flex items-center justify-between gap-2 sm:gap-3 mb-1 sm:mb-2">
               <div className="flex items-center gap-1.5">
                 <CoinIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
@@ -225,9 +244,16 @@ export function GameHUD({
                 </span>
                 <span
                   data-testid="hud-level"
-                  className="px-1.5 py-0.5 rounded bg-[#4a311e] border border-[#8a5d36] text-[10px] font-mono-tabular font-bold text-[#fde047]"
+                  title={`${hud.xp}/${Math.max(1, hud.level) * 100} XP`}
+                  className="relative overflow-hidden px-1.5 py-0.5 rounded bg-[#4a311e] border border-[#8a5d36] text-[10px] font-mono-tabular font-bold text-[#fde047]"
                 >
                   Lv.{hud.level}
+                  <span
+                    className="absolute bottom-0 left-0 h-[2px] bg-[#fde047]/85"
+                    style={{
+                      width: `${Math.min(100, Math.max(0, Math.round((hud.xp / (Math.max(1, hud.level) * 100)) * 100)))}%`,
+                    }}
+                  />
                 </span>
               </div>
               <div className="text-[10px] sm:text-xs text-[#d6c2a3] font-mono-tabular" data-testid="hud-restoration">
@@ -289,9 +315,9 @@ export function GameHUD({
 
           {/* Top-Right: Season, Day, Time, Weather & Utility Buttons */}
           <div className="flex flex-col items-end gap-1.5 sm:gap-2 min-w-0">
-            <div className="wood-panel rounded-lg px-2 sm:px-3.5 [@media(max-height:500px)]:px-2.5 py-1.5 sm:py-2 [@media(max-height:500px)]:py-1.5 pointer-events-auto flex flex-col sm:flex-row items-end sm:items-center gap-1.5 sm:gap-2.5">
+            <div className="wood-panel rounded-lg px-2 sm:px-3.5 [@media(max-height:540px)]:px-2.5 py-1.5 sm:py-2 [@media(max-height:540px)]:py-1.5 pointer-events-auto flex flex-col sm:flex-row items-end sm:items-center gap-1.5 sm:gap-2.5 max-w-full">
               <div className="text-right shrink-0" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
-                <div className="font-display font-bold text-xs sm:text-base [@media(max-height:500px)]:text-sm text-[#fdf3dc] leading-tight whitespace-nowrap" data-testid="hud-day">
+                <div className="font-display font-bold text-xs sm:text-base [@media(max-height:540px)]:text-sm text-[#fdf3dc] leading-tight whitespace-nowrap" data-testid="hud-day">
                   {translateSeason(hud.season, lang)} · {t.dayWord} {hud.dayOfSeason}
                 </div>
                 <div className="flex items-center justify-end gap-1.5 sm:gap-2 text-[10px] sm:text-xs text-[#d6c2a3] font-mono-tabular whitespace-nowrap">
@@ -309,7 +335,7 @@ export function GameHUD({
 
               <div className="hidden sm:block h-7 w-px bg-[#6b482e]" aria-hidden="true" />
 
-              <div className="flex items-center gap-1 sm:gap-1.5">
+              <div className="flex flex-wrap items-center justify-end gap-1 sm:gap-1.5">
                 <button
                   type="button"
                   onClick={(e) => {
@@ -461,7 +487,7 @@ export function GameHUD({
                   }}
                   aria-pressed={blindMode}
                   aria-label={blindMode ? t.blindModeOn : t.blindModeOff}
-                  title={`${t.blindModeBtn} (V)`}
+                  title={`${t.blindModeBtn} (${roomHud ? 'Shift+V' : 'V'})`}
                   className={`p-1 sm:p-1.5 rounded cursor-pointer shrink-0 ${
                     blindMode ? 'wood-button-primary ring-1 ring-[#f7d87c]' : 'wood-button'
                   }`}
@@ -713,9 +739,9 @@ export function GameHUD({
         {roomHud && chatOpen && (
           <div
             dir={lang === 'ar' ? 'rtl' : 'ltr'}
-            className="self-end pointer-events-auto wood-panel rounded-xl p-2.5 w-64 sm:w-72 space-y-2 shadow-xl"
+            className="self-end pointer-events-auto wood-panel rounded-xl p-2.5 w-64 sm:w-72 max-w-[calc(100vw-24px)] max-h-[42dvh] flex flex-col gap-2 shadow-xl"
           >
-            <div className="flex flex-wrap gap-1 border-b border-[#6b482e] pb-1.5">
+            <div className="flex flex-wrap gap-1 border-b border-[#6b482e] pb-1.5 shrink-0">
               {roomHud.players.map((rp) => {
                 const pal = PLAYER_PALETTE[rp.colorIndex % PLAYER_PALETTE.length] ?? PLAYER_PALETTE[0];
                 const isSelf = rp.id === roomHud.playerId;
@@ -768,7 +794,22 @@ export function GameHUD({
                 );
               })}
             </div>
-            <div className="max-h-32 overflow-y-auto space-y-1 text-xs pr-1">
+            {onSendEmote && (
+              <div className="flex items-center justify-between gap-1 bg-[#1e140d] rounded-lg p-1 border border-[#4e3422] shrink-0">
+                {COOP_EMOTES.map((em) => (
+                  <button
+                    key={em}
+                    type="button"
+                    onClick={() => onSendEmote(em)}
+                    className="flex-1 py-0.5 rounded hover:bg-[#3a2618] active:scale-95 text-sm leading-none cursor-pointer transition-transform"
+                    aria-label={em}
+                  >
+                    {em}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex-1 min-h-0 max-h-32 overflow-y-auto modal-scroll space-y-1 text-xs pr-1">
               {roomHud.chat.length === 0 ? (
                 <div className="text-[11px] text-[#bfa688] italic py-1">{t.noChatYet}</div>
               ) : (
@@ -865,7 +906,7 @@ export function GameHUD({
         {morningSummary && (
           <div
             dir={lang === 'ar' ? 'rtl' : 'ltr'}
-            className="self-center pointer-events-auto wood-panel rounded-lg px-4 py-2 flex items-center gap-4 max-w-md"
+            className="self-center pointer-events-auto wood-panel rounded-lg px-3 sm:px-4 py-2 flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 sm:gap-4 max-w-[min(94vw,28rem)]"
           >
             <div>
               <div className="font-display font-bold text-sm text-[#f7d87c]">
@@ -948,7 +989,7 @@ export function GameHUD({
                       ? `Slot ${idx + 1}: ${label.name}`
                       : `Empty Slot ${idx + 1}`
                   }
-                  className={`relative w-9 h-10 sm:w-12 sm:h-12 [@media(max-height:500px)]:w-9 [@media(max-height:500px)]:h-9 shrink-0 rounded flex items-center justify-center cursor-pointer transition-transform ${
+                  className={`relative w-9 h-10 sm:w-12 sm:h-12 [@media(max-height:540px)]:w-9 [@media(max-height:540px)]:h-9 shrink-0 rounded flex items-center justify-center cursor-pointer transition-transform ${
                     selected
                       ? 'bg-[#634128] border-2 border-[#f7d87c] -translate-y-0.5'
                       : 'bg-[#2b1c12] border border-[#5e3f27] hover:bg-[#3c2719]'
@@ -1001,6 +1042,7 @@ export function GameHUD({
             )}
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

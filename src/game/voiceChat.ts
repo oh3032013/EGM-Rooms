@@ -126,13 +126,17 @@ export class VoiceChatManager {
     return true;
   }
 
-  public leave(): void {
+  public leave(clearPeerMutes = true): void {
     const wasEnabled = this.enabled;
     this.enabled = false;
     this.muted = false;
     this.speaking = false;
+    this.deafened = false;
     this.hasMic = false;
     this.activePeerIds.clear();
+    if (clearPeerMutes) {
+      this.locallyMutedPeers.clear();
+    }
     this.closeAllPeers();
     this.stopLocalCapture();
     if (wasEnabled) {
@@ -143,7 +147,6 @@ export class VoiceChatManager {
   public async toggleMute(): Promise<void> {
     if (!this.enabled) return;
     if (!this.hasMic) {
-      // Retry microphone acquisition if user previously had no mic detected
       const prevPeers = Array.from(this.activePeerIds);
       const prevDeafened = this.deafened;
       const ok = await this.join(this.myId, prevPeers);
@@ -403,6 +406,9 @@ export class VoiceChatManager {
     try {
       const ctx = new AudioCtx();
       this.audioCtx = ctx;
+      if (ctx.state === 'suspended') {
+        void ctx.resume().catch(() => {});
+      }
       const source = ctx.createMediaStreamSource(this.localStream);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
@@ -410,7 +416,7 @@ export class VoiceChatManager {
       const data = new Uint8Array(analyser.fftSize);
 
       this.vadIntervalId = window.setInterval(() => {
-        if (!this.enabled || this.muted) {
+        if (!this.enabled || this.muted || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) {
           if (this.speaking) {
             this.speaking = false;
             this.emitState();

@@ -143,6 +143,7 @@ export interface LocalPlayerRenderMeta {
   name: string;
   colorIndex: number;
   voice?: VoicePeerState;
+  emote?: string;
 }
 
 export function renderGameWorld(
@@ -158,7 +159,9 @@ export function renderGameWorld(
   isTitleBackdrop: boolean,
   remotePlayers: RemotePlayerState[] = [],
   localPlayerMeta?: LocalPlayerRenderMeta,
-  voiceStates?: Record<string, VoicePeerState>
+  voiceStates?: Record<string, VoicePeerState>,
+  activeEmotes?: Record<string, string>,
+  localEmote?: string
 ): void {
   const season = getSeason(state.seasonIndex);
   const pal = SEASON_PALETTES[season];
@@ -364,6 +367,17 @@ export function renderGameWorld(
     }
   }
 
+  // Daily Shimmering Meadow Treasure (Clover / Autumn Mushroom / Frost Bloom)
+  if (state.dailyTreasure) {
+    const dt = state.dailyTreasure;
+    if (dt.x >= minTX && dt.x <= maxTX && dt.y >= minTY && dt.y <= maxTY) {
+      drawList.push({
+        sortY: (dt.y + 0.8) * TILE_SIZE,
+        draw: () => drawDailyNatureTreasure(ctx, dt.x * TILE_SIZE, dt.y * TILE_SIZE, dt.kind, elapsedSec),
+      });
+    }
+  }
+
   // Local Player & Remote Multiplayer Farmers
   if (!isTitleBackdrop) {
     drawList.push({
@@ -375,14 +389,16 @@ export function renderGameWorld(
           elapsedSec,
           localPlayerMeta?.colorIndex ?? 0,
           localPlayerMeta?.name,
-          localPlayerMeta?.voice
+          localPlayerMeta?.voice,
+          localEmote ?? localPlayerMeta?.emote
         ),
     });
     for (const rp of remotePlayers) {
       const rpVoice = voiceStates?.[rp.id];
+      const rpEmote = activeEmotes?.[rp.id];
       drawList.push({
         sortY: rp.y * TILE_SIZE + 4,
-        draw: () => drawFarmerEntity(ctx, rp, elapsedSec, rp.colorIndex, rp.name, rpVoice),
+        draw: () => drawFarmerEntity(ctx, rp, elapsedSec, rp.colorIndex, rp.name, rpVoice, rpEmote),
       });
     }
   }
@@ -1308,6 +1324,65 @@ function drawStructure(
   }
 }
 
+function drawDailyNatureTreasure(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  kind: 'clover' | 'mushroom' | 'frost_bloom',
+  elapsedSec: number
+): void {
+  const pulse = 0.55 + Math.sin(elapsedSec * 4) * 0.25;
+  const bob = Math.round(Math.sin(elapsedSec * 3.2) * 1.5);
+  ctx.save();
+  // Soft shimmer ring
+  ctx.fillStyle =
+    kind === 'frost_bloom'
+      ? `rgba(125, 211, 252, ${(pulse * 0.35).toFixed(2)})`
+      : kind === 'mushroom'
+      ? `rgba(251, 146, 60, ${(pulse * 0.32).toFixed(2)})`
+      : `rgba(253, 224, 71, ${(pulse * 0.32).toFixed(2)})`;
+  ctx.beginPath();
+  ctx.arc(px + 16, py + 17, 10 + Math.sin(elapsedSec * 4) * 1.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (kind === 'mushroom') {
+    // Stem + red spotted cap
+    ctx.fillStyle = '#fef3c7';
+    ctx.fillRect(px + 14, py + 17 + bob, 4, 7);
+    ctx.fillStyle = '#dc2626';
+    ctx.fillRect(px + 9, py + 11 + bob, 14, 7);
+    ctx.fillRect(px + 11, py + 9 + bob, 10, 3);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(px + 12, py + 12 + bob, 2, 2);
+    ctx.fillRect(px + 18, py + 13 + bob, 2, 2);
+  } else if (kind === 'frost_bloom') {
+    // Glowing winter crystal lotus
+    ctx.fillStyle = '#0ea5e9';
+    ctx.fillRect(px + 14, py + 18 + bob, 4, 6);
+    ctx.fillStyle = '#7dd3fc';
+    ctx.fillRect(px + 10, py + 12 + bob, 12, 7);
+    ctx.fillStyle = '#e0f2fe';
+    ctx.fillRect(px + 13, py + 9 + bob, 6, 8);
+  } else {
+    // Four-leaf golden-rimmed Lucky Clover
+    ctx.fillStyle = '#15803d';
+    ctx.fillRect(px + 15, py + 18 + bob, 2, 6);
+    ctx.fillStyle = '#22c55e';
+    ctx.fillRect(px + 10, py + 11 + bob, 5, 5);
+    ctx.fillRect(px + 17, py + 11 + bob, 5, 5);
+    ctx.fillRect(px + 10, py + 16 + bob, 5, 5);
+    ctx.fillRect(px + 17, py + 16 + bob, 5, 5);
+    ctx.fillStyle = '#fde047';
+    ctx.fillRect(px + 15, py + 15 + bob, 2, 2);
+  }
+
+  if (Math.sin(elapsedSec * 5.5) > 0.3) {
+    ctx.fillStyle = '#fef08a';
+    ctx.fillRect(px + 22, py + 7 + bob, 3, 3);
+  }
+  ctx.restore();
+}
+
 function drawFarmerEntity(
   ctx: CanvasRenderingContext2D,
   p: Pick<
@@ -1317,7 +1392,8 @@ function drawFarmerEntity(
   elapsedSec: number,
   colorIndex = 0,
   label?: string,
-  voice?: VoicePeerState
+  voice?: VoicePeerState,
+  emote?: string
 ): void {
   const palette = PLAYER_PALETTE[colorIndex % PLAYER_PALETTE.length] ?? PLAYER_PALETTE[0];
   const cx = Math.round(p.x * TILE_SIZE);
@@ -1413,6 +1489,27 @@ function drawFarmerEntity(
         ctx.fillRect(ix + 2, iy + 1, 3, 4);
       }
     }
+    ctx.restore();
+  }
+
+  // Floating Co-op / Cozy Emote Speech Bubble
+  if (emote) {
+    ctx.save();
+    const floatY = Math.round(Math.sin(elapsedSec * 6) * 1.5);
+    const ebY = (label ? cy - 54 : cy - 41) + bob + floatY;
+    const ebX = cx - 10;
+    ctx.fillStyle = '#fffdf5';
+    ctx.fillRect(ebX, ebY, 20, 16);
+    ctx.strokeStyle = '#3d2817';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(ebX, ebY, 20, 16);
+    // Tiny speech pointer
+    ctx.fillStyle = '#fffdf5';
+    ctx.fillRect(cx - 2, ebY + 16, 4, 3);
+    ctx.font = '11px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emote, cx, ebY + 8.5);
     ctx.restore();
   }
 }

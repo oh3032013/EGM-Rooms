@@ -63,7 +63,13 @@ export function TitleScreen({
 
   return (
     <div
-      className="fixed inset-0 z-20 flex flex-col items-center justify-between overflow-hidden select-none"
+      className="fixed inset-0 z-20 flex flex-col items-center justify-between overflow-y-auto overflow-x-hidden modal-scroll select-none"
+      style={{
+        paddingTop: 'max(0.75rem, env(safe-area-inset-top))',
+        paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))',
+        paddingLeft: 'max(0.75rem, env(safe-area-inset-left))',
+        paddingRight: 'max(0.75rem, env(safe-area-inset-right))',
+      }}
       dir={lang === 'ar' ? 'rtl' : 'ltr'}
     >
       {/* Sunlit Pixel-Art Farm Panorama Background matching EcoGrow Mission mockup */}
@@ -236,18 +242,18 @@ export function TitleScreen({
       <div className="fixed bottom-2 right-2 w-12 h-12 rounded-tl-full bg-[#3f8a3d] border-2 border-[#1e4d23] opacity-90 pointer-events-none z-10" />
 
       {/* Top Utility Row (Install + Fullscreen + Language Toggle) */}
-      <div className="relative z-20 w-full flex items-center justify-between px-5 sm:px-9 pt-5 sm:pt-7 [@media(max-height:500px)]:pt-3.5 pointer-events-none">
+      <div className="relative z-20 w-full flex flex-wrap items-center justify-between gap-2 px-2 sm:px-6 pt-1 sm:pt-3 pointer-events-none shrink-0">
         <div className="pointer-events-auto">
           <PWAInstallButton compact lang={lang} />
         </div>
-        <div className="flex items-center gap-2 pointer-events-auto">
+        <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2 pointer-events-auto ms-auto">
           <button
             type="button"
             onClick={onToggleBlindMode}
             aria-pressed={blindMode}
             aria-label={blindMode ? t.blindModeOn : t.blindModeOff}
             title={`${t.blindModeBtn} (V)`}
-            className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-md ${
+            className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-md ${
               blindMode ? 'wood-button-primary ring-2 ring-[#f7d87c]' : 'wood-button'
             }`}
           >
@@ -259,7 +265,7 @@ export function TitleScreen({
             onClick={onToggleFullscreen}
             aria-label={isFullscreen ? t.exitFullscreenBtn : t.fullscreenBtn}
             title={isFullscreen ? t.exitFullscreenBtn : t.fullscreenBtn}
-            className="wood-button px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-md"
+            className="wood-button px-2 sm:px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-md"
           >
             {isFullscreen ? (
               <Minimize2 className="w-3.5 h-3.5 shrink-0" />
@@ -270,14 +276,14 @@ export function TitleScreen({
               {isFullscreen ? t.exitFullscreenBtn : t.fullscreenBtn}
             </span>
           </button>
-          <div className="wood-button px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-md">
+          <div className="wood-button px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1.5 shadow-md">
             <Languages className="w-3.5 h-3.5 shrink-0 pointer-events-none" />
             <select
               value={lang}
               aria-label={t.languageLabel}
               data-testid="title-language-select"
               onChange={(e) => onSelectLanguage(e.target.value as Language)}
-              className="bg-transparent text-inherit font-semibold text-xs cursor-pointer focus:outline-none pr-1"
+              className="bg-transparent text-inherit font-semibold text-[11px] sm:text-xs cursor-pointer focus:outline-none pr-1 max-w-[110px]"
             >
               {LANGUAGE_OPTIONS.map((opt) => (
                 <option key={opt.code} value={opt.code} className="bg-[#f5ebd6] text-[#2c1e14]">
@@ -290,14 +296,14 @@ export function TitleScreen({
       </div>
 
       {/* Main Centered Content matching the Mockup */}
-      <div className="relative z-20 flex-1 flex flex-col items-center justify-center w-full max-w-2xl px-6 pb-6 [@media(max-height:500px)]:pb-3 text-center">
+      <div className="relative z-20 flex-1 flex flex-col items-center justify-center w-full max-w-2xl px-3 sm:px-6 py-3 [@media(max-height:500px)]:py-1.5 text-center my-auto">
         {/* Title Row: EcoGrow Mission + Sprout Crest + أنقذ مزرعتك */}
         <div
           dir="ltr"
-          className="flex flex-wrap items-center justify-center gap-3 sm:gap-4 mb-6 sm:mb-8 [@media(max-height:500px)]:mb-3"
+          className="flex flex-wrap items-center justify-center gap-2 sm:gap-4 mb-4 sm:mb-7 [@media(max-height:500px)]:mb-2.5"
         >
           <span
-            className="font-display font-bold text-2xl sm:text-4xl [@media(max-height:500px)]:text-2xl text-[#1e1710] tracking-tight"
+            className="font-display font-bold text-[clamp(1.35rem,4.5vw,2.25rem)] [@media(max-height:500px)]:text-xl text-[#1e1710] tracking-tight"
             style={{ textShadow: '0 2px 0 rgba(255, 248, 224, 0.9)' }}
           >
             EcoGrow Mission
@@ -306,7 +312,7 @@ export function TitleScreen({
           {/* Sprout in Soil Crest SVG */}
           <svg
             viewBox="0 0 64 56"
-            className="w-12 h-11 sm:w-16 sm:h-14 [@media(max-height:500px)]:w-10 [@media(max-height:500px)]:h-9 drop-shadow-sm shrink-0"
+            className="w-10 h-9 sm:w-16 sm:h-14 [@media(max-height:500px)]:w-9 [@media(max-height:500px)]:h-8 drop-shadow-sm shrink-0"
             role="img"
             aria-label="EcoGrow Sprout"
           >
@@ -332,7 +338,7 @@ export function TitleScreen({
 
           <span
             dir={lang === 'ar' ? 'rtl' : 'ltr'}
-            className="font-display font-extrabold text-2xl sm:text-4xl [@media(max-height:500px)]:text-2xl text-[#1e1710]"
+            className="font-display font-extrabold text-[clamp(1.35rem,4.5vw,2.25rem)] [@media(max-height:500px)]:text-xl text-[#1e1710]"
             style={{ textShadow: '0 2px 0 rgba(255, 248, 224, 0.9)' }}
           >
             {t.saveYourFarm}
@@ -340,13 +346,13 @@ export function TitleScreen({
         </div>
 
         {/* Main Menu Buttons: Start/Continue + New Mission + Team + Exit */}
-        <div className="w-full max-w-[330px] sm:max-w-[380px] [@media(max-height:500px)]:max-w-[300px] flex flex-col items-stretch gap-2.5 sm:gap-3 [@media(max-height:500px)]:gap-1.5">
+        <div className="w-full max-w-[min(92vw,340px)] sm:max-w-[390px] [@media(max-height:500px)]:max-w-[310px] flex flex-col items-stretch gap-2 sm:gap-3 [@media(max-height:500px)]:gap-1.5">
           <button
             type="button"
             data-start="true"
             data-testid="singleplayer-btn"
             onClick={handlePrimaryStart}
-            className="w-full min-h-[50px] sm:min-h-[54px] [@media(max-height:500px)]:min-h-[40px] px-5 py-2.5 [@media(max-height:500px)]:py-1.5 rounded-2xl bg-gradient-to-b from-[#1ad16a] to-[#0ca14c] hover:from-[#23df75] hover:to-[#10b356] active:translate-y-0.5 text-white font-display font-extrabold text-lg sm:text-xl [@media(max-height:500px)]:text-base border-2 border-[#0b4d27] shadow-[0_5px_0_#0a6130,0_10px_22px_rgba(12,48,24,0.35)] cursor-pointer transition-all flex items-center justify-center gap-2 whitespace-nowrap"
+            className="w-full min-h-[46px] sm:min-h-[54px] [@media(max-height:500px)]:min-h-[38px] px-4 py-2 [@media(max-height:500px)]:py-1 rounded-2xl bg-gradient-to-b from-[#1ad16a] to-[#0ca14c] hover:from-[#23df75] hover:to-[#10b356] active:translate-y-0.5 text-white font-display font-extrabold text-[clamp(0.95rem,3.6vw,1.25rem)] [@media(max-height:500px)]:text-sm border-2 border-[#0b4d27] shadow-[0_5px_0_#0a6130,0_10px_22px_rgba(12,48,24,0.35)] cursor-pointer transition-all flex items-center justify-center gap-2 text-center leading-tight"
             style={{
               textShadow:
                 '-2px -2px 0 #162419, 2px -2px 0 #162419, -2px 2px 0 #162419, 2px 2px 0 #162419, 0 3px 0 #162419',
@@ -360,7 +366,7 @@ export function TitleScreen({
             type="button"
             data-testid="multiplayer-rooms-btn"
             onClick={onOpenMultiplayerRooms}
-            className="w-full min-h-[48px] sm:min-h-[52px] [@media(max-height:500px)]:min-h-[38px] px-5 py-2 [@media(max-height:500px)]:py-1.5 rounded-2xl bg-gradient-to-b from-[#38bdf8] to-[#0284c7] hover:from-[#57c9fa] hover:to-[#0396e0] active:translate-y-0.5 text-white font-display font-extrabold text-lg sm:text-xl [@media(max-height:500px)]:text-base border-2 border-[#0c4a6e] shadow-[0_5px_0_#075985,0_10px_22px_rgba(7,89,133,0.35)] cursor-pointer transition-all flex items-center justify-center gap-2 whitespace-nowrap"
+            className="w-full min-h-[46px] sm:min-h-[52px] [@media(max-height:500px)]:min-h-[36px] px-4 py-2 [@media(max-height:500px)]:py-1 rounded-2xl bg-gradient-to-b from-[#38bdf8] to-[#0284c7] hover:from-[#57c9fa] hover:to-[#0396e0] active:translate-y-0.5 text-white font-display font-extrabold text-[clamp(0.95rem,3.6vw,1.25rem)] [@media(max-height:500px)]:text-sm border-2 border-[#0c4a6e] shadow-[0_5px_0_#075985,0_10px_22px_rgba(7,89,133,0.35)] cursor-pointer transition-all flex items-center justify-center gap-2 text-center leading-tight"
             style={{
               textShadow:
                 '-2px -2px 0 #0b2538, 2px -2px 0 #0b2538, -2px 2px 0 #0b2538, 2px 2px 0 #0b2538, 0 3px 0 #0b2538',
@@ -374,17 +380,17 @@ export function TitleScreen({
             <button
               type="button"
               onClick={onStartNew}
-              className="self-center px-3.5 py-1 rounded-lg bg-[#2e2116]/85 hover:bg-[#3f2d1f] text-[#fdf3dc] text-xs font-semibold border border-[#8f6742] cursor-pointer"
+              className="self-center px-3.5 py-1.5 rounded-lg bg-[#2e2116]/90 hover:bg-[#3f2d1f] text-[#fdf3dc] text-xs font-semibold border border-[#8f6742] cursor-pointer"
             >
               {t.newFarm}
             </button>
           )}
 
-          <div className="flex items-center gap-2.5 mt-0.5">
+          <div className="flex items-center gap-2 sm:gap-2.5 mt-0.5">
             <button
               type="button"
               onClick={() => setShowTeam(true)}
-              className="flex-1 min-h-[44px] sm:min-h-[48px] [@media(max-height:500px)]:min-h-[36px] px-4 py-2 rounded-2xl bg-gradient-to-b from-[#1ad16a] to-[#0ca14c] hover:from-[#23df75] hover:to-[#10b356] active:translate-y-0.5 text-white font-display font-extrabold text-base sm:text-lg [@media(max-height:500px)]:text-sm border-2 border-[#0b4d27] shadow-[0_4px_0_#0a6130,0_8px_18px_rgba(12,48,24,0.3)] cursor-pointer transition-all"
+              className="flex-1 min-h-[42px] sm:min-h-[48px] [@media(max-height:500px)]:min-h-[34px] px-3 py-1.5 rounded-2xl bg-gradient-to-b from-[#1ad16a] to-[#0ca14c] hover:from-[#23df75] hover:to-[#10b356] active:translate-y-0.5 text-white font-display font-extrabold text-[clamp(0.85rem,3.2vw,1.1rem)] [@media(max-height:500px)]:text-xs border-2 border-[#0b4d27] shadow-[0_4px_0_#0a6130,0_8px_18px_rgba(12,48,24,0.3)] cursor-pointer transition-all"
               style={{
                 textShadow:
                   '-1.5px -1.5px 0 #162419, 1.5px -1.5px 0 #162419, -1.5px 1.5px 0 #162419, 1.5px 1.5px 0 #162419, 0 2px 0 #162419',
@@ -396,7 +402,7 @@ export function TitleScreen({
             <button
               type="button"
               onClick={handleExit}
-              className="flex-1 min-h-[44px] sm:min-h-[48px] [@media(max-height:500px)]:min-h-[36px] px-4 py-2 rounded-2xl bg-gradient-to-b from-[#1ad16a] to-[#0ca14c] hover:from-[#23df75] hover:to-[#10b356] active:translate-y-0.5 text-white font-display font-extrabold text-base sm:text-lg [@media(max-height:500px)]:text-sm border-2 border-[#0b4d27] shadow-[0_4px_0_#0a6130,0_8px_18px_rgba(12,48,24,0.3)] cursor-pointer transition-all"
+              className="flex-1 min-h-[42px] sm:min-h-[48px] [@media(max-height:500px)]:min-h-[34px] px-3 py-1.5 rounded-2xl bg-gradient-to-b from-[#1ad16a] to-[#0ca14c] hover:from-[#23df75] hover:to-[#10b356] active:translate-y-0.5 text-white font-display font-extrabold text-[clamp(0.85rem,3.2vw,1.1rem)] [@media(max-height:500px)]:text-xs border-2 border-[#0b4d27] shadow-[0_4px_0_#0a6130,0_8px_18px_rgba(12,48,24,0.3)] cursor-pointer transition-all"
               style={{
                 textShadow:
                   '-1.5px -1.5px 0 #162419, 1.5px -1.5px 0 #162419, -1.5px 1.5px 0 #162419, 1.5px 1.5px 0 #162419, 0 2px 0 #162419',
@@ -408,7 +414,7 @@ export function TitleScreen({
         </div>
 
         {isPortraitMobile && (
-          <div className="mt-4 px-3.5 py-2 rounded-xl bg-[#24170f]/90 border border-[#9c6f46] text-[#f5ebd6] flex items-center gap-2.5 max-w-xs shadow-lg">
+          <div className="mt-3 px-3 py-2 rounded-xl bg-[#24170f]/90 border border-[#9c6f46] text-[#f5ebd6] flex items-center gap-2 max-w-[min(92vw,340px)] shadow-lg">
             <RotateCw className="w-4 h-4 text-[#f7d87c] shrink-0" />
             <span className="text-[11px] font-medium text-start leading-snug">
               {t.rotateLandscapeHint}
@@ -416,7 +422,7 @@ export function TitleScreen({
             <button
               type="button"
               onClick={onRequestLandscape}
-              className="wood-button-primary px-2.5 py-1 rounded text-[11px] font-bold shrink-0 cursor-pointer whitespace-nowrap"
+              className="wood-button-primary px-2.5 py-1.5 rounded text-[11px] font-bold shrink-0 cursor-pointer whitespace-nowrap"
             >
               {t.enableLandscapeBtn}
             </button>
@@ -428,7 +434,7 @@ export function TitleScreen({
             role="status"
             aria-live="assertive"
             data-testid="blind-title-caption"
-            className="mt-3 px-4 py-2 rounded-xl bg-[#18120c]/95 border-2 border-[#f7d87c] text-[#fdf3dc] text-xs sm:text-sm font-semibold max-w-xl shadow-lg"
+            className="mt-2.5 px-3.5 py-2 rounded-xl bg-[#18120c]/95 border-2 border-[#f7d87c] text-[#fdf3dc] text-xs sm:text-sm font-semibold max-w-[min(94vw,36rem)] shadow-lg"
           >
             {blindCaption || t.blindModeOn}
           </div>
@@ -441,12 +447,12 @@ export function TitleScreen({
       {/* Graceful Exit Dialog */}
       {showExitScreen && (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black/70 pointer-events-auto"
+          className="fixed inset-0 z-40 flex items-center justify-center safe-area-modal bg-black/70 pointer-events-auto"
           role="dialog"
           aria-modal="true"
           aria-label={t.exitTitle}
         >
-          <div className="parchment-panel rounded-xl w-full max-w-sm p-6 text-center">
+          <div className="parchment-panel rounded-xl w-full max-w-sm max-h-[90dvh] overflow-y-auto modal-scroll p-5 sm:p-6 text-center">
             <h2 className="font-display text-2xl font-bold text-[#2c1e14] mb-2">{t.exitTitle}</h2>
             <p className="text-sm text-[#5c4028] mb-5 leading-relaxed">{t.exitBody}</p>
             <button

@@ -897,6 +897,28 @@ export function formatFeedbackMessage(res: ActionFeedback, lang: Language): stri
       return 'باركتك النافورة بطاقة كاملة!';
     case 'Wishing Fountain cleared the skies!':
       return 'بدّدت النافورة الغيوم إلى طقس صحو!';
+    case 'Found Lucky Clover (+18g, +10 Stam)!':
+      return 'جمعت نفل الحظ (+18g، +10 طاقة)!';
+    case 'Found Autumn Mushroom (+18g, +10 Stam)!':
+      return 'جمعت فطر الخريف النادر (+18g، +10 طاقة)!';
+    case 'Found Frost Bloom (+18g, +10 Stam)!':
+      return 'جمعت زهرة الصقيع (+18g، +10 طاقة)!';
+    case 'Petted Guard Dog (+8 HP)!':
+      return 'دلّلت كلب الحراسة (+8 صحة) ♥';
+    case 'Petted Dairy Cow (+6 Stam)!':
+      return 'دلّلت البقرة الحلوة (+6 طاقة) ♥';
+    case 'Petted Fluffy Sheep (+6 Stam)!':
+      return 'دلّلت الخروف الصوفي (+6 طاقة) ♥';
+    case 'Petted Chicken (+4 Stam)!':
+      return 'دلّلت الدجاجة (+4 طاقة) ♥';
+    case 'Guard Dog wags tail!':
+      return 'كلب الحراسة يهز ذيله بسعادة! ♥';
+    case 'Dairy Cow moos happily!':
+      return 'البقرة سعيدة باهتمامك! ♥';
+    case 'Fluffy Sheep bleats happily!':
+      return 'الخروف سعيد باهتمامك! ♥';
+    case 'Chicken clucks happily!':
+      return 'الدجاجة سعيدة باهتمامك! ♥';
     default:
       if (res.message?.startsWith('Wishing Fountain gifted +1 ')) {
         const raw = res.message.replace('Wishing Fountain gifted +1 ', '').replace('!', '');

@@ -51,6 +51,7 @@ import type {
   ItemId,
   LivestockEntity,
   MissionId,
+  NatureTreasure,
   ObstacleType,
   PlaceableType,
   Season,
@@ -298,6 +299,8 @@ export function createInitialFarmState(seed = 42): GameWorldState {
     rainbowActive: false,
     wishedToday: false,
     lastFishMs: 0,
+    pettedAnimalsToday: [],
+    dailyTreasure: rollDailyNatureTreasure(tiles, 'Spring', rand),
     discoveredItems: ['wheat_seed', 'carrot_seed'],
     stats: {
       daysSurvived: 1,
@@ -334,6 +337,30 @@ export function createInitialFarmState(seed = 42): GameWorldState {
     restorationVictoryDismissed: false,
     outcome: 'none',
   };
+}
+
+export function rollDailyNatureTreasure(
+  tiles: FarmTile[],
+  season: Season,
+  rng: () => number = Math.random
+): NatureTreasure | null {
+  const candidates = tiles.filter(
+    (t) =>
+      t.terrain === 'grass' &&
+      !t.tilled &&
+      !t.obstacle &&
+      !t.crop &&
+      !t.structure &&
+      t.x >= 2 &&
+      t.x <= 25 &&
+      t.y >= 2 &&
+      t.y <= 18
+  );
+  if (candidates.length === 0) return null;
+  const pick = candidates[Math.floor(rng() * candidates.length)] ?? candidates[0];
+  const kind =
+    season === 'Winter' ? 'frost_bloom' : season === 'Autumn' ? 'mushroom' : 'clover';
+  return { x: pick.x, y: pick.y, kind };
 }
 
 export function rollMarketSurgeCrop(day: number, rng: () => number = Math.random): CropType {
@@ -375,10 +402,13 @@ export function getToolStaminaCost(tool: ToolType, state: GameWorldState): numbe
 }
 
 export function addInventoryItem(state: GameWorldState, id: ItemId, amount: number): void {
-  state.inventory[id] = (state.inventory[id] ?? 0) + amount;
+  const qty = Math.floor(amount);
+  if (!Number.isFinite(qty) || qty <= 0) return;
+  const def = ITEMS[id];
+  if (!def) return;
+  state.inventory[id] = (state.inventory[id] ?? 0) + qty;
   recordDiscoveredItem(state, id);
   // Auto-slot seeds, placeables, and consumables into an empty hotbar slot if not already present
-  const def = ITEMS[id];
   if (
     (def.category === 'seed' || def.category === 'placeable' || def.category === 'consumable') &&
     !state.hotbar.includes(id)
@@ -391,13 +421,15 @@ export function addInventoryItem(state: GameWorldState, id: ItemId, amount: numb
 }
 
 export function consumeInventoryItem(state: GameWorldState, id: ItemId, amount = 1): boolean {
+  const qty = Math.floor(amount);
+  if (!Number.isFinite(qty) || qty <= 0) return false;
   const current = state.inventory[id] ?? 0;
-  if (current < amount) return false;
-  const next = current - amount;
+  if (current < qty) return false;
+  const next = current - qty;
   if (next <= 0) {
     delete state.inventory[id];
     // Clear from hotbar if empty and not a core tool
-    if (ITEMS[id].category !== 'tool') {
+    if (ITEMS[id]?.category !== 'tool') {
       state.hotbar = state.hotbar.map((slot) => (slot === id ? null : slot));
     }
   } else {
@@ -423,6 +455,8 @@ export interface ActionFeedback {
     | 'wish'
     | 'fertilize'
     | 'artisan'
+    | 'pet'
+    | 'forage'
     | 'error';
   message?: string;
   tileX?: number;
@@ -737,6 +771,36 @@ export function performTileAction(
     }
   }
 
+  // Priority 1b: Collect shimmering Daily Nature Treasure (Clover / Autumn Mushroom / Frost Bloom)
+  if (
+    state.dailyTreasure &&
+    state.dailyTreasure.x === tileX &&
+    state.dailyTreasure.y === tileY
+  ) {
+    const tKind = state.dailyTreasure.kind;
+    state.dailyTreasure = null;
+    state.player.gold += 18;
+    state.stats.totalGoldEarned += 18;
+    state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 10);
+    state.stats.treasuresFound = (state.stats.treasuresFound ?? 0) + 1;
+    const leveledUpTo = grantXp(state, 12);
+    const message =
+      tKind === 'frost_bloom'
+        ? 'Found Frost Bloom (+18g, +10 Stam)!'
+        : tKind === 'mushroom'
+        ? 'Found Autumn Mushroom (+18g, +10 Stam)!'
+        : 'Found Lucky Clover (+18g, +10 Stam)!';
+    return {
+      performed: true,
+      kind: 'forage',
+      tileX,
+      tileY,
+      goldDelta: 18,
+      leveledUpTo,
+      message,
+    };
+  }
+
   // Priority 2: Draw free rainwater from placed Rain Tank (works with watering can or empty hand)
   if (tile.structure?.type === 'rain_tank') {
     const stored = tile.structure.storedWaterCharges ?? 0;
@@ -868,6 +932,62 @@ export function performTileAction(
   }
 
   const selectedId = state.hotbar[state.player.selectedHotbarIndex];
+
+  // Priority 2c-bis: Interactive Farm Animal Petting (when tile has no crop/obstacle/structure/tilled plot blocking)
+  if (!tile.crop && !tile.obstacle && !tile.structure && (!tile.tilled || !selectedId)) {
+    const cx = tileX + 0.5;
+    const cy = tileY + 0.5;
+    let petKind: 'dog' | 'cow' | 'sheep' | 'chicken' | null = null;
+    if (state.dog && Math.hypot(state.dog.x - cx, state.dog.y - cy) <= 0.78) {
+      petKind = 'dog';
+    } else if ((state.cows ?? []).some((c) => Math.hypot(c.x - cx, c.y - cy) <= 0.72)) {
+      petKind = 'cow';
+    } else if ((state.sheep ?? []).some((s) => Math.hypot(s.x - cx, s.y - cy) <= 0.72)) {
+      petKind = 'sheep';
+    } else if ((state.chickens ?? []).some((ch) => Math.hypot(ch.x - cx, ch.y - cy) <= 0.68)) {
+      petKind = 'chicken';
+    }
+    if (petKind) {
+      if (!Array.isArray(state.pettedAnimalsToday)) state.pettedAnimalsToday = [];
+      const firstToday = !state.pettedAnimalsToday.includes(petKind);
+      let leveledUpTo: number | undefined;
+      if (firstToday) {
+        state.pettedAnimalsToday.push(petKind);
+        if (petKind === 'dog') {
+          state.player.health = Math.min(state.player.maxHealth, state.player.health + 8);
+        } else if (petKind === 'cow' || petKind === 'sheep') {
+          state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 6);
+        } else {
+          state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 4);
+        }
+        leveledUpTo = grantXp(state, 5);
+      }
+      const message = firstToday
+        ? petKind === 'dog'
+          ? 'Petted Guard Dog (+8 HP)!'
+          : petKind === 'cow'
+          ? 'Petted Dairy Cow (+6 Stam)!'
+          : petKind === 'sheep'
+          ? 'Petted Fluffy Sheep (+6 Stam)!'
+          : 'Petted Chicken (+4 Stam)!'
+        : petKind === 'dog'
+        ? 'Guard Dog wags tail!'
+        : petKind === 'cow'
+        ? 'Dairy Cow moos happily!'
+        : petKind === 'sheep'
+        ? 'Fluffy Sheep bleats happily!'
+        : 'Chicken clucks happily!';
+      return {
+        performed: true,
+        kind: 'pet',
+        tileX,
+        tileY,
+        wishOutcome: petKind,
+        leveledUpTo,
+        message,
+      };
+    }
+  }
 
   // Priority 2d: Pond Fishing on water tile when NOT holding watering_can
   if (tile.terrain === 'water' && selectedId !== 'watering_can') {
@@ -1131,7 +1251,11 @@ export function performTileAction(
 
       // Repair damaged fence with axe/mallet if damaged
       if (tile.structure && tile.structure.hp < tile.structure.maxHp) {
-        state.player.stamina -= 2;
+        const repairCost = Math.min(2, cost);
+        if (state.player.stamina < repairCost) {
+          return { performed: false, kind: 'error', message: 'Low Stamina — Rest at Farmhouse' };
+        }
+        state.player.stamina = Math.max(0, state.player.stamina - repairCost);
         tile.structure.hp = tile.structure.maxHp;
         return { performed: true, kind: 'repair', tileX, tileY, message: 'Repaired structure' };
       }
@@ -1416,6 +1540,8 @@ export function advanceDay(
   state.droughtMiddayTriggered = false;
   state.heatwaveMiddayTriggered = false;
   state.wishedToday = false;
+  state.pettedAnimalsToday = [];
+  state.dailyTreasure = rollDailyNatureTreasure(state.tiles, newSeason, rng);
   state.timeMinutes = DAY_START_MINUTES;
   state.wildlife = [];
 
@@ -1611,14 +1737,18 @@ export function buyShopItem(
   quantity = 1
 ): { ok: boolean; message: string } {
   const def = ITEMS[itemId];
-  if (!def.buyPrice) return { ok: false, message: 'Item not for sale' };
-  const totalCost = def.buyPrice * quantity;
+  if (!def || !def.buyPrice) return { ok: false, message: 'Item not for sale' };
+  const qty = Math.floor(quantity);
+  if (!Number.isFinite(qty) || qty <= 0) {
+    return { ok: false, message: 'Invalid quantity' };
+  }
+  const totalCost = def.buyPrice * qty;
   if (state.player.gold < totalCost) {
     return { ok: false, message: 'Not enough Gold' };
   }
   state.player.gold -= totalCost;
-  addInventoryItem(state, itemId, quantity);
-  return { ok: true, message: `Bought ${quantity}x ${def.name}` };
+  addInventoryItem(state, itemId, qty);
+  return { ok: true, message: `Bought ${qty}x ${def.name}` };
 }
 
 export function sellCropItem(
@@ -1627,9 +1757,13 @@ export function sellCropItem(
   quantity = 1
 ): { ok: boolean; message: string; earned: number } {
   const def = ITEMS[itemId];
-  if (!def.sellPrice) return { ok: false, message: 'Cannot sell this item', earned: 0 };
+  if (!def || !def.sellPrice) return { ok: false, message: 'Cannot sell this item', earned: 0 };
+  const requested = Math.floor(quantity);
+  if (!Number.isFinite(requested) || requested <= 0) {
+    return { ok: false, message: 'Invalid quantity', earned: 0 };
+  }
   const owned = state.inventory[itemId] ?? 0;
-  const sellQty = Math.min(owned, quantity);
+  const sellQty = Math.min(owned, requested);
   if (sellQty <= 0) return { ok: false, message: 'None to sell', earned: 0 };
 
   let unitPrice = def.sellPrice;

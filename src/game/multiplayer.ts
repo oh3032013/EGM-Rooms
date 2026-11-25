@@ -17,6 +17,9 @@ export type GameMode = 'singleplayer' | 'multiplayer';
 
 export const MAX_ROOM_PLAYERS = 4;
 
+export const COOP_EMOTES = ['👋', '❤️', '💧', '🌾', '⚡'] as const;
+export type CoopEmote = (typeof COOP_EMOTES)[number];
+
 export const PLAYER_PALETTE = [
   { overalls: '#3a6699', shirt: '#c95240', badge: '#60a5fa' },
   { overalls: '#2f6f4e', shirt: '#e09f3e', badge: '#34d399' },
@@ -96,7 +99,8 @@ export interface FxPayload {
     | 'day_advanced'
     | 'drought'
     | 'heatwave'
-    | 'toast';
+    | 'toast'
+    | 'emote';
   actorId?: string;
   wx?: number;
   wy?: number;
@@ -166,7 +170,9 @@ export type ClientToServerMessage =
   | { type: 'action:sleep_vote'; ready: boolean }
   | { type: 'action:chat'; text: string }
   | { type: 'voice:state'; enabled: boolean; muted: boolean; speaking?: boolean }
-  | { type: 'voice:signal'; targetId: string; signal: VoiceSignalPayload };
+  | { type: 'voice:signal'; targetId: string; signal: VoiceSignalPayload }
+  | { type: 'action:emote'; emote: CoopEmote }
+  | { type: 'net:ping'; seq: number; clientSentAt: number };
 
 export type ServerToClientMessage =
   | { type: 'rooms:list'; rooms: RoomSummary[] }
@@ -194,6 +200,7 @@ export type ServerToClientMessage =
     }
   | {
       type: 'tick:entities';
+      seq?: number;
       timeMinutes: number;
       weather: WeatherType;
       players: RemotePlayerState[];
@@ -216,11 +223,54 @@ export type ServerToClientMessage =
       voiceStates?: Record<string, VoicePeerState>;
     }
   | { type: 'voice:peer_state'; playerId: string; state: VoicePeerState }
-  | { type: 'voice:signal'; fromId: string; signal: VoiceSignalPayload };
+  | { type: 'voice:signal'; fromId: string; signal: VoiceSignalPayload }
+  | { type: 'net:pong'; seq: number; clientSentAt: number; serverTime: number };
 
 const SERVER_URL_STORAGE_KEY = 'ecogrow_mp_server_url';
 const PLAYER_NAME_STORAGE_KEY = 'ecogrow_mp_player_name';
 const CLIENT_ID_STORAGE_KEY = 'ecogrow_mp_client_id';
+export const DEFAULT_EXTERNAL_SERVER_URL = 'https://ecogrowmission.up.railway.app';
+
+export function normalizeServerBaseUrl(rawUrl: string): string {
+  let clean = rawUrl.trim();
+  if (!clean) return '';
+  if (!/^(https?|wss?):\/\//i.test(clean)) {
+    clean = `https://${clean}`;
+  }
+  clean = clean
+    .replace(/\/+$/, '')
+    .replace(/\/api\/(health|rooms)$/i, '')
+    .replace(/\/api$/i, '')
+    .replace(/\/ws$/i, '')
+    .replace(/\/+$/, '');
+  return clean;
+}
+
+function isExternalHostedClient(): boolean {
+  if (typeof window === 'undefined') return false;
+  const { protocol, hostname } = window.location;
+  if (
+    protocol === 'file:' ||
+    protocol === 'capacitor:' ||
+    protocol === 'ionic:' ||
+    protocol === 'app:'
+  ) {
+    return true;
+  }
+  const win = window as Window & { Capacitor?: unknown; electronAPI?: unknown };
+  if (win.Capacitor || win.electronAPI) {
+    return true;
+  }
+  const host = hostname.toLowerCase();
+  return (
+    host.endsWith('.vercel.app') ||
+    host.endsWith('.netlify.app') ||
+    host.endsWith('.github.io') ||
+    host.endsWith('.pages.dev') ||
+    host.endsWith('.web.app') ||
+    host.endsWith('.firebaseapp.com')
+  );
+}
 
 export function getSavedPlayerName(): string {
   if (typeof window === 'undefined') return '';
@@ -259,21 +309,28 @@ export function getSavedMultiplayerServerUrl(): string {
   if (typeof window === 'undefined') return '';
   try {
     const saved = window.localStorage.getItem(SERVER_URL_STORAGE_KEY);
-    if (saved) return saved;
+    if (saved) {
+      const normalized = normalizeServerBaseUrl(saved);
+      if (normalized) return normalized;
+    }
   } catch {
     // Ignore
   }
   const envUrl = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env
     ?.VITE_MULTIPLAYER_URL;
-  return envUrl ?? '';
+  if (envUrl) {
+    const normalized = normalizeServerBaseUrl(envUrl);
+    if (normalized) return normalized;
+  }
+  return isExternalHostedClient() ? DEFAULT_EXTERNAL_SERVER_URL : '';
 }
 
 export function saveMultiplayerServerUrl(url: string): void {
   if (typeof window === 'undefined') return;
   try {
-    const trimmed = url.trim().replace(/\/+$/, '');
-    if (trimmed) {
-      window.localStorage.setItem(SERVER_URL_STORAGE_KEY, trimmed);
+    const normalized = normalizeServerBaseUrl(url);
+    if (normalized) {
+      window.localStorage.setItem(SERVER_URL_STORAGE_KEY, normalized);
     } else {
       window.localStorage.removeItem(SERVER_URL_STORAGE_KEY);
     }
@@ -283,10 +340,11 @@ export function saveMultiplayerServerUrl(url: string): void {
 }
 
 export function resolveWebSocketUrl(customBaseUrl?: string): string {
-  const base = (customBaseUrl ?? getSavedMultiplayerServerUrl()).trim().replace(/\/+$/, '');
+  const raw = customBaseUrl !== undefined ? customBaseUrl : getSavedMultiplayerServerUrl();
+  const base = normalizeServerBaseUrl(raw) || (isExternalHostedClient() ? DEFAULT_EXTERNAL_SERVER_URL : '');
   if (base) {
     if (base.startsWith('ws://') || base.startsWith('wss://')) {
-      return base.endsWith('/ws') ? base : `${base}/ws`;
+      return `${base}/ws`;
     }
     if (base.startsWith('https://')) {
       return `wss://${base.slice('https://'.length)}/ws`;
@@ -301,10 +359,11 @@ export function resolveWebSocketUrl(customBaseUrl?: string): string {
 }
 
 export function resolveHttpApiBase(customBaseUrl?: string): string {
-  const base = (customBaseUrl ?? getSavedMultiplayerServerUrl()).trim().replace(/\/+$/, '');
+  const raw = customBaseUrl !== undefined ? customBaseUrl : getSavedMultiplayerServerUrl();
+  const base = normalizeServerBaseUrl(raw) || (isExternalHostedClient() ? DEFAULT_EXTERNAL_SERVER_URL : '');
   if (!base) return '';
-  if (base.startsWith('wss://')) return `https://${base.slice('wss://'.length).replace(/\/ws$/, '')}`;
-  if (base.startsWith('ws://')) return `http://${base.slice('ws://'.length).replace(/\/ws$/, '')}`;
-  if (base.startsWith('http://') || base.startsWith('https://')) return base.replace(/\/ws$/, '');
-  return `https://${base.replace(/\/ws$/, '')}`;
+  if (base.startsWith('wss://')) return `https://${base.slice('wss://'.length)}`;
+  if (base.startsWith('ws://')) return `http://${base.slice('ws://'.length)}`;
+  if (base.startsWith('http://') || base.startsWith('https://')) return base;
+  return `https://${base}`;
 }

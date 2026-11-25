@@ -83,15 +83,15 @@ export function TeamModal({ lang, onClose }: TeamModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center p-3 sm:p-5 bg-black/70 pointer-events-auto"
+      className="fixed inset-0 z-40 flex items-center justify-center safe-area-modal bg-black/70 pointer-events-auto"
       role="dialog"
       aria-modal="true"
       aria-label={t.teamTitle}
       dir={lang === 'ar' ? 'rtl' : 'ltr'}
     >
-      <div className="parchment-panel rounded-xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden">
+      <div className="parchment-panel rounded-xl w-full max-w-3xl max-h-[92dvh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 border-b-2 border-[#c9b086] bg-[#ebd8b5]">
+        <div className="flex items-center justify-between gap-2 px-4 sm:px-6 py-3.5 border-b-2 border-[#c9b086] bg-[#ebd8b5] shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-lg bg-[#169c4f] text-white flex items-center justify-center border-2 border-[#0e5c2e] shrink-0">
               <Users className="w-5 h-5" />
@@ -114,7 +114,7 @@ export function TeamModal({ lang, onClose }: TeamModalProps) {
         </div>
 
         {/* Team Grid */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 grid grid-cols-1 md:grid-cols-2 gap-3.5">
+        <div className="flex-1 overflow-y-auto modal-scroll p-4 sm:p-5 grid grid-cols-1 md:grid-cols-2 gap-3.5">
           {TEAM_MEMBERS.map((member) => {
             const Icon = member.icon;
             return (

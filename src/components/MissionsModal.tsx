@@ -114,27 +114,27 @@ export function MissionsModal({ world, lang, onClaim, onClose }: MissionsModalPr
 
   return (
     <div
-      className="fixed inset-0 z-30 flex items-center justify-center p-4 bg-black/55"
+      className="fixed inset-0 z-30 flex items-center justify-center safe-area-modal bg-black/55"
       role="dialog"
       aria-modal="true"
       aria-label={t.missionsModalTitle}
       dir={lang === 'ar' ? 'rtl' : 'ltr'}
     >
-      <div className="parchment-panel rounded-xl w-full max-w-2xl max-h-[86vh] flex flex-col overflow-hidden">
+      <div className="parchment-panel rounded-xl w-full max-w-2xl max-h-[92dvh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b-2 border-[#c9b086] bg-[#ebd8b5]">
-          <div className="flex items-center gap-2.5">
+        <div className="flex items-center justify-between gap-2 px-4 sm:px-5 py-3 sm:py-3.5 border-b-2 border-[#c9b086] bg-[#ebd8b5] shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-9 h-9 rounded-lg bg-[#3d7a47] text-[#fdf3dc] flex items-center justify-center border border-[#244e2b] shrink-0">
               <Trophy className="w-5 h-5" />
             </div>
-            <div>
-              <h2 className="font-display text-xl sm:text-2xl font-bold text-[#2c1e14]">
+            <div className="min-w-0">
+              <h2 className="font-display text-lg sm:text-2xl font-bold text-[#2c1e14] truncate">
                 {t.missionsModalTitle}
               </h2>
-              <p className="text-xs text-[#694d36]">{t.missionsModalSub}</p>
+              <p className="text-xs text-[#694d36] truncate">{t.missionsModalSub}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <span className="font-mono-tabular text-xs font-bold px-2.5 py-1 rounded bg-[#f9eed8] border border-[#c9b086] text-[#4a3322] whitespace-nowrap">
               {completedCount}/{MISSIONS.length} {t.completedCount}
             </span>
@@ -150,7 +150,7 @@ export function MissionsModal({ world, lang, onClaim, onClose }: MissionsModalPr
         </div>
 
         {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
+        <div className="flex-1 overflow-y-auto modal-scroll p-4 sm:p-5 space-y-4">
           {/* Water Saved Counter + Achievement Badges */}
           <div className="space-y-2.5">
             <div

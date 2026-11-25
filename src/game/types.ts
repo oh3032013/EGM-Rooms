@@ -227,6 +227,14 @@ export interface PlayerState {
   selectedHotbarIndex: number;
 }
 
+export type NatureTreasureKind = 'clover' | 'mushroom' | 'frost_bloom';
+
+export interface NatureTreasure {
+  x: number;
+  y: number;
+  kind: NatureTreasureKind;
+}
+
 export interface FutureDispatch {
   day: number;
   quoteAr: string;
@@ -361,6 +369,8 @@ export interface GameWorldState {
   rainbowActive?: boolean;
   wishedToday?: boolean;
   lastFishMs?: number;
+  pettedAnimalsToday?: string[];
+  dailyTreasure?: NatureTreasure | null;
   discoveredItems?: ItemId[];
   stats: FarmStats;
   claimedMissions: MissionId[];

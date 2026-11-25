@@ -39,17 +39,17 @@ export function CraftModal({
 
   return (
     <div
-      className="fixed inset-0 z-30 flex items-center justify-center p-4 bg-black/55"
+      className="fixed inset-0 z-30 flex items-center justify-center safe-area-modal bg-black/55"
       role="dialog"
       aria-modal="true"
       aria-label={t.craftTitle}
       dir={lang === 'ar' ? 'rtl' : 'ltr'}
     >
-      <div className="parchment-panel rounded-xl w-full max-w-2xl max-h-[86vh] flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-3.5 border-b-2 border-[#c9b086] bg-[#ebd8b5]">
-          <div>
-            <h2 className="font-display text-2xl font-bold text-[#2c1e14]">{t.craftTitle}</h2>
-            <p className="text-xs text-[#694d36] font-mono-tabular">
+      <div className="parchment-panel rounded-xl w-full max-w-2xl max-h-[92dvh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between gap-2 px-4 sm:px-5 py-3 sm:py-3.5 border-b-2 border-[#c9b086] bg-[#ebd8b5] shrink-0">
+          <div className="min-w-0">
+            <h2 className="font-display text-xl sm:text-2xl font-bold text-[#2c1e14] truncate">{t.craftTitle}</h2>
+            <p className="text-xs text-[#694d36] font-mono-tabular truncate">
               {t.wood}: {woodCount} · {t.stone}: {stoneCount} · {t.gold}: {Math.round(gold)}g
             </p>
           </div>
@@ -57,13 +57,13 @@ export function CraftModal({
             type="button"
             onClick={onClose}
             aria-label={lang === 'ar' ? 'إغلاق طاولة التصنيع' : 'Close Workbench'}
-            className="wood-button p-1.5 rounded cursor-pointer"
+            className="wood-button p-1.5 rounded cursor-pointer shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="flex items-center gap-2 px-5 pt-3 pb-2 border-b border-[#d9c39c] overflow-x-auto">
+        <div className="flex items-center gap-2 px-4 sm:px-5 pt-2.5 sm:pt-3 pb-2 border-b border-[#d9c39c] overflow-x-auto shrink-0">
           <button
             type="button"
             onClick={() => setTab('craft')}
@@ -84,7 +84,7 @@ export function CraftModal({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5 space-y-3">
+        <div className="flex-1 overflow-y-auto modal-scroll p-4 sm:p-5 space-y-3">
           {tab === 'craft' &&
             CRAFT_RECIPES.map((recipe) => {
               let canCraft = true;
@@ -111,7 +111,7 @@ export function CraftModal({
               return (
                 <div
                   key={recipe.id}
-                  className="flex items-center justify-between gap-4 p-3 rounded-lg bg-[#fbf2e1] border border-[#d6be96]"
+                  className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 sm:gap-4 p-3 rounded-lg bg-[#fbf2e1] border border-[#d6be96]"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <ItemIcon id={recipe.id} className="w-9 h-9 shrink-0" />

@@ -114,7 +114,7 @@ export function TouchControls({
   };
 
   const dpadBtnClass = (dir: Direction) =>
-    `w-11 h-11 rounded-lg flex items-center justify-center touch-none select-none cursor-pointer transition-transform ${
+    `w-10 h-10 sm:w-11 sm:h-11 [@media(max-height:540px)]:w-9 [@media(max-height:540px)]:h-9 rounded-lg flex items-center justify-center touch-none select-none cursor-pointer transition-transform ${
       pressedDirs.has(dir)
         ? 'wood-button-primary scale-95 border-2 border-[#fdf3dc]'
         : 'wood-button opacity-90 border border-[#b38252]/80'
@@ -124,7 +124,12 @@ export function TouchControls({
   return (
     <div
       dir="ltr"
-      className="fixed inset-x-0 bottom-24 sm:bottom-28 [@media(max-height:500px)_and_(min-width:640px)]:bottom-2.5 z-20 pointer-events-none flex items-end justify-between px-3 sm:px-6 [@media(max-height:500px)_and_(min-width:640px)]:px-3"
+      className="fixed inset-x-0 bottom-24 sm:bottom-28 [@media(max-height:540px)]:bottom-2 z-20 pointer-events-none flex items-end justify-between"
+      style={{
+        paddingLeft: 'max(0.75rem, env(safe-area-inset-left))',
+        paddingRight: 'max(0.75rem, env(safe-area-inset-right))',
+        paddingBottom: 'env(safe-area-inset-bottom)',
+      }}
     >
       {/* Left Movement Controls: D-Pad Buttons or Analog Stick */}
       <div className="pointer-events-auto flex flex-col items-start gap-1.5">
@@ -182,7 +187,7 @@ export function TouchControls({
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
-            <div className="w-11 h-11 rounded-lg bg-[#24170f]/55 border border-[#5e3f27]/60" aria-hidden="true" />
+            <div className="w-10 h-10 sm:w-11 sm:h-11 [@media(max-height:540px)]:w-9 [@media(max-height:540px)]:h-9 rounded-lg bg-[#24170f]/55 border border-[#5e3f27]/60" aria-hidden="true" />
             <button
               type="button"
               aria-label={lang === 'ar' ? 'تحرك لليمين' : 'Move Right'}
@@ -246,7 +251,7 @@ export function TouchControls({
       </div>
 
       {/* Right Action Buttons */}
-      <div className="pointer-events-auto flex flex-col items-end gap-2.5">
+      <div className="pointer-events-auto flex flex-col items-end gap-2">
         <button
           type="button"
           onPointerDown={(e) => {
@@ -257,13 +262,13 @@ export function TouchControls({
           aria-label={
             nearPromptLabel ?? (lang === 'ar' ? 'تفاعل مع العنصر القريب' : 'Interact with nearby object')
           }
-          className={`min-w-[56px] min-h-[48px] px-3.5 rounded-full flex items-center justify-center gap-1.5 shadow-lg transition-opacity ${
+          className={`min-w-[54px] min-h-[44px] [@media(max-height:540px)]:min-h-[40px] px-3 rounded-full flex items-center justify-center gap-1.5 shadow-lg transition-opacity ${
             nearPromptLabel
               ? 'wood-button-primary border-2 border-[#fdf3dc]/75 cursor-pointer'
               : 'wood-button opacity-45 cursor-default'
           }`}
         >
-          <Hand className="w-4 h-4" />
+          <Hand className="w-4 h-4 shrink-0" />
           <span className="text-xs font-bold">{t.actLabel}</span>
         </button>
 
@@ -274,9 +279,9 @@ export function TouchControls({
             onUseTool();
           }}
           aria-label={lang === 'ar' ? 'استخدام الأداة المختارة' : 'Use Selected Tool'}
-          className="wood-button min-w-[64px] min-h-[64px] rounded-full flex flex-col items-center justify-center shadow-lg border-2 border-[#f7d87c]/85 active:scale-95 transition-transform cursor-pointer"
+          className="wood-button min-w-[60px] min-h-[60px] [@media(max-height:540px)]:min-w-[54px] [@media(max-height:540px)]:min-h-[54px] rounded-full flex flex-col items-center justify-center shadow-lg border-2 border-[#f7d87c]/85 active:scale-95 transition-transform cursor-pointer"
         >
-          <Pickaxe className="w-6 h-6 text-[#fdf3dc]" />
+          <Pickaxe className="w-5 h-5 sm:w-6 sm:h-6 text-[#fdf3dc]" />
           <span className="text-[10px] font-bold text-[#f7d87c]">{t.useLabel}</span>
         </button>
       </div>

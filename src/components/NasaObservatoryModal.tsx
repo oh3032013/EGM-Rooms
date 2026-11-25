@@ -23,38 +23,38 @@ export function NasaObservatoryModal({ world, lang, onClose }: NasaObservatoryMo
 
   return (
     <div
-      className="fixed inset-0 z-30 flex items-center justify-center p-4 bg-black/55"
+      className="fixed inset-0 z-30 flex items-center justify-center safe-area-modal bg-black/55"
       role="dialog"
       aria-modal="true"
       aria-label={t.nasaModalTitle}
       dir={lang === 'ar' ? 'rtl' : 'ltr'}
     >
-      <div className="parchment-panel rounded-xl w-full max-w-2xl max-h-[86vh] flex flex-col overflow-hidden">
+      <div className="parchment-panel rounded-xl w-full max-w-2xl max-h-[92dvh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b-2 border-[#c9b086] bg-[#ebd8b5]">
-          <div className="flex items-center gap-2.5">
+        <div className="flex items-center justify-between gap-2 px-4 sm:px-5 py-3 sm:py-3.5 border-b-2 border-[#c9b086] bg-[#ebd8b5] shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-9 h-9 rounded-lg bg-[#1d4e78] text-[#fdf3dc] flex items-center justify-center border border-[#0f2f4d] shrink-0">
               <Satellite className="w-5 h-5" />
             </div>
-            <div>
-              <h2 className="font-display text-xl sm:text-2xl font-bold text-[#2c1e14]">
+            <div className="min-w-0">
+              <h2 className="font-display text-lg sm:text-2xl font-bold text-[#2c1e14] truncate">
                 {t.nasaModalTitle}
               </h2>
-              <p className="text-xs text-[#694d36]">{t.nasaModalSub}</p>
+              <p className="text-xs text-[#694d36] truncate">{t.nasaModalSub}</p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label={lang === 'ar' ? 'إغلاق مرصد ناسا' : 'Close NASA Observatory'}
-            className="wood-button p-1.5 rounded cursor-pointer"
+            className="wood-button p-1.5 rounded cursor-pointer shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
+        <div className="flex-1 overflow-y-auto modal-scroll p-4 sm:p-5 space-y-4">
           {/* 3 Educational Satellite Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {NASA_OBSERVATORY_CARDS.map((card) => {
@@ -97,7 +97,7 @@ export function NasaObservatoryModal({ world, lang, onClose }: NasaObservatoryMo
                 <Radio className="w-4 h-4 text-[#1d6fa5]" />
                 <span>{t.nasaStationTelemetryTitle}</span>
               </div>
-              <div className="grid grid-cols-3 gap-2.5 text-center">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-center">
                 <div className="p-2.5 rounded bg-white/80 border border-[#b8cde0]">
                   <div className="text-[11px] text-[#4b637a]">{t.soilMoistureLabel}</div>
                   <div className="font-mono-tabular font-bold text-lg text-[#134e6f]">

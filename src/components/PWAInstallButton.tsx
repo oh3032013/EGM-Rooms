@@ -47,14 +47,14 @@ export function PWAInstallButton({
 
         {showGuide && (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 pointer-events-auto"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 safe-area-modal pointer-events-auto"
             role="dialog"
             aria-modal="true"
             aria-label={t.brandTitle}
             dir={lang === 'ar' ? 'rtl' : 'ltr'}
           >
             <div
-              className={`parchment-panel rounded-xl w-full max-w-sm p-5 ${
+              className={`parchment-panel rounded-xl w-full max-w-sm max-h-[90dvh] overflow-y-auto modal-scroll p-5 ${
                 lang === 'ar' ? 'text-right' : 'text-left'
               }`}
             >
@@ -120,7 +120,10 @@ export function OfflineBanner({ lang = 'en' }: { lang?: Language }) {
   if (isOnline) return null;
 
   return (
-    <div className="fixed top-2 left-1/2 -translate-x-1/2 z-50 wood-panel rounded-md px-3 py-1 text-xs font-semibold text-[#ffe08a] pointer-events-none">
+    <div
+      className="fixed left-1/2 -translate-x-1/2 z-50 wood-panel rounded-md px-3 py-1 text-xs font-semibold text-[#ffe08a] pointer-events-none max-w-[92vw] text-center"
+      style={{ top: 'max(0.5rem, env(safe-area-inset-top))' }}
+    >
       {UI_TEXT[lang].offlineBanner}
     </div>
   );

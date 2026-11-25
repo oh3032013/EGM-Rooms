@@ -14,13 +14,13 @@ export function FutureMessageModal({ dispatch, lang, onClose }: FutureMessageMod
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black/60"
+      className="fixed inset-0 z-40 flex items-center justify-center safe-area-modal bg-black/60"
       role="dialog"
       aria-modal="true"
       aria-label={t.futureMsgTitle}
       dir={lang === 'ar' ? 'rtl' : 'ltr'}
     >
-      <div className="parchment-panel rounded-xl w-full max-w-md overflow-hidden border-2 border-[#2563eb] shadow-2xl">
+      <div className="parchment-panel rounded-xl w-full max-w-md max-h-[92dvh] flex flex-col overflow-hidden border-2 border-[#2563eb] shadow-2xl">
         <div className="flex items-center justify-between px-5 py-3 bg-[#172c45] text-[#f8fafc] border-b-2 border-[#38bdf8]">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-[#0ea5e9]/25 border border-[#38bdf8] flex items-center justify-center shrink-0">
@@ -45,7 +45,7 @@ export function FutureMessageModal({ dispatch, lang, onClose }: FutureMessageMod
           </button>
         </div>
 
-        <div className="p-5 sm:p-6 text-center space-y-4">
+        <div className="p-5 sm:p-6 text-center space-y-4 overflow-y-auto modal-scroll">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#e0f2fe] border border-[#7dd3fc] text-[#0c4a6e] text-xs font-bold">
             <Sparkles className="w-3.5 h-3.5" />
             <span>2040</span>

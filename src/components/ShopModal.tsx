@@ -37,6 +37,7 @@ interface ShopModalProps {
   onBuyCow?: () => void;
   onBuySheep?: () => void;
   onBuyDog?: () => void;
+  initialTab?: 'seeds' | 'sell' | 'upgrades';
   onClose: () => void;
 }
 
@@ -60,9 +61,10 @@ export function ShopModal({
   onBuyCow,
   onBuySheep,
   onBuyDog,
+  initialTab = 'seeds',
   onClose,
 }: ShopModalProps) {
-  const [tab, setTab] = useState<'seeds' | 'sell' | 'upgrades'>('seeds');
+  const [tab, setTab] = useState<'seeds' | 'sell' | 'upgrades'>(initialTab);
   const t = UI_TEXT[lang];
 
   const sellableItems = (Object.entries(inventory) as [ItemId, number][]).filter(
@@ -80,23 +82,23 @@ export function ShopModal({
 
   return (
     <div
-      className="fixed inset-0 z-30 flex items-center justify-center p-4 bg-black/55"
+      className="fixed inset-0 z-30 flex items-center justify-center safe-area-modal bg-black/55"
       role="dialog"
       aria-modal="true"
       aria-label={t.shopTitle}
       dir={lang === 'ar' ? 'rtl' : 'ltr'}
     >
-      <div className="parchment-panel rounded-xl w-full max-w-2xl max-h-[86vh] flex flex-col overflow-hidden">
+      <div className="parchment-panel rounded-xl w-full max-w-2xl max-h-[92dvh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b-2 border-[#c9b086] bg-[#ebd8b5]">
-          <div>
-            <h2 className="font-display text-2xl font-bold text-[#2c1e14]">{t.shopTitle}</h2>
-            <p className="text-xs text-[#694d36]">
+        <div className="flex items-center justify-between gap-2 px-4 sm:px-5 py-3 sm:py-3.5 border-b-2 border-[#c9b086] bg-[#ebd8b5] shrink-0">
+          <div className="min-w-0">
+            <h2 className="font-display text-xl sm:text-2xl font-bold text-[#2c1e14] truncate">{t.shopTitle}</h2>
+            <p className="text-xs text-[#694d36] truncate">
               {t.shopSub.replace('{season}', translateSeason(season, lang))}
             </p>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-1.5 font-mono-tabular font-bold text-lg text-[#7d5207]">
+          <div className="flex items-center gap-3 sm:gap-4 shrink-0">
+            <div className="flex items-center gap-1.5 font-mono-tabular font-bold text-base sm:text-lg text-[#7d5207]">
               <CoinIcon className="w-5 h-5" />
               <span>{Math.round(gold)}g</span>
             </div>
@@ -112,7 +114,7 @@ export function ShopModal({
         </div>
 
         {/* Tabs */}
-        <div className="flex items-center gap-2 px-5 pt-3 pb-2 border-b border-[#d9c39c] overflow-x-auto">
+        <div className="flex items-center gap-2 px-4 sm:px-5 pt-2.5 sm:pt-3 pb-2 border-b border-[#d9c39c] overflow-x-auto shrink-0">
           <button
             type="button"
             onClick={() => setTab('seeds')}
@@ -199,7 +201,7 @@ export function ShopModal({
         )}
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-3">
+        <div className="flex-1 overflow-y-auto modal-scroll p-4 sm:p-5 space-y-3">
           {tab === 'seeds' &&
             seedItems.map(({ id }) => {
               const def = ITEMS[id];
@@ -335,7 +337,7 @@ export function ShopModal({
                 return (
                   <div
                     key={row.tool}
-                    className="flex items-center justify-between gap-4 p-3 rounded-lg bg-[#fbf2e1] border border-[#d6be96]"
+                    className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 sm:gap-4 p-3 rounded-lg bg-[#fbf2e1] border border-[#d6be96]"
                   >
                     <div className="flex items-center gap-3">
                       <ItemIcon id={row.tool} className="w-9 h-9 shrink-0" />
@@ -361,7 +363,7 @@ export function ShopModal({
               <div className="text-xs font-semibold text-[#5c4028] uppercase tracking-wider pt-2">
                 {t.livestockHeader}
               </div>
-              <div className="flex items-center justify-between gap-4 p-3 rounded-lg bg-[#fef6dc] border border-[#cfa859]">
+              <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 sm:gap-4 p-3 rounded-lg bg-[#fef6dc] border border-[#cfa859]">
                 <div className="flex items-center gap-3">
                   <ChickenIcon className="w-9 h-9 shrink-0" />
                   <div>
@@ -385,7 +387,7 @@ export function ShopModal({
               </div>
 
               {onBuyCow && (
-                <div className="flex items-center justify-between gap-4 p-3 rounded-lg bg-[#fef6dc] border border-[#cfa859]">
+                <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 sm:gap-4 p-3 rounded-lg bg-[#fef6dc] border border-[#cfa859]">
                   <div className="flex items-center gap-3">
                     <CowIcon className="w-9 h-9 shrink-0" />
                     <div>
@@ -410,7 +412,7 @@ export function ShopModal({
               )}
 
               {onBuySheep && (
-                <div className="flex items-center justify-between gap-4 p-3 rounded-lg bg-[#fef6dc] border border-[#cfa859]">
+                <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 sm:gap-4 p-3 rounded-lg bg-[#fef6dc] border border-[#cfa859]">
                   <div className="flex items-center gap-3">
                     <SheepIcon className="w-9 h-9 shrink-0" />
                     <div>
@@ -435,7 +437,7 @@ export function ShopModal({
               )}
 
               {onBuyDog && (
-                <div className="flex items-center justify-between gap-4 p-3 rounded-lg bg-[#fef6dc] border border-[#cfa859]">
+                <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 sm:gap-4 p-3 rounded-lg bg-[#fef6dc] border border-[#cfa859]">
                   <div className="flex items-center gap-3">
                     <DogIcon className="w-9 h-9 shrink-0" />
                     <div>
@@ -470,7 +472,7 @@ export function ShopModal({
                 return (
                   <div
                     key={id}
-                    className="flex items-center justify-between gap-4 p-3 rounded-lg bg-[#fbf2e1] border border-[#d6be96]"
+                    className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 sm:gap-4 p-3 rounded-lg bg-[#fbf2e1] border border-[#d6be96]"
                   >
                     <div className="flex items-center gap-3">
                       <ItemIcon id={id} className="w-9 h-9 shrink-0" />

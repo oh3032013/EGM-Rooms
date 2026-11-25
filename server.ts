@@ -7,15 +7,30 @@ async function startServer() {
   const { app, server } = createMultiplayerServer({ serveStaticDist: IS_PROD });
 
   if (!IS_PROD) {
+    // Unregister any previously cached dev service worker and neutralize stale dev-SW entry imports
+    app.get(['/dev-sw.js', '/sw.js'], (_req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      res.type('application/javascript').send(
+        `self.addEventListener('install', () => self.skipWaiting());\n` +
+          `self.addEventListener('activate', (event) => {\n` +
+          `  event.waitUntil((async () => {\n` +
+          `    const keys = await caches.keys();\n` +
+          `    await Promise.all(keys.map((k) => caches.delete(k)));\n` +
+          `    await self.registration.unregister();\n` +
+          `  })());\n` +
+          `});\n`
+      );
+    });
+    app.get('/@vite-plugin-pwa/pwa-entry-point-loaded', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      res.type('application/javascript').send('export default function registerDevSW() {}\n');
+    });
+
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
         hmr: false,
-        ws: {
-          server,
-          path: '/__vite_hmr',
-        },
         allowedHosts: true,
       },
       appType: 'spa',

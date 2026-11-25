@@ -80,7 +80,8 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
+          // Disabled in dev because server.ts sets hmr: false, which leaves Vite's client HMR transport undefined for registerDevSW()
+          enabled: false,
           type: 'module',
         },
       }),

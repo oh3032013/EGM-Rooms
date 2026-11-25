@@ -6,6 +6,7 @@ import { FutureMessageModal } from './components/FutureMessageModal';
 import { GameHUD, type HudSnapshot, type RoomHudState } from './components/GameHUD';
 import { MissionsModal } from './components/MissionsModal';
 import { NasaObservatoryModal } from './components/NasaObservatoryModal';
+import { NetDebugPanel } from './components/NetDebugPanel';
 import { OfflineBanner } from './components/PWAInstallButton';
 import { RoomsModal } from './components/RoomsModal';
 import { ShopModal } from './components/ShopModal';
@@ -13,6 +14,7 @@ import { StatusModal } from './components/StatusModal';
 import { TitleScreen } from './components/TitleScreen';
 import { TouchControls } from './components/TouchControls';
 import { audioEngine } from './game/audio';
+import { initNetDebugGlobal, netDebug } from './game/netDebug';
 import {
   buildStatusAnnouncement,
   describeTileForBlind,
@@ -56,6 +58,7 @@ import {
   resolveWebSocketUrl,
   type ChatMessage,
   type ClientToServerMessage,
+  type CoopEmote,
   type FxPayload,
   type GameMode,
   type RemotePlayerState,
@@ -91,6 +94,7 @@ import {
   isNearWell,
   isTileWalkable,
   performTileAction,
+  rollDailyNatureTreasure,
   rollMarketSurgeCrop,
   sellCropItem,
   spawnNightWildlife,
@@ -100,6 +104,7 @@ import {
   triggerMiddayDrought,
   triggerMiddayHeatwave,
   upgradeTool,
+  type ActionFeedback,
 } from './game/rules';
 import type {
   DaySummary,
@@ -178,7 +183,87 @@ function loadSavedWorld(): GameWorldState | null {
     const raw = localStorage.getItem(SAVE_KEY) ?? localStorage.getItem(LEGACY_SAVE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as GameWorldState;
-    if (!parsed || !Array.isArray(parsed.tiles) || !parsed.player) return null;
+    if (
+      !parsed ||
+      !Number.isFinite(parsed.width) ||
+      !Number.isFinite(parsed.height) ||
+      parsed.width <= 0 ||
+      parsed.height <= 0 ||
+      !Array.isArray(parsed.tiles) ||
+      parsed.tiles.length !== parsed.width * parsed.height ||
+      !parsed.player ||
+      !Number.isFinite(parsed.player.x) ||
+      !Number.isFinite(parsed.player.y)
+    ) {
+      return null;
+    }
+
+    const maxHealth =
+      Number.isFinite(parsed.player.maxHealth) && parsed.player.maxHealth > 0
+        ? parsed.player.maxHealth
+        : 100;
+    const maxStamina =
+      Number.isFinite(parsed.player.maxStamina) && parsed.player.maxStamina > 0
+        ? parsed.player.maxStamina
+        : 100;
+    const maxWaterLevel =
+      Number.isFinite(parsed.player.maxWaterLevel) && parsed.player.maxWaterLevel > 0
+        ? parsed.player.maxWaterLevel
+        : 20;
+
+    parsed.player = {
+      ...parsed.player,
+      maxHealth,
+      health: Number.isFinite(parsed.player.health)
+        ? Math.max(0, Math.min(maxHealth, parsed.player.health))
+        : maxHealth,
+      maxStamina,
+      stamina: Number.isFinite(parsed.player.stamina)
+        ? Math.max(0, Math.min(maxStamina, parsed.player.stamina))
+        : maxStamina,
+      maxWaterLevel,
+      waterLevel: Number.isFinite(parsed.player.waterLevel)
+        ? Math.max(0, Math.min(maxWaterLevel, parsed.player.waterLevel))
+        : maxWaterLevel,
+      gold: Number.isFinite(parsed.player.gold) ? Math.max(0, Math.floor(parsed.player.gold)) : 0,
+      selectedHotbarIndex: Number.isFinite(parsed.player.selectedHotbarIndex)
+        ? Math.max(0, Math.min(8, Math.floor(parsed.player.selectedHotbarIndex)))
+        : 0,
+      facingX: Number.isFinite(parsed.player.facingX) ? parsed.player.facingX : 0,
+      facingY: Number.isFinite(parsed.player.facingY) ? parsed.player.facingY : 1,
+      walkCycle: Number.isFinite(parsed.player.walkCycle) ? parsed.player.walkCycle : 0,
+      swingTimer: 0,
+      swingTool: null,
+      hitFlashTimer: 0,
+    };
+
+    const rawHotbar = Array.isArray(parsed.hotbar) ? parsed.hotbar : [];
+    parsed.hotbar = Array.from({ length: 9 }, (_, i) => {
+      const candidate = rawHotbar[i];
+      return candidate && ITEMS[candidate] ? candidate : null;
+    });
+    if (!parsed.hotbar.includes('hoe')) parsed.hotbar[0] = 'hoe';
+    if (!parsed.hotbar.includes('watering_can')) parsed.hotbar[1] = 'watering_can';
+    if (!parsed.hotbar.includes('axe')) parsed.hotbar[2] = 'axe';
+
+    const cleanInventory: Partial<Record<ItemId, number>> = {};
+    if (parsed.inventory && typeof parsed.inventory === 'object') {
+      for (const [k, v] of Object.entries(parsed.inventory)) {
+        const id = k as ItemId;
+        if (ITEMS[id] && typeof v === 'number' && Number.isFinite(v) && v > 0) {
+          cleanInventory[id] = Math.floor(v);
+        }
+      }
+    }
+    cleanInventory.hoe = 1;
+    cleanInventory.watering_can = 1;
+    cleanInventory.axe = 1;
+    parsed.inventory = cleanInventory;
+
+    if (!parsed.upgrades) {
+      parsed.upgrades = { hoeLevel: 1, canLevel: 1, axeLevel: 1 };
+    }
+    if (!Array.isArray(parsed.wildlife)) parsed.wildlife = [];
     if (!Array.isArray(parsed.claimedMissions)) parsed.claimedMissions = [];
     if (!Array.isArray(parsed.chickens)) parsed.chickens = [];
     if (!Array.isArray(parsed.cows)) parsed.cows = [];
@@ -187,11 +272,42 @@ function loadSavedWorld(): GameWorldState | null {
     if (!Array.isArray(parsed.discoveredItems)) {
       parsed.discoveredItems = ['wheat_seed', 'carrot_seed'];
     }
-    parsed.xp = parsed.xp ?? 0;
-    parsed.level = parsed.level ?? 1;
-    parsed.marketSurgeCrop = parsed.marketSurgeCrop ?? rollMarketSurgeCrop(parsed.day ?? 1);
+    parsed.day = Number.isFinite(parsed.day) && parsed.day >= 1 ? Math.floor(parsed.day) : 1;
+    parsed.seasonIndex =
+      Number.isFinite(parsed.seasonIndex) && parsed.seasonIndex >= 0
+        ? Math.floor(parsed.seasonIndex) % 4
+        : 0;
+    parsed.timeMinutes = Number.isFinite(parsed.timeMinutes) ? parsed.timeMinutes : 360;
+    parsed.outcome =
+      parsed.outcome === 'exhausted' || parsed.outcome === 'restored' ? parsed.outcome : 'none';
+    parsed.xp = typeof parsed.xp === 'number' && Number.isFinite(parsed.xp) && parsed.xp >= 0 ? parsed.xp : 0;
+    parsed.level =
+      typeof parsed.level === 'number' && Number.isFinite(parsed.level) && parsed.level >= 1
+        ? parsed.level
+        : 1;
+    parsed.marketSurgeCrop = parsed.marketSurgeCrop ?? rollMarketSurgeCrop(parsed.day);
     parsed.rainbowActive = parsed.rainbowActive ?? false;
     parsed.wishedToday = parsed.wishedToday ?? false;
+    parsed.pettedAnimalsToday = Array.isArray(parsed.pettedAnimalsToday)
+      ? parsed.pettedAnimalsToday.filter((v): v is string => typeof v === 'string')
+      : [];
+    if (parsed.dailyTreasure === undefined) {
+      parsed.dailyTreasure = rollDailyNatureTreasure(
+        parsed.tiles,
+        getSeason(parsed.seasonIndex),
+        () => ((parsed.day * 37) % 100) / 100
+      );
+    } else if (
+      parsed.dailyTreasure !== null &&
+      (typeof parsed.dailyTreasure !== 'object' ||
+        !Number.isInteger(parsed.dailyTreasure.x) ||
+        !Number.isInteger(parsed.dailyTreasure.y) ||
+        (parsed.dailyTreasure.kind !== 'clover' &&
+          parsed.dailyTreasure.kind !== 'mushroom' &&
+          parsed.dailyTreasure.kind !== 'frost_bloom'))
+    ) {
+      parsed.dailyTreasure = null;
+    }
     parsed.lastFishMs = 0;
     parsed.stats = {
       daysSurvived: parsed.stats?.daysSurvived ?? 1,
@@ -222,7 +338,7 @@ function loadSavedWorld(): GameWorldState | null {
     parsed.rotationYieldProgress = parsed.rotationYieldProgress ?? 0;
     parsed.forecastWeather = parsed.forecastWeather ?? parsed.weather;
     parsed.dailyOrder =
-      parsed.dailyOrder ?? generateDailyOrder(parsed.day ?? 1, getSeason(parsed.seasonIndex ?? 0));
+      parsed.dailyOrder ?? generateDailyOrder(parsed.day, getSeason(parsed.seasonIndex));
     parsed.harvestCombo = 0;
     parsed.lastHarvestMs = 0;
     return parsed;
@@ -249,6 +365,7 @@ export default function App() {
   const [phase, setPhase] = useState<GamePhase>(autostart && !initialInviteCode ? 'playing' : 'title');
   const [hasSavedFarm, setHasSavedFarm] = useState<boolean>(() => Boolean(loadSavedWorld()));
   const [activeModal, setActiveModal] = useState<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac'>('none');
+  const [shopInitialTab, setShopInitialTab] = useState<'seeds' | 'sell' | 'upgrades'>('seeds');
   const [futureDispatch, setFutureDispatch] = useState<FutureDispatch | null>(null);
   const [muted, setMuted] = useState<boolean>(false);
   const [lang, setLang] = useState<Language>(() => getInitialLanguage());
@@ -287,6 +404,10 @@ export default function App() {
   const [roomHud, setRoomHud] = useState<RoomHudState | null>(null);
   const [chatOpen, setChatOpen] = useState<boolean>(false);
   const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
+  const [showNetDebug, setShowNetDebug] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('netdebug') === '1';
+  });
   const [voiceLocal, setVoiceLocal] = useState<{
     enabled: boolean;
     muted: boolean;
@@ -321,6 +442,7 @@ export default function App() {
   const remotePlayersRef = useRef<RemotePlayerState[]>([]);
   const remoteTargetPlayersRef = useRef<RemotePlayerState[]>([]);
   const localPlayerMetaRef = useRef<LocalPlayerRenderMeta | undefined>(undefined);
+  const activeEmotesRef = useRef<Record<string, { text: string; expiresAt: number }>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const activeRoomRef = useRef<{ code: string; playerName: string; serverUrl?: string } | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -328,6 +450,8 @@ export default function App() {
   const reconnectAttemptsRef = useRef<number>(0);
   const lastMoveSentAtRef = useRef<number>(0);
   const lastMoveWasMovingRef = useRef<boolean>(false);
+  const lastSentMoveRef = useRef<{ x: number; y: number; fx: number; fy: number; slot: number } | null>(null);
+  const roomsReqIdRef = useRef<number>(0);
   const earnedBadgesRef = useRef<Set<string>>(new Set(getEarnedBadges(worldRef.current)));
   const lastSpokenTileRef = useRef<string>('');
   const lastMoveSpeakAtRef = useRef<number>(0);
@@ -424,10 +548,28 @@ export default function App() {
     announceBlind(summary, true);
   }, [announceBlind]);
 
-  // Register PWA Service Worker for Android offline play & installability
+  // Register PWA Service Worker in production builds; clean up any stale dev SW in development
   useEffect(() => {
-    if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+    if (window.location.protocol !== 'http:' && window.location.protocol !== 'https:') return;
+    if (import.meta.env.PROD) {
       registerSW({ immediate: true });
+      return;
+    }
+    if ('serviceWorker' in navigator) {
+      void navigator.serviceWorker.getRegistrations().then((regs) => {
+        for (const reg of regs) {
+          void reg.unregister();
+        }
+      });
+    }
+    if ('caches' in window) {
+      void caches.keys().then((keys) => {
+        for (const key of keys) {
+          if (key.includes('workbox')) {
+            void caches.delete(key);
+          }
+        }
+      });
     }
   }, []);
 
@@ -570,6 +712,9 @@ export default function App() {
   );
 
   const addFloatingText = useCallback((wx: number, wy: number, text: string, color = '#fdf3dc') => {
+    if (floatingTextsRef.current.length >= 32) {
+      floatingTextsRef.current.splice(0, floatingTextsRef.current.length - 31);
+    }
     floatingTextsRef.current.push({
       id: nextFloatingIdRef.current++,
       x: wx,
@@ -618,9 +763,74 @@ export default function App() {
   const sendWs = useCallback((msg: ClientToServerMessage) => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(msg));
+      const encoded = JSON.stringify(msg);
+      ws.send(encoded);
+      netDebug.recordTx(msg.type, encoded.length, ws.bufferedAmount);
     }
   }, []);
+
+  const triggerEmote = useCallback(
+    (emote: CoopEmote) => {
+      const myId = gameModeRef.current === 'multiplayer' ? getOrCreateClientId() : '__local__';
+      activeEmotesRef.current[myId] = {
+        text: emote,
+        expiresAt: Date.now() + 2800,
+      };
+      audioEngine.playSfx(emote === '❤️' ? 'pet' : 'click');
+      if (gameModeRef.current === 'multiplayer') {
+        sendWs({ type: 'action:emote', emote });
+      }
+    },
+    [sendWs]
+  );
+
+  const sendNetPing = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    const seq = netDebug.allocatePingSeq();
+    const clientSentAt = Date.now();
+    const payload: ClientToServerMessage = { type: 'net:ping', seq, clientSentAt };
+    const encoded = JSON.stringify(payload);
+    ws.send(encoded);
+    netDebug.recordTx(payload.type, encoded.length, ws.bufferedAmount);
+    netDebug.recordPingSent(seq, clientSentAt);
+    return true;
+  }, []);
+
+  const triggerManualNetPing = useCallback(async () => {
+    sendNetPing();
+    await netDebug.probeHttp(activeRoomRef.current?.serverUrl);
+  }, [sendNetPing]);
+
+  useEffect(() => {
+    initNetDebugGlobal();
+    netDebug.setUiHandler((visible) => {
+      if (visible === 'toggle') setShowNetDebug((prev) => !prev);
+      else setShowNetDebug(visible);
+    });
+    netDebug.setManualPingHandler(triggerManualNetPing);
+    return () => {
+      netDebug.setUiHandler(null);
+      netDebug.setManualPingHandler(null);
+    };
+  }, [triggerManualNetPing]);
+
+  useEffect(() => {
+    if (gameMode !== 'multiplayer' && !showNetDebug) return;
+    if (gameMode === 'multiplayer') {
+      sendNetPing();
+    }
+    const id = window.setInterval(() => {
+      const ws = wsRef.current;
+      netDebug.syncSocketState(ws);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        sendNetPing();
+      }
+    }, 2000);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [gameMode, sendNetPing, showNetDebug]);
 
   const showVoiceNotice = useCallback((text: string) => {
     if (voiceNoticeTimerRef.current !== null) {
@@ -796,6 +1006,17 @@ export default function App() {
         return;
       }
 
+      if (fx.kind === 'emote' && fx.actorId && fx.text) {
+        activeEmotesRef.current[fx.actorId] = {
+          text: fx.text,
+          expiresAt: Date.now() + 2800,
+        };
+        if (fx.actorId !== getOrCreateClientId()) {
+          audioEngine.playSfx(fx.text === '❤️' ? 'pet' : 'click');
+        }
+        return;
+      }
+
       if (fx.kind === 'tile') {
         if (fx.actorId && fx.actorId !== getOrCreateClientId() && fx.actionKind !== 'error') {
           const rp = remotePlayersRef.current.find((p) => p.id === fx.actorId);
@@ -807,7 +1028,7 @@ export default function App() {
         const resMsg = formatFeedbackMessage(
           {
             performed: fx.actionKind !== 'error',
-            kind: (fx.actionKind as 'none' | 'error' | 'till' | 'plant' | 'water' | 'harvest' | 'clear' | 'place' | 'defend' | 'refill' | 'repair' | 'fish' | 'wish' | 'fertilize' | 'artisan') ?? 'none',
+            kind: (fx.actionKind as ActionFeedback['kind']) ?? 'none',
             message: fx.actionMessage,
             cropHarvested: fx.cropHarvested as Parameters<typeof formatFeedbackMessage>[0]['cropHarvested'],
             goldenBonus: fx.goldenBonus,
@@ -880,6 +1101,17 @@ export default function App() {
           audioEngine.playSfx('harvest');
           spawnParticleBurst(wx, wy, '#fbbf24', 12, 40);
           if (resMsg) addFloatingText(wx, wy - 10, resMsg, '#fde68a');
+        } else if (fx.actionKind === 'pet') {
+          audioEngine.playSfx(fx.actionMessage?.includes('Dog') ? 'bark' : 'pet');
+          spawnParticleBurst(wx, wy - 6, '#f472b6', 10, 34);
+          if (resMsg) addFloatingText(wx, wy - 12, resMsg, '#f9a8d4');
+          syncHud();
+        } else if (fx.actionKind === 'forage') {
+          audioEngine.playSfx('treasure');
+          spawnParticleBurst(wx, wy, '#fde047', 14, 46);
+          if (resMsg) addFloatingText(wx, wy - 12, resMsg, '#fef08a');
+          checkNewBadges();
+          syncHud();
         }
         if (fx.leveledUpTo) {
           audioEngine.playSfx('levelup');
@@ -891,57 +1123,77 @@ export default function App() {
     [addFloatingText, checkNewBadges, spawnParticleBurst, syncHud]
   );
 
-  const disconnectMultiplayer = useCallback((sendLeave = true) => {
-    if (reconnectTimerRef.current !== null) {
-      window.clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
-    if (connectTimeoutRef.current !== null) {
-      window.clearTimeout(connectTimeoutRef.current);
-      connectTimeoutRef.current = null;
-    }
-    reconnectAttemptsRef.current = 0;
-    activeRoomRef.current = null;
-    const ws = wsRef.current;
-    wsRef.current = null;
-    if (ws) {
-      if (sendLeave && ws.readyState === WebSocket.OPEN) {
-        try {
-          ws.send(JSON.stringify({ type: 'room:leave' }));
-        } catch {
-          // Ignore
-        }
+  const disconnectMultiplayer = useCallback(
+    (sendLeave = true, restoreSingleplayer = false) => {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
       }
-      ws.onopen = null;
-      ws.onclose = null;
-      ws.onerror = null;
-      ws.onmessage = null;
-      ws.close();
-    }
-    voiceManagerRef.current?.leave();
-    voiceStatesRef.current = {};
-    if (voiceNoticeTimerRef.current !== null) {
-      window.clearTimeout(voiceNoticeTimerRef.current);
-      voiceNoticeTimerRef.current = null;
-    }
-    setVoiceLocal({
-      enabled: false,
-      muted: false,
-      speaking: false,
-      deafened: false,
-      hasMic: false,
-      notice: null,
-      locallyMutedPeers: [],
-    });
-    remotePlayersRef.current = [];
-    remoteTargetPlayersRef.current = [];
-    localPlayerMetaRef.current = undefined;
-    setRoomHud(null);
-    setChatOpen(false);
-    setUnreadChatCount(0);
-    gameModeRef.current = 'singleplayer';
-    setGameMode('singleplayer');
-  }, []);
+      if (connectTimeoutRef.current !== null) {
+        window.clearTimeout(connectTimeoutRef.current);
+        connectTimeoutRef.current = null;
+      }
+      reconnectAttemptsRef.current = 0;
+      activeRoomRef.current = null;
+      lastSentMoveRef.current = null;
+      lastMoveWasMovingRef.current = false;
+      const ws = wsRef.current;
+      wsRef.current = null;
+      if (ws) {
+        if (sendLeave && ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({ type: 'room:leave' }));
+          } catch {
+            // Ignore
+          }
+        }
+        ws.onopen = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        ws.close();
+      }
+      netDebug.recordDisconnected();
+      voiceManagerRef.current?.leave();
+      voiceStatesRef.current = {};
+      if (voiceNoticeTimerRef.current !== null) {
+        window.clearTimeout(voiceNoticeTimerRef.current);
+        voiceNoticeTimerRef.current = null;
+      }
+      setVoiceLocal({
+        enabled: false,
+        muted: false,
+        speaking: false,
+        deafened: false,
+        hasMic: false,
+        notice: null,
+        locallyMutedPeers: [],
+      });
+      remotePlayersRef.current = [];
+      remoteTargetPlayersRef.current = [];
+      localPlayerMetaRef.current = undefined;
+      activeEmotesRef.current = {};
+      setRoomHud(null);
+      setChatOpen(false);
+      setUnreadChatCount(0);
+      gameModeRef.current = 'singleplayer';
+      setGameMode('singleplayer');
+      if (restoreSingleplayer) {
+        const saved = loadSavedWorld();
+        const singleWorld = saved ?? createInitialFarmState(42);
+        setHasSavedFarm(Boolean(saved));
+        worldRef.current = singleWorld;
+        earnedBadgesRef.current = new Set(getEarnedBadges(singleWorld));
+        cameraRef.current.x = singleWorld.player.x * TILE_SIZE;
+        cameraRef.current.y = singleWorld.player.y * TILE_SIZE;
+        floatingTextsRef.current = [];
+        setMorningSummary(null);
+        setFutureDispatch(null);
+        syncHud();
+      }
+    },
+    [syncHud]
+  );
 
   const connectAndSendRoomAction = useCallback(
     (
@@ -968,15 +1220,19 @@ export default function App() {
       setRoomsError(null);
 
       let ws: WebSocket;
+      const wsUrl = resolveWebSocketUrl(opts?.serverUrl);
+      const httpBase = resolveHttpApiBase(opts?.serverUrl);
+      netDebug.setEndpoint(wsUrl, httpBase);
       try {
-        const wsUrl = resolveWebSocketUrl(opts?.serverUrl);
         ws = new WebSocket(wsUrl);
       } catch {
+        netDebug.recordClosed(undefined, 'WebSocket constructor failed');
         setRoomsLoading(false);
         setRoomsError(UI_TEXT[langRef.current].roomErrorConnect);
         return;
       }
       wsRef.current = ws;
+      netDebug.recordConnecting(ws, Boolean(opts?.roomContext && reconnectAttemptsRef.current > 0));
 
       connectTimeoutRef.current = window.setTimeout(() => {
         if (ws.readyState === WebSocket.CONNECTING) {
@@ -986,9 +1242,10 @@ export default function App() {
           if (!activeRoomRef.current) {
             setRoomsError(UI_TEXT[langRef.current].roomErrorTimeout);
           } else if (reconnectAttemptsRef.current >= 5) {
-            disconnectMultiplayer(false);
+            disconnectMultiplayer(false, true);
             setActiveModal('none');
             setPhase('title');
+            audioEngine.pauseAmbientMusic();
             setShowRoomsModal(true);
             setRoomsError(UI_TEXT[langRef.current].roomErrorClosed);
           }
@@ -1061,14 +1318,24 @@ export default function App() {
           connectTimeoutRef.current = null;
         }
         reconnectAttemptsRef.current = 0;
-        ws.send(JSON.stringify(initialMsg));
+        netDebug.recordConnected(ws);
+        const encoded = JSON.stringify(initialMsg);
+        ws.send(encoded);
+        netDebug.recordTx(initialMsg.type, encoded.length, ws.bufferedAmount);
       };
 
       ws.onmessage = (event) => {
+        const rawText = String(event.data);
         let msg: ServerToClientMessage;
         try {
-          msg = JSON.parse(String(event.data)) as ServerToClientMessage;
+          msg = JSON.parse(rawText) as ServerToClientMessage;
         } catch {
+          return;
+        }
+        netDebug.recordRx(msg.type, rawText.length, ws.bufferedAmount);
+
+        if (msg.type === 'net:pong') {
+          netDebug.recordPong(msg.seq, msg.clientSentAt, msg.serverTime);
           return;
         }
 
@@ -1091,7 +1358,7 @@ export default function App() {
               ? t.roomErrorFull
               : msg.message;
           if (wasInRoom) {
-            disconnectMultiplayer(false);
+            disconnectMultiplayer(false, true);
             setActiveModal('none');
             setPhase('title');
             audioEngine.pauseAmbientMusic();
@@ -1102,10 +1369,13 @@ export default function App() {
         }
 
         if (msg.type === 'room:joined') {
+          netDebug.resetRoomSyncTracking();
           setRoomsLoading(false);
           setRoomsError(null);
           setShowRoomsModal(false);
           reconnectAttemptsRef.current = 0;
+          lastSentMoveRef.current = null;
+          lastMoveWasMovingRef.current = false;
           gameModeRef.current = 'multiplayer';
           setGameMode('multiplayer');
           activeRoomRef.current = {
@@ -1177,6 +1447,7 @@ export default function App() {
         }
 
         if (msg.type === 'tick:entities') {
+          netDebug.recordTickEntities(msg.seq);
           const myId = getOrCreateClientId();
           const world = worldRef.current;
           world.timeMinutes = msg.timeMinutes;
@@ -1306,14 +1577,15 @@ export default function App() {
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (closeEvent) => {
+        netDebug.recordClosed(closeEvent.code, closeEvent.reason);
         if (connectTimeoutRef.current !== null) {
           window.clearTimeout(connectTimeoutRef.current);
           connectTimeoutRef.current = null;
         }
         if (gameModeRef.current === 'multiplayer' && activeRoomRef.current) {
           if (reconnectAttemptsRef.current >= 5) {
-            disconnectMultiplayer(false);
+            disconnectMultiplayer(false, true);
             setActiveModal('none');
             setPhase('title');
             audioEngine.pauseAmbientMusic();
@@ -1344,23 +1616,29 @@ export default function App() {
   );
 
   const refreshPublicRooms = useCallback(async (serverUrl?: string, silent = false) => {
+    const reqId = ++roomsReqIdRef.current;
     if (!silent) {
       setRoomsLoading(true);
       setRoomsError(null);
     }
+    const controller = new AbortController();
+    const abortTimer = window.setTimeout(() => controller.abort(), 8000);
     try {
       const base = resolveHttpApiBase(serverUrl);
-      const res = await fetch(`${base}/api/rooms`);
+      const res = await fetch(`${base}/api/rooms`, { signal: controller.signal });
       if (!res.ok) throw new Error('Failed to load rooms');
       const data = (await res.json()) as { rooms?: RoomSummary[] };
+      if (reqId !== roomsReqIdRef.current) return;
       setPublicRooms(Array.isArray(data.rooms) ? data.rooms : []);
       if (silent) setRoomsError(null);
     } catch {
+      if (reqId !== roomsReqIdRef.current) return;
       if (!silent) {
         setRoomsError(UI_TEXT[langRef.current].roomErrorConnect);
       }
     } finally {
-      if (!silent) {
+      window.clearTimeout(abortTimer);
+      if (reqId === roomsReqIdRef.current && !silent) {
         setRoomsLoading(false);
       }
     }
@@ -1444,7 +1722,7 @@ export default function App() {
   }, [announceBlind, disconnectMultiplayer, requestOptimalDisplay, saveFarm, syncHud]);
 
   const continueFarm = useCallback(() => {
-    disconnectMultiplayer(false);
+    disconnectMultiplayer(false, false);
     const isMobile =
       window.matchMedia('(pointer: coarse)').matches ||
       navigator.maxTouchPoints > 0 ||
@@ -1454,11 +1732,28 @@ export default function App() {
     const saved = loadSavedWorld();
     if (saved) {
       worldRef.current = saved;
+      earnedBadgesRef.current = new Set(getEarnedBadges(saved));
       cameraRef.current.x = saved.player.x * TILE_SIZE;
       cameraRef.current.y = saved.player.y * TILE_SIZE;
+    } else {
+      const fresh = createInitialFarmState(42);
+      worldRef.current = fresh;
+      earnedBadgesRef.current = new Set(getEarnedBadges(fresh));
+      cameraRef.current.x = fresh.player.x * TILE_SIZE;
+      cameraRef.current.y = fresh.player.y * TILE_SIZE;
     }
+    floatingTextsRef.current = [];
+    setMorningSummary(null);
+    setFutureDispatch(null);
     keysPressedRef.current.clear();
     setActiveModal('none');
+    if (worldRef.current.outcome === 'exhausted' || worldRef.current.player.health <= 0) {
+      worldRef.current.outcome = 'exhausted';
+      setPhase('gameover');
+      audioEngine.pauseAmbientMusic();
+      syncHud();
+      return;
+    }
     setPhase('playing');
     audioEngine.playSfx('click');
     audioEngine.startAmbientMusic();
@@ -1476,6 +1771,7 @@ export default function App() {
     }
     if (isNearShopStall(world)) {
       audioEngine.playSfx('click');
+      setShopInitialTab('seeds');
       setActiveModal('shop');
       if (blindModeRef.current) {
         announceBlind(UI_TEXT[langRef.current].shopTitle, true);
@@ -1509,17 +1805,19 @@ export default function App() {
           true
         );
       }
+      saveFarm();
       syncHud();
       return;
     }
     if (isNearShippingBin(world)) {
       audioEngine.playSfx('click');
+      setShopInitialTab('sell');
       setActiveModal('shop');
       if (blindModeRef.current) {
         announceBlind(UI_TEXT[langRef.current].shopTitle, true);
       }
     }
-  }, [addFloatingText, announceBlind, sendWs, spawnParticleBurst, syncHud, triggerSleep]);
+  }, [addFloatingText, announceBlind, saveFarm, sendWs, spawnParticleBurst, syncHud, triggerSleep]);
 
   const handleTileClickAction = useCallback(
     (tx: number, ty: number) => {
@@ -1546,6 +1844,7 @@ export default function App() {
         isNearShopStall(world)
       ) {
         audioEngine.playSfx('click');
+        setShopInitialTab('seeds');
         setActiveModal('shop');
         return;
       }
@@ -1677,6 +1976,20 @@ export default function App() {
           if (blindModeRef.current && feedbackText) {
             announceBlind(feedbackText, true);
           }
+        } else if (res.kind === 'pet') {
+          audioEngine.playSfx(res.wishOutcome === 'dog' ? 'bark' : 'pet');
+          spawnParticleBurst(wx, wy - 6, '#f472b6', 10, 34);
+          if (feedbackText) addFloatingText(wx, wy - 12, feedbackText, '#f9a8d4');
+          if (blindModeRef.current && feedbackText) {
+            announceBlind(feedbackText, true);
+          }
+        } else if (res.kind === 'forage') {
+          audioEngine.playSfx('treasure');
+          spawnParticleBurst(wx, wy, '#fde047', 14, 46);
+          if (feedbackText) addFloatingText(wx, wy - 12, feedbackText, '#fef08a');
+          if (blindModeRef.current && feedbackText) {
+            announceBlind(feedbackText, true);
+          }
         }
 
         if (res.leveledUpTo) {
@@ -1699,6 +2012,7 @@ export default function App() {
           }
         }
         checkNewBadges();
+        saveFarm();
         syncHud();
       } else if (res.kind === 'error' && feedbackText) {
         audioEngine.playSfx('error');
@@ -1708,7 +2022,7 @@ export default function App() {
         }
       }
     },
-    [addFloatingText, announceBlind, checkNewBadges, spawnParticleBurst, syncHud, triggerSleep]
+    [addFloatingText, announceBlind, checkNewBadges, saveFarm, spawnParticleBurst, syncHud, triggerSleep]
   );
 
   // Keyboard Listeners (WASD/Arrows, 1-9, E, B, C, M, Esc/P) + Blur Hygiene
@@ -1724,9 +2038,25 @@ export default function App() {
       if (e.repeat) return;
       const key = e.key.toLowerCase();
 
+      if (e.key === 'F9' || ((e.ctrlKey || e.metaKey) && e.shiftKey && key === 'd')) {
+        e.preventDefault();
+        setShowNetDebug((prev) => !prev);
+        return;
+      }
+
       if (key === 'v') {
         e.preventDefault();
-        toggleBlindMode();
+        if (
+          !e.shiftKey &&
+          phaseRef.current === 'playing' &&
+          gameModeRef.current === 'multiplayer' &&
+          modalRef.current === 'none' &&
+          !futureOpenRef.current
+        ) {
+          void handleJoinOrToggleVoiceMic();
+        } else {
+          toggleBlindMode();
+        }
         return;
       }
 
@@ -1783,12 +2113,6 @@ export default function App() {
         return;
       }
 
-      if (key === 'v' && gameModeRef.current === 'multiplayer' && modalRef.current === 'none') {
-        e.preventDefault();
-        void handleJoinOrToggleVoiceMic();
-        return;
-      }
-
       if (key === 'm') {
         const nextMuted = !audioEngine.isMuted();
         audioEngine.setMuted(nextMuted);
@@ -1799,6 +2123,7 @@ export default function App() {
       if (key === 'b') {
         e.preventDefault();
         audioEngine.playSfx('click');
+        setShopInitialTab('seeds');
         setActiveModal((prev) => {
           const next = prev === 'shop' ? 'none' : 'shop';
           if (blindModeRef.current && next === 'shop') {
@@ -1881,6 +2206,18 @@ export default function App() {
         return;
       }
 
+      if (key === 'h') {
+        e.preventDefault();
+        triggerEmote('👋');
+        return;
+      }
+
+      if (key === 'k') {
+        e.preventDefault();
+        triggerEmote('❤️');
+        return;
+      }
+
       if (key >= '1' && key <= '9') {
         const idx = parseInt(key, 10) - 1;
         worldRef.current.player.selectedHotbarIndex = idx;
@@ -1957,7 +2294,32 @@ export default function App() {
     startNewFarm,
     syncHud,
     toggleBlindMode,
+    triggerEmote,
   ]);
+
+  // Persist singleplayer farm on tab background/unload & clean up sockets/audio on unmount
+  useEffect(() => {
+    const persistIfPlaying = () => {
+      if (gameModeRef.current === 'singleplayer' && phaseRef.current !== 'title') {
+        saveFarm();
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        persistIfPlaying();
+      }
+    };
+    window.addEventListener('beforeunload', persistIfPlaying);
+    window.addEventListener('pagehide', persistIfPlaying);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('beforeunload', persistIfPlaying);
+      window.removeEventListener('pagehide', persistIfPlaying);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      disconnectMultiplayer(true, false);
+      audioEngine.dispose();
+    };
+  }, [disconnectMultiplayer, saveFarm]);
 
   // Decoupled Canvas Setup + Live ResizeObserver + 60Hz Game Loop
   useEffect(() => {
@@ -1969,8 +2331,10 @@ export default function App() {
       const rect = container.getBoundingClientRect();
       canvas.width = Math.max(1, Math.floor(rect.width));
       canvas.height = Math.max(1, Math.floor(rect.height));
-      // Scale zoom cleanly to viewport width
-      const baseZoom = rect.width < 640 ? 1.55 : rect.width < 1100 ? 1.85 : 2.15;
+      // Scale zoom cleanly across portrait, landscape phone, tablet, and desktop viewports
+      const widthZoom = rect.width < 640 ? 1.55 : rect.width < 1100 ? 1.85 : 2.15;
+      const heightZoom = rect.height / (9.5 * TILE_SIZE);
+      const baseZoom = Math.max(1.05, Math.min(widthZoom, heightZoom));
       cameraRef.current.zoom = baseZoom;
     };
 
@@ -2050,6 +2414,7 @@ export default function App() {
             world.player.health = Math.max(0, world.player.health - 20);
             if (world.player.health <= 0) {
               world.outcome = 'exhausted';
+              saveFarm();
               setPhase('gameover');
               audioEngine.pauseAmbientMusic();
             } else {
@@ -2145,20 +2510,39 @@ export default function App() {
           }
         }
 
-        // Sync local movement to multiplayer room at ~20Hz
+        // Sync local movement to multiplayer room (throttled ~11Hz + quantized + delta check)
         if (gameModeRef.current === 'multiplayer') {
           const isMoving = mx !== 0 || my !== 0;
-          if ((isMoving && now - lastMoveSentAtRef.current >= 50) || (!isMoving && lastMoveWasMovingRef.current)) {
+          const qx = Math.round(world.player.x * 100) / 100;
+          const qy = Math.round(world.player.y * 100) / 100;
+          const qfx = Math.round(world.player.facingX * 100) / 100;
+          const qfy = Math.round(world.player.facingY * 100) / 100;
+          const qwc = Math.round(world.player.walkCycle * 10) / 10;
+          const slotIdx = world.player.selectedHotbarIndex;
+          const last = lastSentMoveRef.current;
+          const movedEnough =
+            !last ||
+            Math.abs(qx - last.x) > 0.01 ||
+            Math.abs(qy - last.y) > 0.01 ||
+            qfx !== last.fx ||
+            qfy !== last.fy;
+          const slotChanged = Boolean(last && slotIdx !== last.slot);
+          if (
+            (isMoving && movedEnough && now - lastMoveSentAtRef.current >= 90) ||
+            (!isMoving && lastMoveWasMovingRef.current) ||
+            slotChanged
+          ) {
             lastMoveSentAtRef.current = now;
             lastMoveWasMovingRef.current = isMoving;
+            lastSentMoveRef.current = { x: qx, y: qy, fx: qfx, fy: qfy, slot: slotIdx };
             sendWs({
               type: 'player:move',
-              x: world.player.x,
-              y: world.player.y,
-              facingX: world.player.facingX,
-              facingY: world.player.facingY,
-              walkCycle: world.player.walkCycle,
-              selectedHotbarIndex: world.player.selectedHotbarIndex,
+              x: qx,
+              y: qy,
+              facingX: qfx,
+              facingY: qfy,
+              walkCycle: qwc,
+              selectedHotbarIndex: slotIdx,
             });
           }
         }
@@ -2210,6 +2594,7 @@ export default function App() {
               }
               if (world.player.health <= 0) {
                 world.outcome = 'exhausted';
+                saveFarm();
                 setPhase('gameover');
                 audioEngine.pauseAmbientMusic();
               }
@@ -2253,6 +2638,18 @@ export default function App() {
         const targetCamY = world.player.y * TILE_SIZE;
         cameraRef.current.x += (targetCamX - cameraRef.current.x) * Math.min(1, dt * 8);
         cameraRef.current.y += (targetCamY - cameraRef.current.y) * Math.min(1, dt * 8);
+
+        // 6. Periodic nocturnal wildlife ambient cues (subtle rustling & owl hoots) during Night phase
+        const isNightPhase = getTimePhase(world.timeMinutes) === 'Night';
+        let activeWildlifeCount = 0;
+        if (isNightPhase) {
+          for (const w of world.wildlife) {
+            if (w.state !== 'ko') activeWildlifeCount += 1;
+          }
+        }
+        audioEngine.setNightAmbience(isNightPhase, activeWildlifeCount);
+      } else {
+        audioEngine.setNightAmbience(false, 0);
       }
 
       // Update camera shake
@@ -2295,6 +2692,22 @@ export default function App() {
         const ctx = canvas.getContext('2d');
         if (ctx) {
           const rect = container.getBoundingClientRect();
+          const nowMs = Date.now();
+          let activeEmotesMap: Record<string, string> | undefined;
+          let localEmote: string | undefined;
+          const myEmoteId = gameModeRef.current === 'multiplayer' ? getOrCreateClientId() : '__local__';
+          for (const [id, entry] of Object.entries(activeEmotesRef.current)) {
+            if (entry.expiresAt <= nowMs) {
+              delete activeEmotesRef.current[id];
+              continue;
+            }
+            if (id === myEmoteId) {
+              localEmote = entry.text;
+            } else {
+              if (!activeEmotesMap) activeEmotesMap = {};
+              activeEmotesMap[id] = entry.text;
+            }
+          }
           renderGameWorld(
             ctx,
             rect.width,
@@ -2308,7 +2721,9 @@ export default function App() {
             currentPhase === 'title',
             gameModeRef.current === 'multiplayer' ? remotePlayersRef.current : [],
             gameModeRef.current === 'multiplayer' ? localPlayerMetaRef.current : undefined,
-            gameModeRef.current === 'multiplayer' ? voiceStatesRef.current : undefined
+            gameModeRef.current === 'multiplayer' ? voiceStatesRef.current : undefined,
+            activeEmotesMap,
+            localEmote
           );
         }
       }
@@ -2358,7 +2773,7 @@ export default function App() {
       cancelAnimationFrame(rafId);
       ro.disconnect();
     };
-  }, [addFloatingText, announceBlind, sendWs, spawnParticleBurst, syncHud, triggerSleep]);
+  }, [addFloatingText, announceBlind, saveFarm, sendWs, spawnParticleBurst, syncHud, triggerSleep]);
 
   const screenToTile = (clientX: number, clientY: number): { x: number; y: number } | null => {
     const container = containerRef.current;
@@ -2492,6 +2907,7 @@ export default function App() {
             })
           }
           onSendChat={(text) => sendWs({ type: 'action:chat', text })}
+          onSendEmote={triggerEmote}
           onToggleSleepVote={triggerSleep}
           onJoinOrToggleVoiceMic={() => void handleJoinOrToggleVoiceMic()}
           onLeaveVoice={handleLeaveVoice}
@@ -2499,7 +2915,7 @@ export default function App() {
           onTogglePeerVoiceMute={handleTogglePeerVoiceMute}
           onDismissVoiceNotice={() => setVoiceLocal((prev) => ({ ...prev, notice: null }))}
           onLeaveRoom={() => {
-            disconnectMultiplayer(true);
+            disconnectMultiplayer(true, true);
             setActiveModal('none');
             setPhase('title');
             audioEngine.pauseAmbientMusic();
@@ -2523,6 +2939,7 @@ export default function App() {
           }}
           onOpenShop={() => {
             audioEngine.playSfx('click');
+            setShopInitialTab('seeds');
             setActiveModal((prev) => (prev === 'shop' ? 'none' : 'shop'));
           }}
           onOpenCraft={() => {
@@ -2630,6 +3047,7 @@ export default function App() {
       {phase === 'playing' && activeModal === 'shop' && (
         <ShopModal
           lang={lang}
+          initialTab={shopInitialTab}
           gold={hud.gold}
           season={hud.season}
           inventory={hud.inventory}
@@ -2675,6 +3093,7 @@ export default function App() {
             }
             const res = buyShopItem(worldRef.current, id, qty);
             audioEngine.playSfx(res.ok ? 'coin' : 'error');
+            if (res.ok) saveFarm();
             syncHud();
           }}
           onSellItem={(id: ItemId, qty: number) => {
@@ -2684,6 +3103,7 @@ export default function App() {
             }
             const res = sellCropItem(worldRef.current, id, qty);
             audioEngine.playSfx(res.ok ? 'coin' : 'error');
+            if (res.ok) saveFarm();
             syncHud();
           }}
           onUpgradeTool={(tool: ToolType) => {
@@ -2693,6 +3113,7 @@ export default function App() {
             }
             const res = upgradeTool(worldRef.current, tool);
             audioEngine.playSfx(res.ok ? 'harvest' : 'error');
+            if (res.ok) saveFarm();
             syncHud();
           }}
           onBuyChicken={() => {
@@ -2755,6 +3176,7 @@ export default function App() {
             }
             const res = craftItem(worldRef.current, id);
             audioEngine.playSfx(res.ok ? 'place' : 'error');
+            if (res.ok) saveFarm();
             syncHud();
           }}
           onEatCrop={(id: ItemId) => {
@@ -2764,6 +3186,7 @@ export default function App() {
             }
             const res = eatCrop(worldRef.current, id);
             audioEngine.playSfx(res.ok ? 'harvest' : 'error');
+            if (res.ok) saveFarm();
             syncHud();
           }}
           onAssignHotbar={(id: ItemId, slotIdx: number) => {
@@ -2777,6 +3200,7 @@ export default function App() {
             world.hotbar[slotIdx] = id;
             world.player.selectedHotbarIndex = slotIdx;
             audioEngine.playSfx('click');
+            saveFarm();
             syncHud();
           }}
           onClose={() => {
@@ -2845,6 +3269,7 @@ export default function App() {
             if (worldRef.current.outcome === 'restored') {
               worldRef.current.restorationVictoryDismissed = true;
               worldRef.current.outcome = 'none';
+              saveFarm();
             }
             keysPressedRef.current.clear();
             setPhase('playing');
@@ -2854,13 +3279,23 @@ export default function App() {
           isMultiplayer={gameMode === 'multiplayer'}
           onReturnTitle={() => {
             if (gameModeRef.current === 'multiplayer') {
-              disconnectMultiplayer(true);
+              disconnectMultiplayer(true, true);
             } else {
               saveFarm();
             }
             setActiveModal('none');
             setPhase('title');
             audioEngine.pauseAmbientMusic();
+          }}
+        />
+      )}
+
+      {showNetDebug && (
+        <NetDebugPanel
+          onClose={() => setShowNetDebug(false)}
+          onPingNow={triggerManualNetPing}
+          onProbeHttp={async () => {
+            await netDebug.probeHttp(activeRoomRef.current?.serverUrl);
           }}
         />
       )}

@@ -37,38 +37,38 @@ export function AlmanacModal({ world, lang, onClose }: AlmanacModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-30 flex items-center justify-center p-4 bg-black/55"
+      className="fixed inset-0 z-30 flex items-center justify-center safe-area-modal bg-black/55"
       role="dialog"
       aria-modal="true"
       aria-label={t.almanacTitle}
       dir={lang === 'ar' ? 'rtl' : 'ltr'}
     >
-      <div className="parchment-panel rounded-xl w-full max-w-2xl max-h-[86vh] flex flex-col overflow-hidden">
+      <div className="parchment-panel rounded-xl w-full max-w-2xl max-h-[92dvh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b-2 border-[#c9b086] bg-[#ebd8b5]">
-          <div className="flex items-center gap-2.5">
+        <div className="flex items-center justify-between gap-2 px-4 sm:px-5 py-3 sm:py-3.5 border-b-2 border-[#c9b086] bg-[#ebd8b5] shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-9 h-9 rounded-lg bg-[#5c4028] text-[#fdf3dc] flex items-center justify-center border border-[#382515] shrink-0">
               <BookOpen className="w-5 h-5" />
             </div>
-            <div>
-              <h2 className="font-display text-xl sm:text-2xl font-bold text-[#2c1e14]">
+            <div className="min-w-0">
+              <h2 className="font-display text-lg sm:text-2xl font-bold text-[#2c1e14] truncate">
                 {t.almanacTitle}
               </h2>
-              <p className="text-xs text-[#694d36]">{t.almanacSub}</p>
+              <p className="text-xs text-[#694d36] truncate">{t.almanacSub}</p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label={lang === 'ar' ? 'إغلاق الموسوعة' : 'Close Almanac'}
-            className="wood-button p-1.5 rounded cursor-pointer"
+            className="wood-button p-1.5 rounded cursor-pointer shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Farmer Level & Daily Market Surge Summary */}
-        <div className="px-5 pt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="px-4 sm:px-5 pt-3 sm:pt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 shrink-0">
           <div
             data-testid="almanac-level-card"
             className="p-3 rounded-lg bg-[#fbf2e1] border border-[#d6be96] space-y-1.5"
@@ -111,7 +111,7 @@ export function AlmanacModal({ world, lang, onClose }: AlmanacModalProps) {
         </div>
 
         {/* Tabs */}
-        <div className="flex items-center gap-2 px-5 pt-3 pb-2 border-b border-[#d9c39c] overflow-x-auto">
+        <div className="flex items-center gap-2 px-4 sm:px-5 pt-2.5 sm:pt-3 pb-2 border-b border-[#d9c39c] overflow-x-auto shrink-0">
           <button
             type="button"
             onClick={() => setTab('crops')}
@@ -137,7 +137,7 @@ export function AlmanacModal({ world, lang, onClose }: AlmanacModalProps) {
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-5">
+        <div className="flex-1 overflow-y-auto modal-scroll p-4 sm:p-5">
           {tab === 'crops' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               {cropList.map((cropId) => {
