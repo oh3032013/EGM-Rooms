@@ -1,4 +1,6 @@
+import { createHash } from 'crypto';
 import express from 'express';
+import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -46,6 +48,16 @@ import {
   upgradeTool,
 } from '../game/rules.ts';
 import type { GameWorldState, ItemId, ToolType } from '../game/types.ts';
+import {
+  APP_VERSION,
+  parsePatchManifest,
+  sanitizePatchFilePath,
+  sanitizeUpdateUrl,
+  type PatchFileEntry,
+  type PatchManifest,
+  type UpdateMode,
+  type VersionManifest,
+} from '../game/version.ts';
 
 interface RoomClient extends RemotePlayerState {
   clientId: string;
@@ -69,7 +81,8 @@ interface ServerRoom {
   wildlifeSpawnTimer: number;
   lastTickMs: number;
   emptySinceMs: number | null;
-  dirtyEntities: boolean;
+  dirtyActiveEntities: boolean;
+  dirtyPassiveEntities: boolean;
   lastEntityBroadcastMs: number;
   tickSeq: number;
 }
@@ -78,10 +91,12 @@ const MAX_ROOMS = 200;
 const DISCONNECTED_PLAYER_TTL_MS = 300_000;
 const EMPTY_ROOM_TTL_MS = 60_000;
 const ACTIVE_BROADCAST_INTERVAL_MS = 120;
+const PASSIVE_ANIMAL_BROADCAST_INTERVAL_MS = 240;
 const IDLE_CLOCK_SYNC_INTERVAL_MS = 1000;
 
 export interface MultiplayerServerOptions {
   serveStaticDist?: boolean;
+  distDir?: string;
 }
 
 export interface MultiplayerServerHandle {
@@ -95,10 +110,108 @@ export function createMultiplayerServer(
   options: MultiplayerServerOptions = {}
 ): MultiplayerServerHandle {
   const rooms = new Map<string, ServerRoom>();
+  let cachedPublicRoomsJson: string | null = null;
   const socketMeta = new Map<
     WebSocket,
     { roomCode: string | null; playerId: string | null; msgWindowStart: number; msgCount: number }
   >();
+
+  const distDir = path.resolve(options.distDir || path.join(process.cwd(), 'dist'));
+
+  const rawUpdateMode = (process.env.ECOGROW_UPDATE_MODE || 'auto').trim();
+  const updateMode: UpdateMode =
+    rawUpdateMode === 'server_only' || rawUpdateMode === 'delta_files' ? rawUpdateMode : 'auto';
+  const serverRevision = (process.env.ECOGROW_SERVER_REVISION || '1').trim() || '1';
+  const minServerRevision = (process.env.ECOGROW_MIN_SERVER_REVISION || '1').trim() || '1';
+  const rawMultiplayerUrl = (process.env.ECOGROW_MULTIPLAYER_URL || '').trim();
+  const multiplayerUrl = rawMultiplayerUrl ? sanitizeUpdateUrl(rawMultiplayerUrl) : '';
+  const rawVersionFeedUrl = (process.env.ECOGROW_VERSION_FEED_URL || '').trim();
+  const sanitizedVersionFeedUrl = rawVersionFeedUrl ? sanitizeUpdateUrl(rawVersionFeedUrl) : '';
+  const versionFeedUrl =
+    sanitizedVersionFeedUrl &&
+    (sanitizedVersionFeedUrl.startsWith('https://') ||
+      sanitizedVersionFeedUrl.startsWith('http://'))
+      ? sanitizedVersionFeedUrl
+      : '';
+
+  const versionManifest: VersionManifest = {
+    latest_version: (process.env.ECOGROW_LATEST_VERSION || APP_VERSION).trim() || APP_VERSION,
+    min_supported_version:
+      (process.env.ECOGROW_MIN_SUPPORTED_VERSION || APP_VERSION).trim() || APP_VERSION,
+    server_revision: serverRevision,
+    min_server_revision: minServerRevision,
+    update_mode: updateMode,
+    multiplayer_url: multiplayerUrl,
+    ...(versionFeedUrl ? { version_feed_url: versionFeedUrl } : {}),
+    patch_manifest_url: '/api/patch-manifest',
+    update_url: sanitizeUpdateUrl(process.env.ECOGROW_UPDATE_URL || './'),
+    message_ar:
+      (
+        process.env.ECOGROW_UPDATE_MESSAGE_AR ||
+        'يتوفر إصدار جديد مطلوب من EcoGrow Mission يتضمن تحسينات واستقراراً أفضل. يرجى التحديث للمتابعة.'
+      )
+        .trim()
+        .slice(0, 400),
+    message_en:
+      (
+        process.env.ECOGROW_UPDATE_MESSAGE_EN ||
+        'A required EcoGrow Mission update is available with stability improvements. Please update to continue.'
+      )
+        .trim()
+        .slice(0, 400),
+  };
+  const versionManifestJson = JSON.stringify(versionManifest);
+  const versionEtag = `"${createHash('sha1').update(versionManifestJson).digest('base64url').slice(0, 16)}"`;
+
+  function scanDistFilesForManifest(rootDir: string, curDir = rootDir): PatchFileEntry[] {
+    const out: PatchFileEntry[] = [];
+    if (!fs.existsSync(curDir)) return out;
+    for (const item of fs.readdirSync(curDir, { withFileTypes: true })) {
+      const full = path.join(curDir, item.name);
+      if (item.isDirectory()) {
+        out.push(...scanDistFilesForManifest(rootDir, full));
+      } else if (item.isFile()) {
+        const rel = path.relative(rootDir, full).replace(/\\/g, '/');
+        if (rel === 'patch-manifest.json' || rel === 'version.json' || rel.endsWith('.map')) continue;
+        const safe = sanitizePatchFilePath(rel);
+        if (!safe) continue;
+        const buf = fs.readFileSync(full);
+        out.push({
+          path: safe,
+          sha256: createHash('sha256').update(buf).digest('hex'),
+          size: buf.length,
+        });
+      }
+    }
+    return out.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  function loadOrBuildPatchManifest(): PatchManifest {
+    const builtPath = path.join(distDir, 'patch-manifest.json');
+    if (fs.existsSync(builtPath)) {
+      try {
+        const parsed = parsePatchManifest(JSON.parse(fs.readFileSync(builtPath, 'utf8')));
+        if (parsed) {
+          return { ...parsed, server_revision: serverRevision };
+        }
+      } catch {
+        // Fall through to live scan
+      }
+    }
+    return {
+      version: versionManifest.latest_version,
+      server_revision: serverRevision,
+      files: scanDistFilesForManifest(distDir),
+    };
+  }
+
+  const patchManifest = loadOrBuildPatchManifest();
+  const patchManifestJson = JSON.stringify(patchManifest);
+  const patchManifestEtag = `"${createHash('sha1').update(patchManifestJson).digest('base64url').slice(0, 16)}"`;
+
+  function invalidateRoomsCache(): void {
+    cachedPublicRoomsJson = null;
+  }
 
   function generateRoomCode(): string {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -173,6 +286,13 @@ export function createMultiplayerServer(
     return list;
   }
 
+  function getPublicRoomsJson(): string {
+    if (cachedPublicRoomsJson === null) {
+      cachedPublicRoomsJson = JSON.stringify({ rooms: getPublicRoomSummaries() });
+    }
+    return cachedPublicRoomsJson;
+  }
+
   function sendToClient(ws: WebSocket | null, payload: ServerToClientMessage): void {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     try {
@@ -200,6 +320,7 @@ export function createMultiplayerServer(
   }
 
   function broadcastRoomsListToLobby(): void {
+    invalidateRoomsCache();
     const roomsList = getPublicRoomSummaries();
     const payload = JSON.stringify({
       type: 'rooms:list',
@@ -294,7 +415,8 @@ export function createMultiplayerServer(
     }
     syncWorldToRoom(room, Array.from(room.players.keys()));
     room.lastEntityBroadcastMs = Date.now();
-    room.dirtyEntities = false;
+    room.dirtyActiveEntities = false;
+    room.dirtyPassiveEntities = false;
     broadcastFx(room, {
       kind: 'day_advanced',
       sfx: 'morning',
@@ -361,6 +483,8 @@ export function createMultiplayerServer(
     }
     if (room.isPublic) {
       broadcastRoomsListToLobby();
+    } else {
+      invalidateRoomsCache();
     }
   }
 
@@ -446,12 +570,14 @@ export function createMultiplayerServer(
         wildlifeSpawnTimer: 4,
         lastTickMs: now,
         emptySinceMs: null,
-        dirtyEntities: false,
+        dirtyActiveEntities: false,
+        dirtyPassiveEntities: false,
         lastEntityBroadcastMs: now,
         tickSeq: 0,
       };
 
       rooms.set(code, room);
+      invalidateRoomsCache();
       meta.roomCode = code;
       meta.playerId = player.id;
 
@@ -582,6 +708,8 @@ export function createMultiplayerServer(
       );
       if (room.isPublic) {
         broadcastRoomsListToLobby();
+      } else {
+        invalidateRoomsCache();
       }
       return;
     }
@@ -629,7 +757,7 @@ export function createMultiplayerServer(
         changed = true;
       }
       if (changed) {
-        room.dirtyEntities = true;
+        room.dirtyActiveEntities = true;
       }
       return;
     }
@@ -955,6 +1083,8 @@ export function createMultiplayerServer(
           rooms.delete(code);
           if (wasPublic) {
             broadcastRoomsListToLobby();
+          } else {
+            invalidateRoomsCache();
           }
         }
         room.lastTickMs = now;
@@ -987,11 +1117,11 @@ export function createMultiplayerServer(
       for (const p of activePlayers) {
         if (p.swingTimer > 0) {
           p.swingTimer = Math.max(0, p.swingTimer - dt);
-          room.dirtyEntities = true;
+          room.dirtyActiveEntities = true;
         }
         if (p.hitFlashTimer > 0) {
           p.hitFlashTimer = Math.max(0, p.hitFlashTimer - dt);
-          room.dirtyEntities = true;
+          room.dirtyActiveEntities = true;
         }
       }
 
@@ -1001,7 +1131,7 @@ export function createMultiplayerServer(
         if (room.wildlifeSpawnTimer <= 0) {
           room.wildlifeSpawnTimer = 5.5 + Math.random() * 4;
           if (spawnNightWildlife(world)) {
-            room.dirtyEntities = true;
+            room.dirtyActiveEntities = true;
           }
         }
       }
@@ -1038,7 +1168,7 @@ export function createMultiplayerServer(
         (dmg) => {
           targetPlayer.health = world.player.health;
           targetPlayer.hitFlashTimer = 0.25;
-          room.dirtyEntities = true;
+          room.dirtyActiveEntities = true;
           if (targetPlayer.health <= 0) {
             targetPlayer.health = Math.round(targetPlayer.maxHealth * 0.6);
             targetPlayer.x = FARMHOUSE_DOOR.x + 0.5;
@@ -1068,14 +1198,15 @@ export function createMultiplayerServer(
         });
       });
 
-      if (
-        world.wildlife.length > 0 ||
+      if (world.wildlife.length > 0) {
+        room.dirtyActiveEntities = true;
+      } else if (
         world.chickens.some((c) => c.vx !== 0 || c.vy !== 0) ||
         (world.cows ?? []).some((c) => c.vx !== 0 || c.vy !== 0) ||
         (world.sheep ?? []).some((s) => s.vx !== 0 || s.vy !== 0) ||
         Boolean(world.dog && (world.dog.vx !== 0 || world.dog.vy !== 0))
       ) {
-        room.dirtyEntities = true;
+        room.dirtyPassiveEntities = true;
       }
 
       if (world.timeMinutes >= DAY_END_MINUTES) {
@@ -1086,18 +1217,21 @@ export function createMultiplayerServer(
       if (worldNeedsSync) {
         syncWorldToRoom(room, teleportIds);
         room.lastEntityBroadcastMs = now;
-        room.dirtyEntities = false;
+        room.dirtyActiveEntities = false;
+        room.dirtyPassiveEntities = false;
         continue;
       }
 
       const elapsedSinceBroadcast = now - room.lastEntityBroadcastMs;
       const shouldBroadcastEntities =
-        (room.dirtyEntities && elapsedSinceBroadcast >= ACTIVE_BROADCAST_INTERVAL_MS) ||
+        (room.dirtyActiveEntities && elapsedSinceBroadcast >= ACTIVE_BROADCAST_INTERVAL_MS) ||
+        (room.dirtyPassiveEntities && elapsedSinceBroadcast >= PASSIVE_ANIMAL_BROADCAST_INTERVAL_MS) ||
         elapsedSinceBroadcast >= IDLE_CLOCK_SYNC_INTERVAL_MS;
 
       if (shouldBroadcastEntities) {
         room.lastEntityBroadcastMs = now;
-        room.dirtyEntities = false;
+        room.dirtyActiveEntities = false;
+        room.dirtyPassiveEntities = false;
         room.tickSeq += 1;
         broadcastToRoom(room, {
           type: 'tick:entities',
@@ -1120,7 +1254,7 @@ export function createMultiplayerServer(
   app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, If-None-Match');
     if (req.method === 'OPTIONS') {
       res.sendStatus(204);
       return;
@@ -1132,12 +1266,59 @@ export function createMultiplayerServer(
     res.json({ ok: true, rooms: rooms.size });
   });
 
+  app.get('/api/version', (req, res) => {
+    res.setHeader('Cache-Control', 'public, max-age=120, stale-while-revalidate=300');
+    res.setHeader('ETag', versionEtag);
+    if (req.headers['if-none-match'] === versionEtag) {
+      res.status(304).end();
+      return;
+    }
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.status(200).send(versionManifestJson);
+  });
+
+  app.get('/api/patch-manifest', (req, res) => {
+    res.setHeader('Cache-Control', 'public, max-age=120, stale-while-revalidate=300');
+    res.setHeader('ETag', patchManifestEtag);
+    if (req.headers['if-none-match'] === patchManifestEtag) {
+      res.status(304).end();
+      return;
+    }
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.status(200).send(patchManifestJson);
+  });
+
+  app.get('/patch-files/*', (req, res) => {
+    const rawRel = (req.params as Record<string, string>)[0] || '';
+    const safeRel = sanitizePatchFilePath(rawRel);
+    if (!safeRel) {
+      res.status(400).json({ error: 'INVALID_PATCH_PATH' });
+      return;
+    }
+    const targetPath = path.resolve(distDir, safeRel);
+    if (!targetPath.startsWith(`${distDir}${path.sep}`) && targetPath !== distDir) {
+      res.status(403).json({ error: 'FORBIDDEN' });
+      return;
+    }
+    if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) {
+      res.status(404).json({ error: 'NOT_FOUND' });
+      return;
+    }
+    if (safeRel.startsWith('assets/')) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    } else {
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+    res.sendFile(targetPath);
+  });
+
   app.get('/api/rooms', (_req, res) => {
-    res.json({ rooms: getPublicRoomSummaries() });
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.status(200).send(getPublicRoomsJson());
   });
 
   if (options.serveStaticDist) {
-    const distDir = path.join(process.cwd(), 'dist');
     app.use(express.static(distDir));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distDir, 'index.html'));

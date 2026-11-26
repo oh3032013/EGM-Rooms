@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { AudioLines, Languages, Maximize2, Minimize2, Play, RotateCw, Users } from 'lucide-react';
+import { AudioLines, Languages, Maximize2, Minimize2, Play, RefreshCw, RotateCw, Users } from 'lucide-react';
 import { LANGUAGE_OPTIONS, UI_TEXT, type Language } from '../game/i18n';
+import type { VersionCheckStatus } from '../game/version';
 import { PWAInstallButton } from './PWAInstallButton';
 import { TeamModal } from './TeamModal';
 
@@ -11,6 +12,9 @@ interface TitleScreenProps {
   isPortraitMobile: boolean;
   blindMode: boolean;
   blindCaption: string;
+  versionCheckStatus: VersionCheckStatus;
+  versionCooldownSec: number;
+  onRecheckVersion: () => void;
   onSelectLanguage: (lang: Language) => void;
   onToggleFullscreen: () => void;
   onToggleBlindMode: () => void;
@@ -27,6 +31,9 @@ export function TitleScreen({
   isPortraitMobile,
   blindMode,
   blindCaption,
+  versionCheckStatus,
+  versionCooldownSec,
+  onRecheckVersion,
   onSelectLanguage,
   onToggleFullscreen,
   onToggleBlindMode,
@@ -425,6 +432,32 @@ export function TitleScreen({
               className="wood-button-primary px-2.5 py-1.5 rounded text-[11px] font-bold shrink-0 cursor-pointer whitespace-nowrap"
             >
               {t.enableLandscapeBtn}
+            </button>
+          </div>
+        )}
+
+        {versionCheckStatus === 'error_offline' && (
+          <div
+            role="status"
+            aria-live="polite"
+            data-testid="version-offline-notice"
+            className="mt-2.5 px-3 py-1.5 rounded-xl bg-[#24170f]/85 border border-[#8f6742] text-[#f5ebd6] flex flex-wrap items-center justify-center gap-2 max-w-[min(92vw,390px)] shadow-md"
+          >
+            <span className="text-[11px] font-medium leading-snug">
+              {t.forceUpdateOfflineRetry}
+            </span>
+            <button
+              type="button"
+              disabled={versionCooldownSec > 0}
+              onClick={onRecheckVersion}
+              className="wood-button px-2.5 py-1 rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <RefreshCw className="w-3 h-3 shrink-0" />
+              <span>
+                {versionCooldownSec > 0
+                  ? `${t.forceUpdateRecheckBtn} (${versionCooldownSec}s)`
+                  : t.forceUpdateRecheckBtn}
+              </span>
             </button>
           </div>
         )}

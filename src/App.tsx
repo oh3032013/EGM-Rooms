@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { registerSW } from 'virtual:pwa-register';
 import { AlmanacModal } from './components/AlmanacModal';
 import { CraftModal } from './components/CraftModal';
+import { ForceUpdateModal } from './components/ForceUpdateModal';
 import { FutureMessageModal } from './components/FutureMessageModal';
 import { GameHUD, type HudSnapshot, type RoomHudState } from './components/GameHUD';
 import { MissionsModal } from './components/MissionsModal';
@@ -15,6 +16,13 @@ import { TitleScreen } from './components/TitleScreen';
 import { TouchControls } from './components/TouchControls';
 import { audioEngine } from './game/audio';
 import { initNetDebugGlobal, netDebug } from './game/netDebug';
+import {
+  performInPlaceUpdate,
+  startupVersionChecker,
+  type DeltaUpdateProgress,
+  type VersionCheckStatus,
+  type VersionManifest,
+} from './game/version';
 import {
   buildStatusAnnouncement,
   describeTileForBlind,
@@ -51,11 +59,12 @@ import {
   UI_TEXT,
   type Language,
 } from './game/i18n';
-import { renderGameWorld, type CameraState, type LocalPlayerRenderMeta } from './game/pixelArt';
+import { EcoGrowScene3D, type CameraState, type LocalPlayerRenderMeta } from './game/three/EcoGrowScene3D';
 import {
   getOrCreateClientId,
   resolveHttpApiBase,
   resolveWebSocketUrl,
+  saveMultiplayerServerUrl,
   type ChatMessage,
   type ClientToServerMessage,
   type CoopEmote,
@@ -426,6 +435,16 @@ export default function App() {
     locallyMutedPeers: [],
   });
 
+  const [versionStatus, setVersionStatus] = useState<VersionCheckStatus>('checking');
+  const [versionManifest, setVersionManifest] = useState<VersionManifest | null>(null);
+  const [versionChecking, setVersionChecking] = useState<boolean>(false);
+  const [versionUpdating, setVersionUpdating] = useState<boolean>(false);
+  const [versionUpdateProgress, setVersionUpdateProgress] = useState<DeltaUpdateProgress | null>(null);
+  const [versionUpdateError, setVersionUpdateError] = useState<string | null>(null);
+  const [versionRecheckOffline, setVersionRecheckOffline] = useState<boolean>(false);
+  const [versionNextRetryAtMs, setVersionNextRetryAtMs] = useState<number>(0);
+  const [versionCooldownSec, setVersionCooldownSec] = useState<number>(0);
+
   const phaseRef = useRef<GamePhase>(phase);
   const modalRef = useRef<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac'>(activeModal);
   const futureOpenRef = useRef<boolean>(false);
@@ -436,6 +455,7 @@ export default function App() {
   const showRoomsModalRef = useRef<boolean>(showRoomsModal);
   const chatOpenRef = useRef<boolean>(chatOpen);
   const roomHudRef = useRef<RoomHudState | null>(roomHud);
+  const versionRequiredRef = useRef<boolean>(false);
   const voiceStatesRef = useRef<Record<string, VoicePeerState>>({});
   const voiceManagerRef = useRef<VoiceChatManager | null>(null);
   const voiceNoticeTimerRef = useRef<number | null>(null);
@@ -466,8 +486,11 @@ export default function App() {
   showRoomsModalRef.current = showRoomsModal;
   chatOpenRef.current = chatOpen;
   roomHudRef.current = roomHud;
+  const updateRequired = versionStatus === 'update_required' && Boolean(versionManifest);
+  versionRequiredRef.current = updateRequired;
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const scene3dRef = useRef<EcoGrowScene3D | null>(null);
+  const orbitDragRef = useRef<{ active: boolean; lastX: number } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const keysPressedRef = useRef<Set<string>>(new Set());
   const joystickRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -1200,6 +1223,7 @@ export default function App() {
       initialMsg: ClientToServerMessage,
       opts?: { serverUrl?: string; roomContext?: { code: string; playerName: string; serverUrl?: string } }
     ) => {
+      if (versionRequiredRef.current) return;
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -1693,7 +1717,135 @@ export default function App() {
     }
   }, [announceBlind, checkNewBadges, saveFarm, sendWs, syncHud]);
 
+  const runStartupVersionCheck = useCallback(
+    async (force = false) => {
+      setVersionChecking(true);
+      try {
+        const currentApiBase = resolveHttpApiBase();
+        let res = await startupVersionChecker.check({
+          force,
+          apiBase: currentApiBase,
+        });
+        if (
+          res.status === 'up_to_date' &&
+          res.manifest?.multiplayer_url &&
+          res.manifest.multiplayer_url.replace(/\/+$/, '') !== currentApiBase.replace(/\/+$/, '')
+        ) {
+          saveMultiplayerServerUrl(res.manifest.multiplayer_url);
+          startupVersionChecker.clearCache();
+          const newBase = resolveHttpApiBase();
+          if (newBase && newBase !== currentApiBase) {
+            res = await startupVersionChecker.check({
+              force: true,
+              apiBase: newBase,
+            });
+          }
+        }
+        setVersionStatus(res.status);
+        setVersionManifest(res.manifest);
+        setVersionNextRetryAtMs(res.nextRetryAtMs);
+        setVersionCooldownSec(res.cooldownMs > 0 ? Math.ceil(res.cooldownMs / 1000) : 0);
+        setVersionRecheckOffline(Boolean(res.recheckFailed));
+        if (res.status === 'update_required' && res.manifest) {
+          setShowRoomsModal(false);
+          if (phaseRef.current !== 'title') {
+            disconnectMultiplayer(true, gameModeRef.current === 'multiplayer');
+            setActiveModal('none');
+            setPhase('title');
+            audioEngine.pauseAmbientMusic();
+          }
+          if (blindModeRef.current) {
+            const msg =
+              langRef.current === 'ar'
+                ? res.manifest.message_ar
+                : res.manifest.message_en || res.manifest.message_ar;
+            announceBlind(`${UI_TEXT[langRef.current].forceUpdateTitle}. ${msg}`, true);
+          }
+        }
+      } finally {
+        setVersionChecking(false);
+      }
+    },
+    [announceBlind, disconnectMultiplayer]
+  );
+
+  useEffect(() => {
+    void runStartupVersionCheck(false);
+    const onOnline = () => {
+      void runStartupVersionCheck(false);
+    };
+    window.addEventListener('online', onOnline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+    };
+  }, [runStartupVersionCheck]);
+
+  useEffect(() => {
+    if (versionNextRetryAtMs <= 0) {
+      setVersionCooldownSec(0);
+      return;
+    }
+    const syncRemaining = () => {
+      const remaining = Math.max(0, versionNextRetryAtMs - Date.now());
+      setVersionCooldownSec(remaining > 0 ? Math.ceil(remaining / 1000) : 0);
+      if (remaining <= 0) {
+        setVersionNextRetryAtMs(0);
+      }
+    };
+    syncRemaining();
+    const id = window.setInterval(syncRemaining, 1000);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [versionNextRetryAtMs]);
+
+  const handleVersionUpdateNow = useCallback(async () => {
+    if (!versionManifest) return;
+    setVersionUpdating(true);
+    setVersionUpdateError(null);
+    setVersionUpdateProgress(null);
+    try {
+      const res = await performInPlaceUpdate({
+        manifest: versionManifest,
+        apiBase: resolveHttpApiBase(),
+        onProgress: setVersionUpdateProgress,
+        onApplyServerUrl: (newUrl) => {
+          saveMultiplayerServerUrl(newUrl);
+        },
+      });
+      if (res.ok && !res.reloaded) {
+        if (blindModeRef.current) {
+          announceBlind(UI_TEXT[langRef.current].forceUpdateServerOnlyMsg, true);
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 750));
+        if (versionManifest.multiplayer_url) {
+          const nextRes = await startupVersionChecker.check({
+            force: true,
+            apiBase: resolveHttpApiBase(),
+          });
+          if (nextRes.status === 'update_required' && nextRes.manifest) {
+            setVersionManifest(nextRes.manifest);
+            setVersionStatus('update_required');
+            setVersionRecheckOffline(false);
+            setVersionUpdateProgress(null);
+            return;
+          }
+        }
+        setVersionStatus('up_to_date');
+        setVersionRecheckOffline(false);
+        setVersionUpdateProgress(null);
+      } else if (!res.ok) {
+        setVersionUpdateError(UI_TEXT[langRef.current].forceUpdateOfflineRetry);
+      }
+    } catch {
+      setVersionUpdateError(UI_TEXT[langRef.current].forceUpdateOfflineRetry);
+    } finally {
+      setVersionUpdating(false);
+    }
+  }, [announceBlind, versionManifest]);
+
   const startNewFarm = useCallback(() => {
+    if (versionRequiredRef.current) return;
     disconnectMultiplayer(false);
     const isMobile =
       window.matchMedia('(pointer: coarse)').matches ||
@@ -1722,6 +1874,7 @@ export default function App() {
   }, [announceBlind, disconnectMultiplayer, requestOptimalDisplay, saveFarm, syncHud]);
 
   const continueFarm = useCallback(() => {
+    if (versionRequiredRef.current) return;
     disconnectMultiplayer(false, false);
     const isMobile =
       window.matchMedia('(pointer: coarse)').matches ||
@@ -2061,6 +2214,7 @@ export default function App() {
       }
 
       if (phaseRef.current === 'title') {
+        if (versionRequiredRef.current) return;
         if (showRoomsModalRef.current) {
           if (key === 'escape') {
             e.preventDefault();
@@ -2321,16 +2475,17 @@ export default function App() {
     };
   }, [disconnectMultiplayer, saveFarm]);
 
-  // Decoupled Canvas Setup + Live ResizeObserver + 60Hz Game Loop
+  // Decoupled 3D WebGL Scene Setup + Live ResizeObserver + 60Hz Game Loop
   useEffect(() => {
-    const canvas = canvasRef.current;
     const container = containerRef.current;
-    if (!canvas || !container) return;
+    if (!container) return;
+
+    const scene3d = new EcoGrowScene3D(container);
+    scene3dRef.current = scene3d;
 
     const resize = () => {
       const rect = container.getBoundingClientRect();
-      canvas.width = Math.max(1, Math.floor(rect.width));
-      canvas.height = Math.max(1, Math.floor(rect.height));
+      scene3d.resize(rect.width, rect.height);
       // Scale zoom cleanly across portrait, landscape phone, tablet, and desktop viewports
       const widthZoom = rect.width < 640 ? 1.55 : rect.width < 1100 ? 1.85 : 2.15;
       const heightZoom = rect.height / (9.5 * TILE_SIZE);
@@ -2342,7 +2497,7 @@ export default function App() {
     const ro = new ResizeObserver(resize);
     ro.observe(container);
 
-    let rafId = 0;
+    let cancelFrame: (() => void) | null = null;
     let lastTime = performance.now();
     let hudTimer = 0;
     let smokeTimer = 0;
@@ -2437,6 +2592,15 @@ export default function App() {
           if (len > 1) {
             mx /= len;
             my /= len;
+          }
+          const yaw = scene3d.cameraYaw;
+          if (yaw !== 0) {
+            const cos = Math.cos(yaw);
+            const sin = Math.sin(yaw);
+            const rx = mx * cos + my * sin;
+            const ry = -mx * sin + my * cos;
+            mx = rx;
+            my = ry;
           }
           const sprinting = sprintActiveRef.current || keys.has('shift');
           const speed = sprinting ? 4.5 * 1.45 : 4.5; // tiles/sec
@@ -2684,48 +2848,41 @@ export default function App() {
         if (ft.life <= 0) floatingTextsRef.current.splice(i, 1);
       }
 
-      // Render world (throttle slightly during pause/modals in solo mode)
+      // Render 3D world (throttle slightly during pause/modals in solo mode)
       const shouldDraw =
         (currentPhase === 'playing' && (!modalOpen || gameModeRef.current === 'multiplayer')) ||
         Math.floor(elapsedRef.current * 4) !== Math.floor((elapsedRef.current - dt) * 4);
       if (shouldDraw) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          const rect = container.getBoundingClientRect();
-          const nowMs = Date.now();
-          let activeEmotesMap: Record<string, string> | undefined;
-          let localEmote: string | undefined;
-          const myEmoteId = gameModeRef.current === 'multiplayer' ? getOrCreateClientId() : '__local__';
-          for (const [id, entry] of Object.entries(activeEmotesRef.current)) {
-            if (entry.expiresAt <= nowMs) {
-              delete activeEmotesRef.current[id];
-              continue;
-            }
-            if (id === myEmoteId) {
-              localEmote = entry.text;
-            } else {
-              if (!activeEmotesMap) activeEmotesMap = {};
-              activeEmotesMap[id] = entry.text;
-            }
+        const nowMs = Date.now();
+        let activeEmotesMap: Record<string, string> | undefined;
+        let localEmote: string | undefined;
+        const myEmoteId = gameModeRef.current === 'multiplayer' ? getOrCreateClientId() : '__local__';
+        for (const [id, entry] of Object.entries(activeEmotesRef.current)) {
+          if (entry.expiresAt <= nowMs) {
+            delete activeEmotesRef.current[id];
+            continue;
           }
-          renderGameWorld(
-            ctx,
-            rect.width,
-            rect.height,
-            world,
-            cameraRef.current,
-            particlesRef.current,
-            floatingTextsRef.current,
-            hoverTileRef.current,
-            elapsedRef.current,
-            currentPhase === 'title',
-            gameModeRef.current === 'multiplayer' ? remotePlayersRef.current : [],
-            gameModeRef.current === 'multiplayer' ? localPlayerMetaRef.current : undefined,
-            gameModeRef.current === 'multiplayer' ? voiceStatesRef.current : undefined,
-            activeEmotesMap,
-            localEmote
-          );
+          if (id === myEmoteId) {
+            localEmote = entry.text;
+          } else {
+            if (!activeEmotesMap) activeEmotesMap = {};
+            activeEmotesMap[id] = entry.text;
+          }
         }
+        scene3d.render(
+          world,
+          cameraRef.current,
+          particlesRef.current,
+          floatingTextsRef.current,
+          hoverTileRef.current,
+          elapsedRef.current,
+          currentPhase === 'title',
+          gameModeRef.current === 'multiplayer' ? remotePlayersRef.current : [],
+          gameModeRef.current === 'multiplayer' ? localPlayerMetaRef.current : undefined,
+          gameModeRef.current === 'multiplayer' ? voiceStatesRef.current : undefined,
+          activeEmotesMap,
+          localEmote
+        );
       }
 
       // Sync HUD only on discrete changes while playing without a modal open
@@ -2765,55 +2922,69 @@ export default function App() {
         });
       }
 
-      rafId = requestAnimationFrame(tick);
+      cancelFrame = scene3d.scheduleNextFrame(tick);
     };
 
-    rafId = requestAnimationFrame(tick);
+    cancelFrame = scene3d.scheduleNextFrame(tick);
     return () => {
-      cancelAnimationFrame(rafId);
+      cancelFrame?.();
       ro.disconnect();
+      scene3d.dispose();
+      scene3dRef.current = null;
     };
   }, [addFloatingText, announceBlind, saveFarm, sendWs, spawnParticleBurst, syncHud, triggerSleep]);
 
   const screenToTile = (clientX: number, clientY: number): { x: number; y: number } | null => {
-    const container = containerRef.current;
-    if (!container) return null;
-    const rect = container.getBoundingClientRect();
-    const cam = cameraRef.current;
-    const sx = clientX - rect.left;
-    const sy = clientY - rect.top;
-    const wx = (sx - rect.width / 2) / cam.zoom + cam.x;
-    const wy = (sy - rect.height / 2) / cam.zoom + cam.y;
-    const tx = Math.floor(wx / TILE_SIZE);
-    const ty = Math.floor(wy / TILE_SIZE);
-    const tile = getTile(worldRef.current, tx, ty);
-    return tile ? { x: tx, y: ty } : null;
+    return scene3dRef.current?.screenToTile(clientX, clientY, worldRef.current) ?? null;
   };
 
   return (
     <main className="relative w-full h-full overflow-hidden bg-[#1b1612]">
-      {/* Isolated Canvas Mount */}
-      <div ref={containerRef} className="absolute inset-0 w-full h-full">
-        <canvas
-          ref={canvasRef}
-          data-testid="farm-canvas"
-          className="block w-full h-full pixel-canvas cursor-crosshair"
-          onPointerMove={(e) => {
-            if (phase !== 'playing' || activeModal !== 'none') return;
-            hoverTileRef.current = screenToTile(e.clientX, e.clientY);
-          }}
-          onPointerLeave={() => {
-            hoverTileRef.current = null;
-          }}
-          onPointerDown={(e) => {
-            if (phase !== 'playing' || activeModal !== 'none') return;
-            const tileCoords = screenToTile(e.clientX, e.clientY);
-            if (tileCoords) {
-              handleTileClickAction(tileCoords.x, tileCoords.y);
-            }
-          }}
-        />
-      </div>
+      {/* Isolated 3D WebGL Canvas Mount */}
+      <div
+        ref={containerRef}
+        className="absolute inset-0 w-full h-full touch-none cursor-crosshair"
+        onContextMenu={(e) => e.preventDefault()}
+        onWheel={(e) => {
+          const s3d = scene3dRef.current;
+          if (!s3d || phase !== 'playing' || activeModal !== 'none') return;
+          s3d.userZoomMultiplier = Math.max(
+            0.65,
+            Math.min(1.7, s3d.userZoomMultiplier + e.deltaY * 0.0008)
+          );
+        }}
+        onPointerMove={(e) => {
+          if (orbitDragRef.current?.active && scene3dRef.current) {
+            const dx = e.clientX - orbitDragRef.current.lastX;
+            orbitDragRef.current.lastX = e.clientX;
+            scene3dRef.current.cameraYaw = Math.max(
+              -0.65,
+              Math.min(0.65, scene3dRef.current.cameraYaw - dx * 0.006)
+            );
+            return;
+          }
+          if (phase !== 'playing' || activeModal !== 'none') return;
+          hoverTileRef.current = screenToTile(e.clientX, e.clientY);
+        }}
+        onPointerUp={() => {
+          orbitDragRef.current = null;
+        }}
+        onPointerLeave={() => {
+          orbitDragRef.current = null;
+          hoverTileRef.current = null;
+        }}
+        onPointerDown={(e) => {
+          if (phase !== 'playing' || activeModal !== 'none') return;
+          if (e.button === 2) {
+            orbitDragRef.current = { active: true, lastX: e.clientX };
+            return;
+          }
+          const tileCoords = screenToTile(e.clientX, e.clientY);
+          if (tileCoords) {
+            handleTileClickAction(tileCoords.x, tileCoords.y);
+          }
+        }}
+      />
 
       <OfflineBanner lang={lang} />
 
@@ -2825,6 +2996,9 @@ export default function App() {
           isPortraitMobile={isPortraitMobile}
           blindMode={blindMode}
           blindCaption={blindCaption}
+          versionCheckStatus={versionStatus}
+          versionCooldownSec={versionCooldownSec}
+          onRecheckVersion={() => void runStartupVersionCheck(true)}
           onSelectLanguage={selectLanguage}
           onToggleFullscreen={() => void toggleFullscreen()}
           onToggleBlindMode={toggleBlindMode}
@@ -2832,6 +3006,7 @@ export default function App() {
           onStartNew={startNewFarm}
           onContinue={continueFarm}
           onOpenMultiplayerRooms={() => {
+            if (versionRequiredRef.current) return;
             audioEngine.playSfx('click');
             setRoomsError(null);
             setShowRoomsModal(true);
@@ -2839,7 +3014,7 @@ export default function App() {
         />
       )}
 
-      {phase === 'title' && showRoomsModal && (
+      {phase === 'title' && showRoomsModal && !updateRequired && (
         <RoomsModal
           lang={lang}
           loading={roomsLoading}
@@ -3297,6 +3472,25 @@ export default function App() {
           onProbeHttp={async () => {
             await netDebug.probeHttp(activeRoomRef.current?.serverUrl);
           }}
+        />
+      )}
+
+      {updateRequired && versionManifest && (
+        <ForceUpdateModal
+          lang={lang}
+          manifest={versionManifest}
+          checking={versionChecking}
+          updating={versionUpdating}
+          progress={versionUpdateProgress}
+          updateError={versionUpdateError}
+          recheckOffline={versionRecheckOffline}
+          cooldownSec={versionCooldownSec}
+          blindMode={blindMode}
+          blindCaption={blindCaption}
+          onSelectLanguage={selectLanguage}
+          onToggleBlindMode={toggleBlindMode}
+          onUpdateNow={() => void handleVersionUpdateNow()}
+          onRecheck={() => void runStartupVersionCheck(true)}
         />
       )}
     </main>

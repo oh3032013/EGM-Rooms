@@ -1,8 +1,59 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import { createHash } from 'crypto';
+import fs from 'fs';
 import path from 'path';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+
+function collectDistFiles(rootDir: string, currentDir = rootDir): { path: string; sha256: string; size: number }[] {
+  const entries: { path: string; sha256: string; size: number }[] = [];
+  if (!fs.existsSync(currentDir)) return entries;
+  for (const item of fs.readdirSync(currentDir, { withFileTypes: true })) {
+    const full = path.join(currentDir, item.name);
+    if (item.isDirectory()) {
+      entries.push(...collectDistFiles(rootDir, full));
+    } else if (item.isFile()) {
+      const rel = path.relative(rootDir, full).replace(/\\/g, '/');
+      if (
+        rel === 'patch-manifest.json' ||
+        rel === 'version.json' ||
+        rel.endsWith('.map')
+      ) {
+        continue;
+      }
+      const buf = fs.readFileSync(full);
+      const sha256 = createHash('sha256').update(buf).digest('hex');
+      entries.push({ path: rel, sha256, size: buf.length });
+    }
+  }
+  return entries.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+function generatePatchManifestPlugin(): Plugin {
+  return {
+    name: 'ecogrow-patch-manifest',
+    apply: 'build',
+    closeBundle() {
+      const distDir = path.resolve(__dirname, 'dist');
+      if (!fs.existsSync(distDir)) return;
+      let pkgVersion = '1.0.0';
+      try {
+        const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8')) as { version?: string };
+        if (pkg.version) pkgVersion = pkg.version;
+      } catch {
+        // Fallback to 1.0.0
+      }
+      const files = collectDistFiles(distDir);
+      const manifest = {
+        version: pkgVersion,
+        server_revision: process.env.ECOGROW_SERVER_REVISION || '1',
+        files,
+      };
+      fs.writeFileSync(path.join(distDir, 'patch-manifest.json'), JSON.stringify(manifest));
+    },
+  };
+}
 
 export default defineConfig(() => {
   return {
@@ -17,7 +68,7 @@ export default defineConfig(() => {
           id: './',
           name: 'EcoGrow Mission',
           short_name: 'EcoGrow',
-          description: 'Cozy 2D pixel-art farming, farmer challenges, and survival game.',
+          description: 'Cozy 3D farming, farmer challenges, and survival game.',
           theme_color: '#2d1f15',
           background_color: '#1b1612',
           display: 'fullscreen',
@@ -46,6 +97,7 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           navigateFallbackDenylist: [/^\/api\//],
           runtimeCaching: [
@@ -85,10 +137,22 @@ export default defineConfig(() => {
           type: 'module',
         },
       }),
+      generatePatchManifestPlugin(),
     ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+      },
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules/three')) {
+              return 'three-vendor';
+            }
+          },
+        },
       },
     },
     server: {

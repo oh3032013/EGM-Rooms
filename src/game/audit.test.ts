@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import type { AddressInfo } from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { WebSocket } from 'ws';
 import {
   advanceDay,
@@ -21,6 +25,22 @@ import {
 import { LANGUAGE_OPTIONS, UI_TEXT } from './i18n.ts';
 import { formatSparkline, NetDebugTracker } from './netDebug.ts';
 import { audioEngine, pickNocturnalCueKind } from './audio.ts';
+import {
+  APP_VERSION,
+  compareSemver,
+  computeBackoffMs,
+  diffPatchFiles,
+  isNewerVersionAvailable,
+  isServerRevisionSupported,
+  isUpdateRequired,
+  isVersionSupported,
+  parseVersionManifest,
+  performInPlaceUpdate,
+  resolveEffectiveUpdateKind,
+  sanitizePatchFilePath,
+  sanitizeUpdateUrl,
+  StartupVersionChecker,
+} from './version.ts';
 import { createMultiplayerServer } from '../server/createMultiplayerServer.ts';
 
 test('shop buy/sell reject negative, zero, NaN, and fractional quantities without gold exploit', () => {
@@ -438,5 +458,444 @@ test('audioEngine nocturnal wildlife ambience schedules hoot/rustle cues during 
     }
   }
 });
+
+test('version semver comparison, URL sanitization, and exponential backoff behave safely', () => {
+  assert.equal(compareSemver('1.0.0', '1.0.0'), 0);
+  assert.equal(compareSemver('1.2.0', '1.10.0'), -1);
+  assert.equal(compareSemver('v2.0.1', '1.9.9'), 1);
+
+  assert.equal(isVersionSupported('1.0.0', '1.0.0'), true);
+  assert.equal(isVersionSupported('1.0.0', '1.1.0'), false);
+  assert.equal(isVersionSupported('1.2.0', '1.1.5'), true);
+  assert.equal(isNewerVersionAvailable('1.0.0', '1.0.1'), true);
+  assert.equal(isNewerVersionAvailable('1.1.0', '1.0.9'), false);
+
+  assert.equal(sanitizeUpdateUrl('https://ecogrow.example/app'), 'https://ecogrow.example/app');
+  assert.equal(sanitizeUpdateUrl('./'), './');
+  assert.equal(sanitizeUpdateUrl('/update'), '/update');
+  assert.equal(sanitizeUpdateUrl('javascript:alert(1)'), './');
+  assert.equal(sanitizeUpdateUrl('data:text/html,hi'), './');
+  assert.equal(sanitizeUpdateUrl('//evil.example/payload'), './');
+
+  assert.equal(computeBackoffMs(0), 0);
+  assert.equal(computeBackoffMs(1), 3000);
+  assert.equal(computeBackoffMs(2), 6000);
+  assert.equal(computeBackoffMs(3), 12000);
+  assert.equal(computeBackoffMs(5), 48000);
+  assert.equal(computeBackoffMs(10), 60000);
+});
+
+test('StartupVersionChecker uses TTL cache, falls back from 404 to static manifest, and enforces backoff on failures', async () => {
+  const checker = new StartupVersionChecker();
+  let fakeNow = 100_000;
+  let fetchCalls = 0;
+
+  // 1) Primary /api/version 404 -> falls back cleanly to ./version.json, then hits TTL cache
+  const mockFallbackFetch: typeof fetch = async (input) => {
+    fetchCalls += 1;
+    const url = String(input);
+    if (url.includes('/api/version')) {
+      return new Response('Not found', { status: 404 });
+    }
+    return new Response(
+      JSON.stringify({
+        latest_version: '1.2.0',
+        min_supported_version: '1.2.0',
+        update_url: './',
+        message_ar: 'يرجى التحديث الآن',
+        message_en: 'Please update now',
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+
+  const first = await checker.check({
+    apiBase: 'https://example.test',
+    currentVersion: '1.0.0',
+    fetchImpl: mockFallbackFetch,
+    nowMs: () => fakeNow,
+  });
+  assert.equal(first.status, 'update_required');
+  assert.equal(first.fromCache, false);
+  assert.equal(fetchCalls, 2);
+
+  // Within TTL -> zero network requests
+  fakeNow += 10_000;
+  const cached = await checker.check({
+    apiBase: 'https://example.test',
+    currentVersion: '1.0.0',
+    fetchImpl: mockFallbackFetch,
+    nowMs: () => fakeNow,
+  });
+  assert.equal(cached.status, 'update_required');
+  assert.equal(cached.fromCache, true);
+  assert.equal(fetchCalls, 2);
+
+  // Forced re-check while offline triggers backoff and preserves prior update_required block
+  const failingFetch: typeof fetch = async () => {
+    fetchCalls += 1;
+    throw new Error('Network offline');
+  };
+  const failedForce = await checker.check({
+    force: true,
+    apiBase: 'https://example.test',
+    currentVersion: '1.0.0',
+    fetchImpl: failingFetch,
+    nowMs: () => fakeNow,
+  });
+  assert.equal(failedForce.status, 'update_required');
+  assert.equal(failedForce.recheckFailed, true);
+  assert.equal(failedForce.cooldownMs, 3000);
+  const callsAfterFail = fetchCalls;
+
+  // Immediate rapid retry inside cooldown does NOT fire any fetch
+  fakeNow += 1000;
+  const blockedRetry = await checker.check({
+    force: true,
+    apiBase: 'https://example.test',
+    currentVersion: '1.0.0',
+    fetchImpl: failingFetch,
+    nowMs: () => fakeNow,
+  });
+  assert.equal(fetchCalls, callsAfterFail);
+  assert.equal(blockedRetry.recheckFailed, true);
+  assert.equal(blockedRetry.cooldownMs, 2000);
+
+  // Fresh checker offline starts gracefully in error_offline without hanging
+  const freshChecker = new StartupVersionChecker();
+  const offlineStart = await freshChecker.check({
+    apiBase: 'https://example.test',
+    currentVersion: APP_VERSION,
+    fetchImpl: failingFetch,
+    nowMs: () => fakeNow,
+  });
+  assert.equal(offlineStart.status, 'error_offline');
+  assert.equal(offlineStart.cooldownMs, 3000);
+});
+
+test('multiplayer server GET /api/version serves cacheable JSON with ETag and 304 support', async () => {
+  const prevMin = process.env.ECOGROW_MIN_SUPPORTED_VERSION;
+  const prevLatest = process.env.ECOGROW_LATEST_VERSION;
+  process.env.ECOGROW_LATEST_VERSION = '2.0.0';
+  process.env.ECOGROW_MIN_SUPPORTED_VERSION = '1.5.0';
+
+  const handle = createMultiplayerServer({ serveStaticDist: false });
+  await new Promise<void>((resolve) => handle.server.listen(0, '127.0.0.1', resolve));
+  const addr = handle.server.address() as AddressInfo;
+  const baseHttp = `http://127.0.0.1:${addr.port}`;
+
+  try {
+    const res1 = await fetch(`${baseHttp}/api/version`);
+    assert.equal(res1.status, 200);
+    assert.ok(res1.headers.get('cache-control')?.includes('max-age=120'));
+    const etag = res1.headers.get('etag');
+    assert.ok(etag && etag.length > 2);
+    const body = (await res1.json()) as {
+      latest_version: string;
+      min_supported_version: string;
+      update_url: string;
+      message_ar: string;
+      message_en: string;
+    };
+    assert.equal(body.latest_version, '2.0.0');
+    assert.equal(body.min_supported_version, '1.5.0');
+    assert.equal(body.update_url, './');
+    assert.ok(body.message_ar.length > 0 && body.message_en.length > 0);
+
+    // Conditional request with matching ETag returns 304 Not Modified
+    const res304 = await fetch(`${baseHttp}/api/version`, {
+      headers: { 'If-None-Match': etag },
+    });
+    assert.equal(res304.status, 304);
+  } finally {
+    if (prevMin === undefined) delete process.env.ECOGROW_MIN_SUPPORTED_VERSION;
+    else process.env.ECOGROW_MIN_SUPPORTED_VERSION = prevMin;
+    if (prevLatest === undefined) delete process.env.ECOGROW_LATEST_VERSION;
+    else process.env.ECOGROW_LATEST_VERSION = prevLatest;
+    handle.stopSimulation();
+    await new Promise<void>((resolve) => handle.server.close(() => resolve()));
+  }
+});
+
+test('in-page update mode resolution, server revision checks, path sanitization, and delta diffing', () => {
+  assert.equal(isServerRevisionSupported('1', '1'), true);
+  assert.equal(isServerRevisionSupported('1', '2'), false);
+  assert.equal(isServerRevisionSupported('3', '2'), true);
+
+  assert.equal(sanitizePatchFilePath('assets/index-123.js'), 'assets/index-123.js');
+  assert.equal(sanitizePatchFilePath('./index.html'), 'index.html');
+  assert.equal(sanitizePatchFilePath('../package.json'), null);
+  assert.equal(sanitizePatchFilePath('/etc/passwd'), null);
+  assert.equal(sanitizePatchFilePath('assets/malware.exe'), null);
+  assert.equal(sanitizePatchFilePath('index.html?x=1'), null);
+
+  const serverOnlyManifest = parseVersionManifest({
+    latest_version: '1.0.0',
+    min_supported_version: '1.0.0',
+    server_revision: '2',
+    min_server_revision: '2',
+    update_mode: 'server_only',
+    multiplayer_url: 'https://new-server.example',
+    message_ar: 'تحديث للسيرفر فقط',
+    message_en: 'Server update only',
+  });
+  assert.ok(serverOnlyManifest);
+  assert.equal(isUpdateRequired('1.0.0', '1', serverOnlyManifest), true);
+  assert.equal(isUpdateRequired('1.0.0', '2', serverOnlyManifest), false);
+  assert.equal(resolveEffectiveUpdateKind('1.0.0', serverOnlyManifest), 'server_only');
+
+  const deltaManifest = parseVersionManifest({
+    latest_version: '1.1.0',
+    min_supported_version: '1.1.0',
+    server_revision: '2',
+    min_server_revision: '1',
+    update_mode: 'auto',
+    message_ar: 'تحديث للملفات',
+    message_en: 'Client delta update',
+  });
+  assert.ok(deltaManifest);
+  assert.equal(resolveEffectiveUpdateKind('1.0.0', deltaManifest), 'delta_files');
+
+  const hA = 'a'.repeat(64);
+  const hB = 'b'.repeat(64);
+  const hCNew = 'c'.repeat(64);
+  const hCOld = 'd'.repeat(64);
+  const diff = diffPatchFiles(
+    [
+      { path: 'index.html', sha256: hA, size: 100 },
+      { path: 'assets/vendor.js', sha256: hB, size: 2000 },
+      { path: 'assets/app.js', sha256: hCNew, size: 300 },
+    ],
+    {
+      'index.html': hA,
+      'assets/vendor.js': hB,
+      'assets/app.js': hCOld,
+    }
+  );
+  assert.equal(diff.unchanged.length, 2);
+  assert.equal(diff.changed.length, 1);
+  assert.equal(diff.changed[0].path, 'assets/app.js');
+});
+
+test('performInPlaceUpdate handles server_only without asset downloads and delta_files only downloads changed files', async () => {
+  // 1) Server-only update makes ZERO fetch calls and updates server URL callback in-page
+  const serverManifest = parseVersionManifest({
+    latest_version: '1.0.0',
+    min_supported_version: '1.0.0',
+    server_revision: '5',
+    min_server_revision: '5',
+    update_mode: 'server_only',
+    multiplayer_url: 'https://relay.ecogrow.example',
+    message_ar: 'تحديث السيرفر',
+    message_en: 'Server updated',
+  })!;
+
+  let serverFetchCalls = 0;
+  let appliedUrl = '';
+  const serverRes = await performInPlaceUpdate({
+    manifest: serverManifest,
+    apiBase: 'https://api.ecogrow.example',
+    fetchImpl: async () => {
+      serverFetchCalls += 1;
+      return new Response('unexpected', { status: 500 });
+    },
+    onApplyServerUrl: (url) => {
+      appliedUrl = url;
+    },
+  });
+  assert.equal(serverRes.ok, true);
+  assert.equal(serverRes.kind, 'server_only');
+  assert.equal(serverRes.reloaded, false);
+  assert.equal(serverFetchCalls, 0);
+  assert.equal(appliedUrl, 'https://relay.ecogrow.example/');
+
+  // 2) Differential file update fetches /api/patch-manifest + ONLY the 1 changed file (skips 2 unchanged)
+  const changedBytes = Buffer.from('console.log("patched-v1.1.0");', 'utf8');
+  const changedSha = createHash('sha256').update(changedBytes).digest('hex');
+  const unchangedSha1 = createHash('sha256').update('<html>unchanged</html>').digest('hex');
+  const unchangedSha2 = createHash('sha256').update('body{color:#000}').digest('hex');
+
+  const deltaManifest = parseVersionManifest({
+    latest_version: '1.1.0',
+    min_supported_version: '1.1.0',
+    update_mode: 'delta_files',
+    message_ar: 'تحديث الملفات المتغيرة',
+    message_en: 'Delta files update',
+  })!;
+
+  const requestedUrls: string[] = [];
+  const deltaFetch: typeof fetch = async (input) => {
+    const url = String(input);
+    requestedUrls.push(url);
+    if (url.endsWith('/api/patch-manifest')) {
+      return new Response(
+        JSON.stringify({
+          version: '1.1.0',
+          server_revision: '2',
+          files: [
+            { path: 'index.html', sha256: unchangedSha1, size: 24 },
+            { path: 'assets/style.css', sha256: unchangedSha2, size: 17 },
+            { path: 'assets/game.js', sha256: changedSha, size: changedBytes.length },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (url.endsWith('/patch-files/assets/game.js')) {
+      return new Response(changedBytes, {
+        status: 200,
+        headers: { 'Content-Type': 'application/javascript' },
+      });
+    }
+    return new Response('Unexpected unchanged download', { status: 500 });
+  };
+
+  const progressEvents: number[] = [];
+  const deltaRes = await performInPlaceUpdate({
+    manifest: deltaManifest,
+    apiBase: 'https://api.ecogrow.example',
+    localHashes: {
+      'index.html': unchangedSha1,
+      'assets/style.css': unchangedSha2,
+      'assets/game.js': '0'.repeat(64),
+    },
+    fetchImpl: deltaFetch,
+    onProgress: (p) => progressEvents.push(p.completedFiles),
+  });
+
+  assert.equal(deltaRes.ok, true);
+  assert.equal(deltaRes.kind, 'delta_files');
+  assert.equal(deltaRes.changedFiles, 1);
+  assert.equal(deltaRes.totalFiles, 3);
+  assert.deepEqual(requestedUrls, [
+    'https://api.ecogrow.example/api/patch-manifest',
+    'https://api.ecogrow.example/patch-files/assets/game.js',
+  ]);
+  assert.ok(progressEvents.includes(1));
+});
+
+test('multiplayer server serves /api/patch-manifest with ETag and safe /patch-files/* downloads', async () => {
+  const tempDist = fs.mkdtempSync(path.join(os.tmpdir(), 'ecogrow-dist-'));
+  fs.mkdirSync(path.join(tempDist, 'assets'), { recursive: true });
+  const appCode = 'export const v = "1.0.1";\n';
+  fs.writeFileSync(path.join(tempDist, 'index.html'), '<!doctype html><html></html>', 'utf8');
+  fs.writeFileSync(path.join(tempDist, 'assets', 'app.js'), appCode, 'utf8');
+
+  const handle = createMultiplayerServer({ serveStaticDist: false, distDir: tempDist });
+  await new Promise<void>((resolve) => handle.server.listen(0, '127.0.0.1', resolve));
+  const addr = handle.server.address() as AddressInfo;
+  const baseHttp = `http://127.0.0.1:${addr.port}`;
+
+  try {
+    const manifestRes = await fetch(`${baseHttp}/api/patch-manifest`);
+    assert.equal(manifestRes.status, 200);
+    const etag = manifestRes.headers.get('etag');
+    assert.ok(etag);
+    const manifestBody = (await manifestRes.json()) as {
+      files: { path: string; sha256: string; size: number }[];
+    };
+    assert.equal(manifestBody.files.length, 2);
+    const appEntry = manifestBody.files.find((f) => f.path === 'assets/app.js');
+    assert.ok(appEntry);
+    assert.equal(
+      appEntry.sha256,
+      createHash('sha256').update(appCode, 'utf8').digest('hex')
+    );
+
+    const manifest304 = await fetch(`${baseHttp}/api/patch-manifest`, {
+      headers: { 'If-None-Match': etag },
+    });
+    assert.equal(manifest304.status, 304);
+
+    const fileRes = await fetch(`${baseHttp}/patch-files/assets/app.js`);
+    assert.equal(fileRes.status, 200);
+    assert.ok(fileRes.headers.get('cache-control')?.includes('immutable'));
+    assert.equal(await fileRes.text(), appCode);
+
+    const traversalRes = await fetch(`${baseHttp}/patch-files/..%2Fpackage.json`);
+    assert.equal(traversalRes.status, 400);
+  } finally {
+    handle.stopSimulation();
+    await new Promise<void>((resolve) => handle.server.close(() => resolve()));
+    fs.rmSync(tempDist, { recursive: true, force: true });
+  }
+});
+
+test('StartupVersionChecker falls back to remote GitHub feedUrl when old Railway server fails and delta update downloads from new server URL', async () => {
+  const checker = new StartupVersionChecker();
+  const changedBytes = Buffer.from('console.log("from-new-railway");', 'utf8');
+  const changedSha = createHash('sha256').update(changedBytes).digest('hex');
+
+  const feedFetch: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.startsWith('https://old-dead.up.railway.app')) {
+      return new Response('Bad Gateway', { status: 502 });
+    }
+    if (url === 'https://raw.githubusercontent.com/user/ecogrow/main/public/version.json') {
+      return new Response(
+        JSON.stringify({
+          latest_version: '1.1.0',
+          min_supported_version: '1.1.0',
+          server_revision: '2',
+          min_server_revision: '2',
+          update_mode: 'delta_files',
+          multiplayer_url: 'https://new-server.up.railway.app',
+          message_ar: 'تم الانتقال لسيرفر جديد',
+          message_en: 'Migrated to new server',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response('Not Found', { status: 404 });
+  };
+
+  const checkRes = await checker.check({
+    apiBase: 'https://old-dead.up.railway.app',
+    feedUrl: 'https://raw.githubusercontent.com/user/ecogrow/main/public/version.json',
+    currentVersion: '1.0.0',
+    fetchImpl: feedFetch,
+  });
+
+  assert.equal(checkRes.status, 'update_required');
+  assert.ok(checkRes.manifest);
+  assert.equal(checkRes.manifest.multiplayer_url, 'https://new-server.up.railway.app/');
+
+  const requestedUrls: string[] = [];
+  let appliedNewUrl = '';
+  const patchRes = await performInPlaceUpdate({
+    manifest: checkRes.manifest,
+    apiBase: 'https://old-dead.up.railway.app',
+    localHashes: {},
+    fetchImpl: async (input) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url === 'https://new-server.up.railway.app/api/patch-manifest') {
+        return new Response(
+          JSON.stringify({
+            version: '1.1.0',
+            server_revision: '2',
+            files: [{ path: 'assets/app.js', sha256: changedSha, size: changedBytes.length }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url === 'https://new-server.up.railway.app/patch-files/assets/app.js') {
+        return new Response(changedBytes, { status: 200 });
+      }
+      return new Response('Should not hit old server', { status: 500 });
+    },
+    onApplyServerUrl: (url) => {
+      appliedNewUrl = url;
+    },
+  });
+
+  assert.equal(patchRes.ok, true);
+  assert.equal(appliedNewUrl, 'https://new-server.up.railway.app/');
+  assert.deepEqual(requestedUrls, [
+    'https://new-server.up.railway.app/api/patch-manifest',
+    'https://new-server.up.railway.app/patch-files/assets/app.js',
+  ]);
+});
+
 
 

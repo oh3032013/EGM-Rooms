@@ -248,6 +248,22 @@ export interface UiTextMap {
   voiceListenOnlyToast: string;
   voiceMutePeerBtn: string;
   voiceUnmutePeerBtn: string;
+  forceUpdateTitle: string;
+  forceUpdateSubtitle: string;
+  forceUpdateCurrentVer: string;
+  forceUpdateRequiredVer: string;
+  forceUpdateLatestVer: string;
+  forceUpdateBtn: string;
+  forceUpdateRecheckBtn: string;
+  forceUpdateChecking: string;
+  forceUpdateOfflineRetry: string;
+  forceUpdateSaveSafe: string;
+  forceUpdateDownloading: string;
+  forceUpdateProgressFiles: string;
+  forceUpdateServerOnlyMsg: string;
+  forceUpdateModeServerOnly: string;
+  forceUpdateModeDelta: string;
+  forceUpdateReadyReload: string;
 }
 
 export interface LocalePack {

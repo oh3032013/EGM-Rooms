@@ -1,0 +1,13 @@
+{
+  "latest_version": "1.0.0",
+  "min_supported_version": "1.0.0",
+  "server_revision": "1",
+  "min_server_revision": "1",
+  "update_mode": "auto",
+  "multiplayer_url": "",
+  "version_feed_url": "",
+  "patch_manifest_url": "./patch-manifest.json",
+  "update_url": "./",
+  "message_ar": "يتوفر إصدار جديد من EcoGrow Mission يتضمن تحسينات مهمة في الأداء واللعب الجماعي. يرجى التحديث للمتابعة.",
+  "message_en": "A new version of EcoGrow Mission is available with important performance and multiplayer improvements. Please update to continue."
+}

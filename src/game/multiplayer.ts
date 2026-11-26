@@ -268,7 +268,10 @@ function isExternalHostedClient(): boolean {
     host.endsWith('.github.io') ||
     host.endsWith('.pages.dev') ||
     host.endsWith('.web.app') ||
-    host.endsWith('.firebaseapp.com')
+    host.endsWith('.firebaseapp.com') ||
+    host.endsWith('.itch.io') ||
+    host.endsWith('.itch.zone') ||
+    host.endsWith('.hwcdn.net')
   );
 }
 
