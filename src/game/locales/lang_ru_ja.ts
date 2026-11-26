@@ -1,6 +1,6 @@
-import type { LocalePack } from './types';
+import type { LegacyLocalePack } from './types';
 
-export const RU_LOCALE: LocalePack = {
+export const RU_LOCALE: LegacyLocalePack = {
   ui: {
     brandTitle: 'EcoGrow Mission',
     saveYourFarm: 'Спасите ферму',
@@ -426,7 +426,7 @@ export const RU_LOCALE: LocalePack = {
   switchedMsg: 'Язык переключён на русский',
 };
 
-export const JA_LOCALE: LocalePack = {
+export const JA_LOCALE: LegacyLocalePack = {
   ui: {
     brandTitle: 'EcoGrow Mission',
     saveYourFarm: '農場を救おう',

@@ -1,6 +1,6 @@
-import type { LocalePack } from './types';
+import type { LegacyLocalePack } from './types';
 
-export const DE_LOCALE: LocalePack = {
+export const DE_LOCALE: LegacyLocalePack = {
   ui: {
     brandTitle: 'EcoGrow Mission',
     saveYourFarm: 'Rette deine Farm',
@@ -426,7 +426,7 @@ export const DE_LOCALE: LocalePack = {
   switchedMsg: 'Sprache auf Deutsch umgestellt',
 };
 
-export const IT_LOCALE: LocalePack = {
+export const IT_LOCALE: LegacyLocalePack = {
   ui: {
     brandTitle: 'EcoGrow Mission',
     saveYourFarm: 'Salva la tua fattoria',

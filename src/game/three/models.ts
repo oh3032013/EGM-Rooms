@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CROPS } from '../constants';
 import { PLAYER_PALETTE } from '../multiplayer';
 import type {
@@ -11,8 +12,16 @@ import type {
 } from '../types';
 import type { MaterialLibrary } from './materials';
 
+export interface BakedMeshSlot {
+  geo: THREE.BufferGeometry;
+  mat: THREE.Material;
+  castShadow: boolean;
+  receiveShadow: boolean;
+}
+
 export class GeometryCache {
   private readonly items = new Map<string, THREE.BufferGeometry>();
+  private readonly bakedGroups = new Map<string, BakedMeshSlot[]>();
 
   public get(key: string, factory: () => THREE.BufferGeometry): THREE.BufferGeometry {
     let geo = this.items.get(key);
@@ -23,12 +32,160 @@ export class GeometryCache {
     return geo;
   }
 
+  public getBaked(key: string): BakedMeshSlot[] | undefined {
+    return this.bakedGroups.get(key);
+  }
+
+  public setBaked(key: string, slots: BakedMeshSlot[]): void {
+    this.bakedGroups.set(key, slots);
+  }
+
   public dispose(): void {
     for (const geo of this.items.values()) {
       geo.dispose();
     }
     this.items.clear();
+    for (const slots of this.bakedGroups.values()) {
+      for (const s of slots) {
+        s.geo.dispose();
+      }
+    }
+    this.bakedGroups.clear();
   }
+}
+
+function normalizeForMerge(geo: THREE.BufferGeometry, matrix: THREE.Matrix4): THREE.BufferGeometry {
+  const transformed = geo.clone();
+  transformed.applyMatrix4(matrix);
+  const nonIdx = transformed.index ? transformed.toNonIndexed() : transformed;
+  if (nonIdx !== transformed) transformed.dispose();
+
+  if (!nonIdx.getAttribute('normal')) {
+    nonIdx.computeVertexNormals();
+  }
+  const posAttr = nonIdx.getAttribute('position');
+  if (!nonIdx.getAttribute('uv') && posAttr) {
+    nonIdx.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(posAttr.count * 2), 2));
+  }
+  // Keep strictly position, normal, uv so mergeGeometries never rejects mismatched attributes
+  for (const attrName of Object.keys(nonIdx.attributes)) {
+    if (attrName !== 'position' && attrName !== 'normal' && attrName !== 'uv') {
+      nonIdx.deleteAttribute(attrName);
+    }
+  }
+  return nonIdx;
+}
+
+function mergeNormalizedGeos(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  if (geos.length === 1) return geos[0];
+  const merged = mergeGeometries(geos, false);
+  for (const g of geos) g.dispose();
+  return merged ?? new THREE.BufferGeometry();
+}
+
+/**
+ * Merges static child meshes of a Group by material and caches the merged BufferGeometries
+ * in GeometryCache under `cacheKey`, reducing 5-40 draw calls per object down to 1-3.
+ * Named animated sub-groups (e.g. 'windmill_hub', 'spin_head') are preserved untouched.
+ */
+function bakeStaticGroup(
+  cacheKey: string,
+  geos: GeometryCache,
+  buildRaw: (target: THREE.Group) => void,
+  castShadow = true,
+  receiveShadow = true,
+  contactShadow?: { mats: MaterialLibrary; radius: number }
+): THREE.Group {
+  const cached = geos.getBaked(cacheKey);
+  if (cached) {
+    const out = new THREE.Group();
+    if (contactShadow) {
+      addShadowMesh(out, geos, contactShadow.mats, contactShadow.radius);
+    }
+    for (const slot of cached) {
+      const m = new THREE.Mesh(slot.geo, slot.mat);
+      m.castShadow = slot.castShadow;
+      m.receiveShadow = slot.receiveShadow;
+      out.add(m);
+    }
+    return out;
+  }
+
+  const raw = new THREE.Group();
+  buildRaw(raw);
+  raw.updateMatrixWorld(true);
+
+  const buckets = new Map<
+    THREE.Material,
+    { geos: THREE.BufferGeometry[]; castShadow: boolean; receiveShadow: boolean }
+  >();
+  const preserved: THREE.Object3D[] = [];
+
+  for (const child of [...raw.children]) {
+    if (child.name === 'windmill_hub' || child.name === 'spin_head') {
+      preserved.push(child);
+      continue;
+    }
+    if ((child as THREE.Mesh).isMesh) {
+      const m = child as THREE.Mesh;
+      const mat = Array.isArray(m.material) ? m.material[0] : m.material;
+      const isContactShadow = (mat as THREE.MeshBasicMaterial).depthWrite === false;
+      if (isContactShadow) {
+        if (!contactShadow) {
+          const clone = new THREE.Mesh(m.geometry, mat);
+          clone.position.copy(m.position);
+          clone.rotation.copy(m.rotation);
+          clone.scale.copy(m.scale);
+          clone.castShadow = false;
+          clone.receiveShadow = false;
+          preserved.push(clone);
+        }
+        continue;
+      }
+      let bucket = buckets.get(mat);
+      if (!bucket) {
+        bucket = {
+          geos: [],
+          castShadow,
+          receiveShadow,
+        };
+        buckets.set(mat, bucket);
+      }
+      m.updateMatrix();
+      bucket.geos.push(normalizeForMerge(m.geometry, m.matrix));
+    } else {
+      preserved.push(child);
+    }
+  }
+
+  const out = new THREE.Group();
+  if (contactShadow) {
+    addShadowMesh(out, geos, contactShadow.mats, contactShadow.radius);
+  }
+  const slots: BakedMeshSlot[] = [];
+  for (const [mat, bucket] of buckets.entries()) {
+    const mergedGeo = mergeNormalizedGeos(bucket.geos);
+    const slot: BakedMeshSlot = {
+      geo: mergedGeo,
+      mat,
+      castShadow: bucket.castShadow,
+      receiveShadow: bucket.receiveShadow,
+    };
+    slots.push(slot);
+    const mesh = new THREE.Mesh(slot.geo, slot.mat);
+    mesh.castShadow = slot.castShadow;
+    mesh.receiveShadow = slot.receiveShadow;
+    out.add(mesh);
+  }
+  if (preserved.length === 0) {
+    geos.setBaked(cacheKey, slots);
+  } else {
+    for (const p of preserved) {
+      enableShadows(p, castShadow, receiveShadow);
+      out.add(p);
+    }
+  }
+  return out;
 }
 
 function createRoundedBox(w: number, h: number, d: number, radius = 0.04, bevel = 0.018): THREE.BufferGeometry {
@@ -148,7 +305,7 @@ function enableShadows(obj: THREE.Object3D, cast = true, receive = true): void {
 }
 
 export function createFarmhouseGroup(geos: GeometryCache, mats: MaterialLibrary): THREE.Group {
-  const g = new THREE.Group();
+  return bakeStaticGroup('baked:farmhouse', geos, (g) => {
 
   // 1) Stone masonry plinth
   const plinth = new THREE.Mesh(
@@ -400,12 +557,11 @@ export function createFarmhouseGroup(geos: GeometryCache, mats: MaterialLibrary)
   lanternBulb.position.set(0.58, 1.38, 1.44);
   g.add(lanternBulb);
 
-  enableShadows(g, true, true);
-  return g;
+  }, true, true);
 }
 
 export function createShopStallGroup(geos: GeometryCache, mats: MaterialLibrary): THREE.Group {
-  const g = new THREE.Group();
+  return bakeStaticGroup('baked:shop_stall', geos, (g) => {
 
   const counter = new THREE.Mesh(
     geos.get('shop_counter_v3', () => createRoundedBox(2.74, 0.78, 1.62, 0.04, 0.015)),
@@ -492,12 +648,11 @@ export function createShopStallGroup(geos: GeometryCache, mats: MaterialLibrary)
   board.rotation.z = -0.15;
   g.add(board);
 
-  enableShadows(g, true, true);
-  return g;
+  }, true, true);
 }
 
 export function createWellGroup(geos: GeometryCache, mats: MaterialLibrary): THREE.Group {
-  const g = new THREE.Group();
+  return bakeStaticGroup('baked:well', geos, (g) => {
 
   const rim = new THREE.Mesh(
     geos.get('well_lathe_v3', () => {
@@ -572,12 +727,11 @@ export function createWellGroup(geos: GeometryCache, mats: MaterialLibrary): THR
   rope.position.set(0, 0.98, 0);
   g.add(rope);
 
-  enableShadows(g, true, true);
-  return g;
+  }, true, true);
 }
 
 export function createShippingBinGroup(geos: GeometryCache, mats: MaterialLibrary): THREE.Group {
-  const g = new THREE.Group();
+  return bakeStaticGroup('baked:shipping_bin', geos, (g) => {
 
   const body = new THREE.Mesh(
     geos.get('bin_body_v3', () => createRoundedBox(0.84, 0.52, 0.72, 0.04, 0.015)),
@@ -608,8 +762,7 @@ export function createShippingBinGroup(geos: GeometryCache, mats: MaterialLibrar
   latch.position.set(0, 0.46, 0.37);
   g.add(latch);
 
-  enableShadows(g, true, true);
-  return g;
+  }, true, true);
 }
 
 export function createForestTreeGroup(
@@ -696,6 +849,117 @@ export function createForestTreeGroup(
 
   enableShadows(g, true, true);
   return g;
+}
+
+export interface InstancedTreeTemplates {
+  broadleafTrunkGeo: THREE.BufferGeometry;
+  broadleafDarkGeo: THREE.BufferGeometry;
+  broadleafMidGeo: THREE.BufferGeometry;
+  broadleafLightGeo: THREE.BufferGeometry;
+  pineTrunkGeo: THREE.BufferGeometry;
+  pineTier1Geo: THREE.BufferGeometry;
+  pineTier2Geo: THREE.BufferGeometry;
+  pineTier3Geo: THREE.BufferGeometry;
+}
+
+export function getInstancedTreeTemplates(geos: GeometryCache): InstancedTreeTemplates {
+  const trunkLathe = geos.get('tree_trunk_v3', () => {
+    const pts = [
+      new THREE.Vector2(0.0, 0),
+      new THREE.Vector2(0.32, 0),
+      new THREE.Vector2(0.22, 0.16),
+      new THREE.Vector2(0.16, 0.55),
+      new THREE.Vector2(0.12, 1.0),
+      new THREE.Vector2(0.0, 1.0),
+    ];
+    return new THREE.LatheGeometry(pts, 10);
+  });
+
+  const broadleafTrunkGeo = geos.get('inst_tree_bl_trunk', () => {
+    const branchGeo = geos.get('tree_branch', () => new THREE.CylinderGeometry(0.055, 0.09, 0.55, 7));
+    const parts: THREE.BufferGeometry[] = [];
+    const m = new THREE.Matrix4();
+    parts.push(normalizeForMerge(trunkLathe, m));
+    for (const [bx, bz, rz, rx] of [[-0.14, 0.08, 0.55, 0.25], [0.16, -0.06, -0.5, -0.2]]) {
+      m.compose(
+        new THREE.Vector3(bx, 0.95, bz),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, 0, rz)),
+        new THREE.Vector3(1, 1, 1)
+      );
+      parts.push(normalizeForMerge(branchGeo, m));
+    }
+    return mergeNormalizedGeos(parts);
+  });
+
+  const canopyGeo = geos.get('tree_canopy_org', () =>
+    sculptOrganic(new THREE.IcosahedronGeometry(1, 2), 0.16, 3.2, 4)
+  );
+
+  const broadleafDarkGeo = geos.get('inst_tree_bl_dark', () => {
+    const parts: THREE.BufferGeometry[] = [];
+    const m = new THREE.Matrix4();
+    for (const [px, py, pz, r] of [
+      [-0.36, 1.28, 0.22, 0.45],
+      [0.38, 1.3, -0.18, 0.43],
+    ]) {
+      m.compose(
+        new THREE.Vector3(px, py, pz),
+        new THREE.Quaternion(),
+        new THREE.Vector3(r * 1.1, r * 0.88, r * 1.1)
+      );
+      parts.push(normalizeForMerge(canopyGeo, m));
+    }
+    return mergeNormalizedGeos(parts);
+  });
+
+  const broadleafMidGeo = geos.get('inst_tree_bl_mid', () => {
+    const m = new THREE.Matrix4().compose(
+      new THREE.Vector3(0, 1.44, 0),
+      new THREE.Quaternion(),
+      new THREE.Vector3(0.62 * 1.1, 0.62 * 0.88, 0.62 * 1.1)
+    );
+    return normalizeForMerge(canopyGeo, m);
+  });
+
+  const broadleafLightGeo = geos.get('inst_tree_bl_light', () => {
+    const m = new THREE.Matrix4().compose(
+      new THREE.Vector3(0.06, 1.76, 0.12),
+      new THREE.Quaternion(),
+      new THREE.Vector3(0.41 * 1.1, 0.41 * 0.88, 0.41 * 1.1)
+    );
+    return normalizeForMerge(canopyGeo, m);
+  });
+
+  const pineTier1Raw = geos.get('tree_pine1_org', () =>
+    sculptOrganic(new THREE.ConeGeometry(0.74, 0.94, 12, 3), 0.09, 5.2, 1)
+  );
+  const pineTier2Raw = geos.get('tree_pine2_org', () =>
+    sculptOrganic(new THREE.ConeGeometry(0.56, 0.82, 12, 3), 0.09, 5.6, 2)
+  );
+  const pineTier3Raw = geos.get('tree_pine3_org', () =>
+    sculptOrganic(new THREE.ConeGeometry(0.35, 0.6, 10, 2), 0.08, 6.0, 3)
+  );
+
+  const pineTier1Geo = geos.get('inst_tree_p1', () =>
+    normalizeForMerge(pineTier1Raw, new THREE.Matrix4().makeTranslation(0, 1.06, 0))
+  );
+  const pineTier2Geo = geos.get('inst_tree_p2', () =>
+    normalizeForMerge(pineTier2Raw, new THREE.Matrix4().makeTranslation(0, 1.54, 0))
+  );
+  const pineTier3Geo = geos.get('inst_tree_p3', () =>
+    normalizeForMerge(pineTier3Raw, new THREE.Matrix4().makeTranslation(0, 1.98, 0))
+  );
+
+  return {
+    broadleafTrunkGeo,
+    broadleafDarkGeo,
+    broadleafMidGeo,
+    broadleafLightGeo,
+    pineTrunkGeo: trunkLathe,
+    pineTier1Geo,
+    pineTier2Geo,
+    pineTier3Geo,
+  };
 }
 
 export interface FarmerModelRig {
@@ -1037,36 +1301,39 @@ export function createCropGroup(
   geos: GeometryCache,
   mats: MaterialLibrary
 ): THREE.Group {
-  const g = new THREE.Group();
   const def = CROPS[crop.type];
   const progress = Math.min(1, crop.growthDays / Math.max(1, def.daysToGrow));
   const stage = progress >= 1 ? 3 : progress >= 0.6 ? 2 : progress >= 0.25 ? 1 : 0;
+  const cacheKey = `baked:crop:${crop.type}:${stage}:${crop.withered ? 1 : 0}`;
 
-  const leafHex = crop.withered ? '#8c724d' : '#438a35';
-  const fruitHex = crop.withered ? '#6e5a41' : def.color;
-  const accentHex = crop.withered ? '#8a7459' : def.accentColor;
-  const leafMat = mats.getSolid(leafHex, 0.78, 0.0);
-  const fruitMat = mats.getSolid(fruitHex, 0.36, 0.05);
-  const accentMat = mats.getSolid(accentHex, 0.52, 0.02);
+  return bakeStaticGroup(
+    cacheKey,
+    geos,
+    (g) => {
+      const leafHex = crop.withered ? '#8c724d' : '#438a35';
+      const fruitHex = crop.withered ? '#6e5a41' : def.color;
+      const accentHex = crop.withered ? '#8a7459' : def.accentColor;
+      const leafMat = mats.getSolid(leafHex, 0.78, 0.0);
+      const fruitMat = mats.getSolid(fruitHex, 0.36, 0.05);
+      const accentMat = mats.getSolid(accentHex, 0.52, 0.02);
 
-  if (stage === 0) {
-    const stemGeo = geos.get('crop_spStem_v3', () => new THREE.CylinderGeometry(0.014, 0.02, 0.1, 6));
-    const cotGeo = geos.get('crop_spLeaf_v3', () => new THREE.SphereGeometry(0.045, 8, 6));
-    for (const [ox, oz] of [[-0.14, -0.12], [0.15, 0.1], [-0.08, 0.14]]) {
-      const stem = new THREE.Mesh(stemGeo, leafMat);
-      stem.position.set(ox, 0.05, oz);
-      g.add(stem);
-      for (const dir of [-1, 1]) {
-        const lf = new THREE.Mesh(cotGeo, leafMat);
-        lf.scale.set(1.4, 0.32, 0.8);
-        lf.position.set(ox + dir * 0.045, 0.1, oz);
-        lf.rotation.z = dir * -0.3;
-        g.add(lf);
+      if (stage === 0) {
+        const stemGeo = geos.get('crop_spStem_v3', () => new THREE.CylinderGeometry(0.014, 0.02, 0.1, 6));
+        const cotGeo = geos.get('crop_spLeaf_v3', () => new THREE.SphereGeometry(0.045, 8, 6));
+        for (const [ox, oz] of [[-0.14, -0.12], [0.15, 0.1], [-0.08, 0.14]]) {
+          const stem = new THREE.Mesh(stemGeo, leafMat);
+          stem.position.set(ox, 0.05, oz);
+          g.add(stem);
+          for (const dir of [-1, 1]) {
+            const lf = new THREE.Mesh(cotGeo, leafMat);
+            lf.scale.set(1.4, 0.32, 0.8);
+            lf.position.set(ox + dir * 0.045, 0.1, oz);
+            lf.rotation.z = dir * -0.3;
+            g.add(lf);
+          }
+        }
+        return;
       }
-    }
-    enableShadows(g, true, true);
-    return g;
-  }
 
   if (crop.type === 'wheat' || crop.type === 'corn' || crop.type === 'lavender') {
     const stalkCount = stage === 1 ? 5 : 8;
@@ -1218,8 +1485,10 @@ export function createCropGroup(
     }
   }
 
-  enableShadows(g, true, true);
-  return g;
+    },
+    stage > 0,
+    true
+  );
 }
 
 export function createObstacleGroup(
@@ -1227,7 +1496,7 @@ export function createObstacleGroup(
   geos: GeometryCache,
   mats: MaterialLibrary
 ): THREE.Group {
-  const g = new THREE.Group();
+  return bakeStaticGroup(`baked:obs:${obstacle}`, geos, (g) => {
   if (obstacle === 'weed') {
     const bladeGeo = geos.get('obs_weedBlade_v3', () => new THREE.ConeGeometry(0.055, 0.34, 7));
     const weedMat = mats.getSolid('#4a8a32', 0.86, 0.0);
@@ -1309,8 +1578,7 @@ export function createObstacleGroup(
     shelf.position.set(0.22, 0.18, 0.08);
     g.add(shelf);
   }
-  enableShadows(g, true, true);
-  return g;
+  }, true, true);
 }
 
 export function createStructureGroup(
@@ -1318,8 +1586,8 @@ export function createStructureGroup(
   geos: GeometryCache,
   mats: MaterialLibrary
 ): THREE.Group {
-  const g = new THREE.Group();
   const type = structure.type;
+  return bakeStaticGroup(`baked:str:${type}`, geos, (g) => {
 
   switch (type) {
     case 'fence': {
@@ -1803,8 +2071,7 @@ export function createStructureGroup(
     }
   }
 
-  enableShadows(g, true, true);
-  return g;
+  }, type !== 'stone_path', true);
 }
 
 export function createTreasureGroup(
@@ -1812,7 +2079,7 @@ export function createTreasureGroup(
   geos: GeometryCache,
   mats: MaterialLibrary
 ): THREE.Group {
-  const g = new THREE.Group();
+  return bakeStaticGroup(`baked:treasure:${kind}`, geos, (g) => {
   if (kind === 'clover') {
     const stem = new THREE.Mesh(
       geos.get('tr_cloverStem_v3', () => new THREE.CylinderGeometry(0.025, 0.03, 0.18, 8)),
@@ -1868,13 +2135,11 @@ export function createTreasureGroup(
       g.add(p);
     }
   }
-  enableShadows(g, true, false);
-  return g;
+  }, true, false);
 }
 
 export function createChickenGroup(geos: GeometryCache, mats: MaterialLibrary): THREE.Group {
-  const g = new THREE.Group();
-  addShadowMesh(g, geos, mats, 0.24);
+  return bakeStaticGroup('baked:chicken', geos, (g) => {
   const whiteMat = mats.getFabric('#fffbeb', 0.85);
   const wingMat = mats.getFabric('#f5ead2', 0.88);
   const beakMat = mats.getSolid('#f59e0b', 0.45, 0.1);
@@ -1947,13 +2212,11 @@ export function createChickenGroup(geos: GeometryCache, mats: MaterialLibrary): 
     leg.position.set(lx, 0.06, 0);
     g.add(leg);
   }
-  enableShadows(g, true, true);
-  return g;
+  }, true, true, { mats, radius: 0.24 });
 }
 
 export function createCowGroup(geos: GeometryCache, mats: MaterialLibrary): THREE.Group {
-  const g = new THREE.Group();
-  addShadowMesh(g, geos, mats, 0.45);
+  return bakeStaticGroup('baked:cow', geos, (g) => {
   const whiteMat = mats.getFabric('#f8fafc', 0.82);
   const spotMat = mats.getFabric('#292524', 0.85);
   const snoutMat = mats.getSolid('#fbcfe8', 0.62, 0.0);
@@ -2063,13 +2326,11 @@ export function createCowGroup(geos: GeometryCache, mats: MaterialLibrary): THRE
     leg.position.set(lx, 0.13, lz);
     g.add(leg);
   }
-  enableShadows(g, true, true);
-  return g;
+  }, true, true, { mats, radius: 0.45 });
 }
 
 export function createSheepGroup(geos: GeometryCache, mats: MaterialLibrary): THREE.Group {
-  const g = new THREE.Group();
-  addShadowMesh(g, geos, mats, 0.36);
+  return bakeStaticGroup('baked:sheep', geos, (g) => {
   const woolMat = mats.getFabric('#f5f5f4', 0.96);
   const darkMat = mats.getSolid('#334155', 0.78, 0.0);
   const eyeMat = mats.getSolid('#fde047', 0.25, 0.1);
@@ -2121,13 +2382,11 @@ export function createSheepGroup(geos: GeometryCache, mats: MaterialLibrary): TH
     leg.position.set(lx, 0.11, lz);
     g.add(leg);
   }
-  enableShadows(g, true, true);
-  return g;
+  }, true, true, { mats, radius: 0.36 });
 }
 
 export function createDogGroup(geos: GeometryCache, mats: MaterialLibrary): THREE.Group {
-  const g = new THREE.Group();
-  addShadowMesh(g, geos, mats, 0.32);
+  return bakeStaticGroup('baked:dog', geos, (g) => {
   const furMat = mats.getFabric('#d97706', 0.85);
   const bellyMat = mats.getFabric('#fde68a', 0.86);
   const collarMat = mats.getSolid('#dc2626', 0.42, 0.15);
@@ -2209,8 +2468,7 @@ export function createDogGroup(geos: GeometryCache, mats: MaterialLibrary): THRE
     leg.position.set(lx, 0.1, lz);
     g.add(leg);
   }
-  enableShadows(g, true, true);
-  return g;
+  }, true, true, { mats, radius: 0.32 });
 }
 
 export function createWildlifeGroup(
@@ -2218,9 +2476,11 @@ export function createWildlifeGroup(
   geos: GeometryCache,
   mats: MaterialLibrary
 ): THREE.Group {
-  const g = new THREE.Group();
-  if (kind === 'rabbit') {
-    addShadowMesh(g, geos, mats, 0.25);
+  return bakeStaticGroup(
+    `baked:wildlife:${kind}`,
+    geos,
+    (g) => {
+      if (kind === 'rabbit') {
     const furMat = mats.getFabric('#cbd5e1', 0.88);
     const tailMat = mats.getFabric('#ffffff', 0.92);
     const pinkMat = mats.getSolid('#f9a8d4', 0.65, 0.0);
@@ -2332,6 +2592,9 @@ export function createWildlifeGroup(
       g.add(leg);
     }
   }
-  enableShadows(g, true, true);
-  return g;
+    },
+    true,
+    true,
+    { mats, radius: kind === 'rabbit' ? 0.25 : 0.38 }
+  );
 }

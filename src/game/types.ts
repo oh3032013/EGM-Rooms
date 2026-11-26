@@ -2,7 +2,7 @@ export type GamePhase = 'title' | 'playing' | 'paused' | 'gameover';
 
 export type Season = 'Spring' | 'Summer' | 'Autumn' | 'Winter';
 
-export type WeatherType = 'Clear' | 'Drought' | 'Rainstorm' | 'Heatwave';
+export type WeatherType = 'Clear' | 'Drought' | 'Rainstorm' | 'Heatwave' | 'Frost';
 
 export type TimePhase = 'Day' | 'Sunset' | 'Night';
 
@@ -15,7 +15,10 @@ export type CropType =
   | 'bean'
   | 'corn'
   | 'watermelon'
-  | 'lavender';
+  | 'lavender'
+  | 'sunflower'
+  | 'blueberry'
+  | 'chili';
 
 export type ToolType = 'hoe' | 'watering_can' | 'axe';
 
@@ -36,7 +39,13 @@ export type PlaceableType =
   | 'cheese_press'
   | 'jam_maker'
   | 'windmill'
-  | 'wishing_fountain';
+  | 'wishing_fountain'
+  | 'bakery_oven'
+  | 'seed_maker'
+  | 'solar_panel'
+  | 'campfire'
+  | 'greenhouse_dome'
+  | 'birdhouse';
 
 export type ResourceType = 'wood' | 'stone';
 
@@ -48,11 +57,13 @@ export type ItemId =
   | PlaceableType
   | CropType
   | 'egg'
+  | 'duck_egg'
   | 'honey'
   | 'milk'
   | 'wool'
   | 'cheese'
   | 'strawberry_jam'
+  | 'farmer_pie'
   | 'fish'
   | 'fertilizer'
   | ResourceType;
@@ -132,12 +143,12 @@ export interface InventorySlot {
 }
 
 export interface ToolUpgrades {
-  hoeLevel: number; // 1 = Rusty, 2 = Copper, 3 = Iron
-  canLevel: number; // 1 = Wood (12), 2 = Copper (20), 3 = Iron (30)
-  axeLevel: number; // 1 = Rusty, 2 = Copper, 3 = Iron
+  hoeLevel: number; // 1 = Iron, 2 = Copper, 3 = Master, 4 = Eco-Emerald
+  canLevel: number; // 1 = Wood (12), 2 = Copper (20), 3 = Iron (30), 4 = Eco-Emerald (40)
+  axeLevel: number; // 1 = Rusty, 2 = Copper, 3 = Iron, 4 = Eco-Emerald
 }
 
-export type WildlifeKind = 'rabbit' | 'boar';
+export type WildlifeKind = 'rabbit' | 'boar' | 'fox';
 
 export type WildlifeState = 'approaching' | 'nibbling' | 'windup' | 'charging' | 'fleeing' | 'ko';
 
@@ -170,7 +181,7 @@ export interface FarmChicken {
   moveTimer: number;
 }
 
-export type LivestockKind = 'cow' | 'sheep' | 'dog';
+export type LivestockKind = 'cow' | 'sheep' | 'dog' | 'cat' | 'duck';
 
 export interface LivestockEntity {
   id: number;
@@ -257,14 +268,22 @@ export interface DaySummary {
   cropsWithered: number;
   cropsFlooded: number;
   cropsHeatDamaged?: number;
+  cropsFrosted?: number;
   wildlifeDamage: number;
   eggsCollected: number;
+  duckEggsCollected?: number;
   honeyCollected?: number;
   milkCollected?: number;
   woolCollected?: number;
   cheeseMade?: number;
   jamMade?: number;
+  piesBaked?: number;
   windmillGold?: number;
+  solarGold?: number;
+  catGiftGold?: number;
+  catGiftFish?: number;
+  birdhouseSeeds?: number;
+  harvestFestival?: boolean;
   rainbowActive?: boolean;
   sprinklerWatered: number;
   dripWatered?: number;
@@ -290,11 +309,14 @@ export interface FarmStats {
   sprinklersPlaced: number;
   sensorsPlaced: number;
   eggsCollected: number;
+  duckEggsCollected?: number;
   honeyCollected?: number;
   milkCollected?: number;
   woolCollected?: number;
   fishCaught?: number;
   artisanProduced?: number;
+  piesBaked?: number;
+  seedsMilled?: number;
   wishesMade?: number;
   ordersCompleted?: number;
   treasuresFound?: number;
@@ -325,14 +347,23 @@ export type MissionId =
   | 'master_angler'
   | 'artisan_maker'
   | 'dairy_rancher'
-  | 'veteran_farmer';
+  | 'veteran_farmer'
+  | 'sunflower_berry'
+  | 'bake_pie'
+  | 'seed_miller'
+  | 'clean_energy'
+  | 'pond_companions'
+  | 'emerald_tools';
 
 export type BadgeId =
   | 'time_captain'
   | 'water_guardian'
   | 'soil_friend'
   | 'angler_pro'
-  | 'artisan_chef';
+  | 'artisan_chef'
+  | 'artisan_baker'
+  | 'eco_engineer'
+  | 'wildlife_ranger';
 
 export interface MissionDef {
   id: MissionId;
@@ -363,6 +394,8 @@ export interface GameWorldState {
   cows?: LivestockEntity[];
   sheep?: LivestockEntity[];
   dog?: LivestockEntity | null;
+  cat?: LivestockEntity | null;
+  ducks?: LivestockEntity[];
   xp?: number;
   level?: number;
   marketSurgeCrop?: CropType;

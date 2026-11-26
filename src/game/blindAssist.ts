@@ -23,6 +23,7 @@ import {
   getDayOfSeason,
   getSeason,
   getTile,
+  isHarvestFestivalDay,
   isNearFarmhouse,
   isNearShippingBin,
   isNearShopStall,
@@ -163,6 +164,10 @@ export function describeTileForBlind(
         ? lang === 'ar'
           ? 'خنزير بري متسلل! استخدم الفأس للدفاع'
           : 'Wild boar nearby! Use axe to repel'
+        : nearbyBeast.kind === 'fox'
+        ? lang === 'ar'
+          ? 'ثعلب ليلي متسلل! استخدم الفأس لإبعاده'
+          : 'Sly fox nearby! Use axe to repel'
         : lang === 'ar'
         ? 'أرنب بري متسلل! استخدم الفأس لإبعاده'
         : 'Wild rabbit nearby! Use axe to repel';
@@ -191,6 +196,21 @@ export function describeTileForBlind(
   if (world.dog && Math.hypot(world.dog.x - (tx + 0.5), world.dog.y - (ty + 0.5)) <= 1.2) {
     return {
       text: lang === 'ar' ? 'كلب الحراسة يحمي المزرعة أمامك' : 'Loyal guard dog patrolling nearby',
+      cue: 'clear',
+    };
+  }
+  if (world.cat && Math.hypot(world.cat.x - (tx + 0.5), world.cat.y - (ty + 0.5)) <= 1.2) {
+    return {
+      text: lang === 'ar' ? 'قطة المزرعة الأليفة تتجول أمامك' : 'Barn tabby cat purring nearby',
+      cue: 'clear',
+    };
+  }
+  const nearbyDuck = world.ducks?.find(
+    (d) => Math.hypot(d.x - (tx + 0.5), d.y - (ty + 0.5)) <= 1.2
+  );
+  if (nearbyDuck) {
+    return {
+      text: lang === 'ar' ? 'بطة البركة تسبح أمامك' : 'Pond duck nearby',
       cue: 'clear',
     };
   }
@@ -378,6 +398,10 @@ export function getSmartGuidance(
         ? lang === 'ar'
           ? 'خنزير بري'
           : 'wild boar'
+        : best.kind === 'fox'
+        ? lang === 'ar'
+          ? 'ثعلب ليلي'
+          : 'sly fox'
         : lang === 'ar'
         ? 'أرنب بري'
         : 'wild rabbit';
@@ -543,7 +567,8 @@ export function buildStatusAnnouncement(world: GameWorldState, lang: Language): 
 
   if (lang === 'ar') {
     const missionNote = claimable > 0 ? ` لديك ${claimable} مكافأة تحدٍ جاهزة.` : '';
-    return `${season} اليوم ${day}، الساعة ${clock}، الطقس ${weather}. الصحة ${Math.round(
+    const festivalNote = isHarvestFestivalDay(world.day) ? ' اليوم مهرجان الحصاد +40%!' : '';
+    return `${season} اليوم ${day}، الساعة ${clock}، الطقس ${weather}.${festivalNote} الصحة ${Math.round(
       world.player.health
     )}، الطاقة ${Math.round(world.player.stamina)}، الماء ${world.player.waterLevel} من ${
       world.player.maxWaterLevel
@@ -551,7 +576,8 @@ export function buildStatusAnnouncement(world: GameWorldState, lang: Language): 
   }
 
   const missionNote = claimable > 0 ? ` ${claimable} mission reward ready.` : '';
-  return `${season} Day ${day}, ${clock}, ${weather}. Health ${Math.round(
+  const festivalNote = isHarvestFestivalDay(world.day) ? ' Harvest Festival +40% sell bonus!' : '';
+  return `${season} Day ${day}, ${clock}, ${weather}.${festivalNote} Health ${Math.round(
     world.player.health
   )}, Stamina ${Math.round(world.player.stamina)}, Water ${world.player.waterLevel} of ${
     world.player.maxWaterLevel

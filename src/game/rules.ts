@@ -1,5 +1,9 @@
 import {
   BEEHIVE_RADIUS,
+  BIRDHOUSE_RADIUS,
+  CAMPFIRE_HEAL_RADIUS,
+  CAMPFIRE_WARM_RADIUS,
+  CAT_PRICE,
   CHICKEN_PRICE,
   COMPOST_RADIUS,
   COW_PRICE,
@@ -9,16 +13,20 @@ import {
   DAY_START_MINUTES,
   DOG_PRICE,
   DRIP_WATER_SAVED_PER_TILE,
+  DUCK_PRICE,
   FARMHOUSE_DOOR,
   FARMHOUSE_POS,
   FISHING_COOLDOWN_MS,
   GRID_HEIGHT,
   GRID_WIDTH,
+  HARVEST_FESTIVAL_BONUS,
   ITEMS,
   LITERS_PER_WATERING,
+  MAX_CATS,
   MAX_CHICKENS,
   MAX_COWS,
   MAX_DOGS,
+  MAX_DUCKS,
   MAX_SHEEP,
   MESSAGES_FROM_2040,
   MISSIONS,
@@ -33,6 +41,7 @@ import {
   SHEEP_PRICE,
   SHIPPING_BIN_POS,
   SHOP_STALL_POS,
+  SOLAR_PANEL_DAILY_GOLD,
   SPRINKLER_RADIUS,
   SUNSET_START_MINUTES,
   WELL_POS,
@@ -67,6 +76,10 @@ export function getSeason(seasonIndex: number): Season {
 
 export function getDayOfSeason(day: number): number {
   return ((day - 1) % DAYS_PER_SEASON) + 1;
+}
+
+export function isHarvestFestivalDay(day: number): boolean {
+  return getDayOfSeason(day) === DAYS_PER_SEASON;
 }
 
 export function getTimePhase(timeMinutes: number): TimePhase {
@@ -293,6 +306,8 @@ export function createInitialFarmState(seed = 42): GameWorldState {
     cows: [],
     sheep: [],
     dog: null,
+    cat: null,
+    ducks: [],
     xp: 0,
     level: 1,
     marketSurgeCrop: rollMarketSurgeCrop(1, rand),
@@ -314,11 +329,14 @@ export function createInitialFarmState(seed = 42): GameWorldState {
       sprinklersPlaced: 0,
       sensorsPlaced: 0,
       eggsCollected: 0,
+      duckEggsCollected: 0,
       honeyCollected: 0,
       milkCollected: 0,
       woolCollected: 0,
       fishCaught: 0,
       artisanProduced: 0,
+      piesBaked: 0,
+      seedsMilled: 0,
       wishesMade: 0,
       ordersCompleted: 0,
       treasuresFound: 0,
@@ -396,7 +414,7 @@ export function recordDiscoveredItem(state: GameWorldState, id: ItemId): void {
 }
 
 export function getToolStaminaCost(tool: ToolType, state: GameWorldState): number {
-  if (tool === 'hoe') return Math.max(2, 5 - state.upgrades.hoeLevel);
+  if (tool === 'hoe') return Math.max(1, 5 - state.upgrades.hoeLevel);
   if (tool === 'watering_can') return Math.max(1, 4 - state.upgrades.canLevel);
   return Math.max(2, 6 - state.upgrades.axeLevel);
 }
@@ -541,6 +559,73 @@ export function isCoveredByShadeNet(state: GameWorldState, x: number, y: number)
   return false;
 }
 
+export function isCoveredByGreenhouse(state: GameWorldState, x: number, y: number): boolean {
+  for (const tile of state.tiles) {
+    if (tile.structure?.type === 'greenhouse_dome') {
+      if (Math.abs(tile.x - x) <= 1 && Math.abs(tile.y - y) <= 1) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function isCoveredByBirdhouse(state: GameWorldState, x: number, y: number): boolean {
+  return isCoveredByStructureRadius(state, x, y, 'birdhouse', BIRDHOUSE_RADIUS);
+}
+
+export function isProtectedFromPests(state: GameWorldState, x: number, y: number): boolean {
+  return isProtectedByScarecrow(state, x, y) || isCoveredByBirdhouse(state, x, y);
+}
+
+export function isWarmedFromFrost(state: GameWorldState, x: number, y: number): boolean {
+  if (isCoveredByGreenhouse(state, x, y)) return true;
+  if (isProtectedFromFlood(state, x, y)) return true;
+  return isCoveredByStructureRadius(state, x, y, 'campfire', CAMPFIRE_WARM_RADIUS);
+}
+
+export function stepCampfireAura(state: GameWorldState, dt: number): void {
+  if (dt <= 0) return;
+  let nearCampfire = false;
+  for (const tile of state.tiles) {
+    if (tile.structure?.type === 'campfire') {
+      const dist = Math.hypot(tile.x + 0.5 - state.player.x, tile.y + 0.5 - state.player.y);
+      if (dist <= CAMPFIRE_HEAL_RADIUS) {
+        nearCampfire = true;
+        break;
+      }
+    }
+  }
+  if (!nearCampfire) return;
+  state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 5 * dt);
+  state.player.health = Math.min(state.player.maxHealth, state.player.health + 2 * dt);
+}
+
+export function findBestQuickEatItem(state: GameWorldState): ItemId | null {
+  const held = state.hotbar[state.player.selectedHotbarIndex];
+  if (
+    held &&
+    (state.inventory[held] ?? 0) > 0 &&
+    ((ITEMS[held].edibleStamina ?? 0) > 0 || (ITEMS[held].edibleHealth ?? 0) > 0)
+  ) {
+    return held;
+  }
+  let bestId: ItemId | null = null;
+  let bestScore = -1;
+  for (const [k, qty] of Object.entries(state.inventory)) {
+    if (!qty || qty <= 0) continue;
+    const id = k as ItemId;
+    const def = ITEMS[id];
+    if (!def) continue;
+    const score = (def.edibleStamina ?? 0) + (def.edibleHealth ?? 0);
+    if (score > bestScore && score > 0) {
+      bestScore = score;
+      bestId = id;
+    }
+  }
+  return bestId;
+}
+
 export function hasNasaStation(state: GameWorldState): boolean {
   return state.tiles.some((t) => t.structure?.type === 'nasa_station');
 }
@@ -551,6 +636,7 @@ export function computeSoilMoisturePct(state: GameWorldState): number {
   const wateredRatio = tilled.length > 0 ? watered / tilled.length : 0.4;
   let base = 46;
   if (state.weather === 'Rainstorm') base = 86;
+  else if (state.weather === 'Frost') base = 52;
   else if (state.weather === 'Drought') base = 22;
   else if (state.weather === 'Heatwave') base = 18;
   return Math.max(10, Math.min(98, Math.round(base + wateredRatio * 14)));
@@ -562,6 +648,7 @@ export function computeTemperatureC(state: GameWorldState): number {
   if (state.weather === 'Heatwave') temp += 11;
   else if (state.weather === 'Drought') temp += 5;
   else if (state.weather === 'Rainstorm') temp -= 4;
+  else if (state.weather === 'Frost') temp -= 6;
   return temp;
 }
 
@@ -746,7 +833,13 @@ export function performTileAction(
       if ((tileX + tileY + state.day) % mod === 0) {
         addInventoryItem(state, def.seedId, 1);
       }
-      tile.crop = null;
+      if (harvestedType === 'blueberry') {
+        // Perennial bush regrows berries every 2 days (daysToGrow = 4 -> reset to growthDays = 2)
+        tile.crop.growthDays = 2;
+        tile.crop.withered = false;
+      } else {
+        tile.crop = null;
+      }
       state.stats.cropsHarvested += 1;
       const leveledUpTo = grantXp(state, 15);
       const totalGoldDelta = goldDelta + comboGold;
@@ -931,15 +1024,85 @@ export function performTileAction(
     };
   }
 
+  if (tile.structure?.type === 'bakery_oven') {
+    if ((state.inventory.wheat ?? 0) >= 1 && (state.inventory.egg ?? 0) >= 1) {
+      consumeInventoryItem(state, 'wheat', 1);
+      consumeInventoryItem(state, 'egg', 1);
+      addInventoryItem(state, 'farmer_pie', 1);
+      state.stats.artisanProduced = (state.stats.artisanProduced ?? 0) + 1;
+      state.stats.piesBaked = (state.stats.piesBaked ?? 0) + 1;
+      const leveledUpTo = grantXp(state, 16);
+      return {
+        performed: true,
+        kind: 'artisan',
+        tileX,
+        tileY,
+        leveledUpTo,
+        message: 'Baked 1 Farmer Golden Pie!',
+      };
+    }
+    return {
+      performed: false,
+      kind: 'error',
+      message: 'Need 1 Wheat + 1 Egg to bake Pie',
+    };
+  }
+
+  if (tile.structure?.type === 'seed_maker') {
+    const heldId = state.hotbar[state.player.selectedHotbarIndex];
+    let targetCrop: CropType | null = null;
+    if (
+      heldId &&
+      ITEMS[heldId]?.category === 'crop' &&
+      ITEMS[heldId]?.cropType &&
+      (state.inventory[heldId] ?? 0) >= 1
+    ) {
+      targetCrop = ITEMS[heldId].cropType!;
+    } else {
+      let bestQty = 0;
+      for (const cropKey of Object.keys(CROPS) as CropType[]) {
+        const q = state.inventory[cropKey] ?? 0;
+        if (q > bestQty) {
+          bestQty = q;
+          targetCrop = cropKey;
+        }
+      }
+    }
+    if (targetCrop) {
+      consumeInventoryItem(state, targetCrop, 1);
+      const seedId = CROPS[targetCrop].seedId;
+      addInventoryItem(state, seedId, 2);
+      state.stats.seedsMilled = (state.stats.seedsMilled ?? 0) + 1;
+      const leveledUpTo = grantXp(state, 10);
+      return {
+        performed: true,
+        kind: 'artisan',
+        tileX,
+        tileY,
+        leveledUpTo,
+        message: `Milled 2x ${ITEMS[seedId].name}!`,
+      };
+    }
+    return {
+      performed: false,
+      kind: 'error',
+      message: 'Need 1 harvested crop to make seeds',
+    };
+  }
+
   const selectedId = state.hotbar[state.player.selectedHotbarIndex];
 
   // Priority 2c-bis: Interactive Farm Animal Petting (when tile has no crop/obstacle/structure/tilled plot blocking)
   if (!tile.crop && !tile.obstacle && !tile.structure && (!tile.tilled || !selectedId)) {
     const cx = tileX + 0.5;
     const cy = tileY + 0.5;
-    let petKind: 'dog' | 'cow' | 'sheep' | 'chicken' | null = null;
+    let petKind: 'dog' | 'cat' | 'cow' | 'sheep' | 'chicken' | 'duck' | null = null;
     if (state.dog && Math.hypot(state.dog.x - cx, state.dog.y - cy) <= 0.78) {
       petKind = 'dog';
+    } else if (state.cat && Math.hypot(state.cat.x - cx, state.cat.y - cy) <= 0.78) {
+      petKind = 'cat';
+    } else if ((state.ducks ?? []).some((d) => Math.hypot(d.x - cx, d.y - cy) <= 0.78)) {
+      petKind = 'duck';
     } else if ((state.cows ?? []).some((c) => Math.hypot(c.x - cx, c.y - cy) <= 0.72)) {
       petKind = 'cow';
     } else if ((state.sheep ?? []).some((s) => Math.hypot(s.x - cx, s.y - cy) <= 0.72)) {
@@ -955,8 +1118,12 @@ export function performTileAction(
         state.pettedAnimalsToday.push(petKind);
         if (petKind === 'dog') {
           state.player.health = Math.min(state.player.maxHealth, state.player.health + 8);
+        } else if (petKind === 'cat') {
+          state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 8);
         } else if (petKind === 'cow' || petKind === 'sheep') {
           state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 6);
+        } else if (petKind === 'duck') {
+          state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 5);
         } else {
           state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 4);
         }
@@ -965,6 +1132,10 @@ export function performTileAction(
       const message = firstToday
         ? petKind === 'dog'
           ? 'Petted Guard Dog (+8 HP)!'
+          : petKind === 'cat'
+          ? 'Petted Barn Cat (+8 Stam)!'
+          : petKind === 'duck'
+          ? 'Petted Pond Duck (+5 Stam)!'
           : petKind === 'cow'
           ? 'Petted Dairy Cow (+6 Stam)!'
           : petKind === 'sheep'
@@ -972,6 +1143,10 @@ export function performTileAction(
           : 'Petted Chicken (+4 Stam)!'
         : petKind === 'dog'
         ? 'Guard Dog wags tail!'
+        : petKind === 'cat'
+        ? 'Barn Cat purrs softly!'
+        : petKind === 'duck'
+        ? 'Pond Duck quacks happily!'
         : petKind === 'cow'
         ? 'Dairy Cow moos happily!'
         : petKind === 'sheep'
@@ -1007,7 +1182,8 @@ export function performTileAction(
     state.player.swingTool = 'hoe';
     addInventoryItem(state, 'fish', 1);
     state.stats.fishCaught = (state.stats.fishCaught ?? 0) + 1;
-    const goldenPearl = (tileX + tileY + Math.floor(nowMs / 1000)) % 4 === 0;
+    const pearlMod = (state.ducks?.length ?? 0) > 0 ? 3 : 4;
+    const goldenPearl = (tileX + tileY + Math.floor(nowMs / 1000)) % pearlMod === 0;
     if (goldenPearl) {
       state.player.gold += 35;
       state.stats.totalGoldEarned += 35;
@@ -1114,14 +1290,17 @@ export function performTileAction(
         if (state.upgrades.hoeLevel < 3) return false;
         const stepX = Math.abs(state.player.facingX) >= Math.abs(state.player.facingY) ? Math.sign(state.player.facingX || 1) : 0;
         const stepY = stepX === 0 ? Math.sign(state.player.facingY || 1) : 0;
-        const extra = getTile(state, tileX + stepX, tileY + stepY);
-        if (!extra) return false;
-        if (extra.tillable && !extra.tilled && !extra.obstacle && !extra.structure) {
-          extra.tilled = true;
-          if (state.weather === 'Rainstorm') extra.watered = true;
-          return true;
+        const maxSteps = state.upgrades.hoeLevel >= 4 ? 2 : 1;
+        let tilledAny = false;
+        for (let step = 1; step <= maxSteps; step++) {
+          const extra = getTile(state, tileX + stepX * step, tileY + stepY * step);
+          if (extra && extra.tillable && !extra.tilled && !extra.obstacle && !extra.structure) {
+            extra.tilled = true;
+            if (state.weather === 'Rainstorm') extra.watered = true;
+            tilledAny = true;
+          }
         }
-        return false;
+        return tilledAny;
       };
       // Clear withered crop
       if (tile.crop?.withered) {
@@ -1181,13 +1360,16 @@ export function performTileAction(
         if (state.upgrades.canLevel >= 3 && state.player.waterLevel > 0) {
           const stepX = Math.abs(state.player.facingX) >= Math.abs(state.player.facingY) ? Math.sign(state.player.facingX || 1) : 0;
           const stepY = stepX === 0 ? Math.sign(state.player.facingY || 1) : 0;
-          const extra = getTile(state, tileX + stepX, tileY + stepY);
-          if (extra && extra.tilled && !extra.watered) {
-            extra.watered = true;
-            extra.droughtDriedToday = false;
-            state.player.waterLevel = Math.max(0, state.player.waterLevel - 1);
-            state.stats.cropsWatered = (state.stats.cropsWatered ?? 0) + 1;
-            bonusTileAction = true;
+          const maxSteps = state.upgrades.canLevel >= 4 ? 2 : 1;
+          for (let step = 1; step <= maxSteps && state.player.waterLevel > 0; step++) {
+            const extra = getTile(state, tileX + stepX * step, tileY + stepY * step);
+            if (extra && extra.tilled && !extra.watered) {
+              extra.watered = true;
+              extra.droughtDriedToday = false;
+              state.player.waterLevel = Math.max(0, state.player.waterLevel - 1);
+              state.stats.cropsWatered = (state.stats.cropsWatered ?? 0) + 1;
+              bonusTileAction = true;
+            }
           }
         }
         return { performed: true, kind: 'water', tileX, tileY, bonusTileAction };
@@ -1216,8 +1398,9 @@ export function performTileAction(
             w.state = 'ko';
             w.stateTimer = 0.45;
             state.stats.wildlifeRepelled += 1;
-            state.player.gold += w.kind === 'boar' ? 20 : 10;
-            state.stats.totalGoldEarned += w.kind === 'boar' ? 20 : 10;
+            const bounty = w.kind === 'boar' ? 20 : w.kind === 'fox' ? 15 : 10;
+            state.player.gold += bounty;
+            state.stats.totalGoldEarned += bounty;
             leveledUpTo = grantXp(state, 20) ?? leveledUpTo;
           } else {
             w.state = 'fleeing';
@@ -1369,14 +1552,16 @@ export function rollWeather(season: Season, rng: () => number = Math.random): We
     return 'Clear';
   }
   if (season === 'Autumn') {
-    if (r < 0.30) return 'Rainstorm';
-    if (r < 0.44) return 'Drought';
-    if (r < 0.54) return 'Heatwave';
+    if (r < 0.26) return 'Rainstorm';
+    if (r < 0.40) return 'Drought';
+    if (r < 0.50) return 'Heatwave';
+    if (r < 0.64) return 'Frost';
     return 'Clear';
   }
   // Winter
-  if (r < 0.38) return 'Rainstorm';
-  if (r < 0.50) return 'Drought';
+  if (r < 0.28) return 'Frost';
+  if (r < 0.52) return 'Rainstorm';
+  if (r < 0.62) return 'Drought';
   return 'Clear';
 }
 
@@ -1400,11 +1585,22 @@ export function triggerMiddayHeatwave(state: GameWorldState): number {
   state.heatwaveMiddayTriggered = true;
   let exposedSensitive = 0;
   for (const tile of state.tiles) {
-    if (tile.tilled && tile.watered && !isCoveredByShadeNet(state, tile.x, tile.y) && !isCoveredBySensor(state, tile.x, tile.y)) {
+    if (
+      tile.tilled &&
+      tile.watered &&
+      !isCoveredByShadeNet(state, tile.x, tile.y) &&
+      !isCoveredByGreenhouse(state, tile.x, tile.y) &&
+      !isCoveredBySensor(state, tile.x, tile.y)
+    ) {
       tile.watered = false;
     }
-    if (tile.crop && !tile.crop.withered && SENSITIVE_CROPS.includes(tile.crop.type)) {
-      if (!isCoveredByShadeNet(state, tile.x, tile.y)) {
+    if (
+      tile.crop &&
+      !tile.crop.withered &&
+      tile.crop.type !== 'chili' &&
+      SENSITIVE_CROPS.includes(tile.crop.type)
+    ) {
+      if (!isCoveredByShadeNet(state, tile.x, tile.y) && !isCoveredByGreenhouse(state, tile.x, tile.y)) {
         exposedSensitive += 1;
       }
     }
@@ -1423,6 +1619,7 @@ export function advanceDay(
   let cropsWithered = 0;
   let cropsFlooded = 0;
   let cropsHeatDamaged = 0;
+  let cropsFrosted = 0;
   let wildlifeDamage = 0;
   let shadedCropsInHeatwave = 0;
 
@@ -1431,7 +1628,7 @@ export function advanceDay(
     if (w.state === 'ko' || w.state === 'fleeing') continue;
     // Unfended wildlife may nibble 1 unprotected crop overnight
     for (const tile of state.tiles) {
-      if (tile.crop && !tile.crop.withered && !isProtectedByScarecrow(state, tile.x, tile.y)) {
+      if (tile.crop && !tile.crop.withered && !isProtectedFromPests(state, tile.x, tile.y)) {
         tile.crop = null;
         wildlifeDamage += 1;
         break;
@@ -1445,15 +1642,33 @@ export function advanceDay(
     if (crop.withered) continue;
 
     const def = CROPS[crop.type];
+    const inGreenhouse = isCoveredByGreenhouse(state, tile.x, tile.y);
 
-    // Heatwave withers unprotected sensitive crops (e.g. Strawberry, Tomato) unless covered by Shade Net (3x3)
+    // Heatwave withers unprotected sensitive crops (unless Chili, Shade Net, or Greenhouse)
     if (prevWeather === 'Heatwave') {
-      const shaded = isCoveredByShadeNet(state, tile.x, tile.y);
+      const shaded = isCoveredByShadeNet(state, tile.x, tile.y) || inGreenhouse;
       if (shaded) {
         shadedCropsInHeatwave += 1;
-      } else if (SENSITIVE_CROPS.includes(crop.type)) {
+      } else if (crop.type !== 'chili' && SENSITIVE_CROPS.includes(crop.type)) {
         crop.withered = true;
         cropsHeatDamaged += 1;
+        cropsWithered += 1;
+        tile.watered = false;
+        tile.droughtDriedToday = false;
+        continue;
+      }
+    }
+
+    // Crisp Frost freezes exposed non-hardy crops unless warmed by Campfire, Lantern, or Greenhouse
+    if (prevWeather === 'Frost') {
+      const frostHardy =
+        crop.type === 'pumpkin' ||
+        crop.type === 'bean' ||
+        crop.type === 'carrot' ||
+        crop.type === 'blueberry';
+      if (!frostHardy && !isWarmedFromFrost(state, tile.x, tile.y) && rng() < 0.55) {
+        crop.withered = true;
+        cropsFrosted += 1;
         cropsWithered += 1;
         tile.watered = false;
         tile.droughtDriedToday = false;
@@ -1464,7 +1679,7 @@ export function advanceDay(
     // Rainstorm auto-waters, but completely unprotected crops risk flood/frost stress
     const wasWatered = tile.watered || prevWeather === 'Rainstorm';
 
-    if (prevWeather === 'Rainstorm' && !isProtectedFromFlood(state, tile.x, tile.y)) {
+    if (prevWeather === 'Rainstorm' && !inGreenhouse && !isProtectedFromFlood(state, tile.x, tile.y)) {
       if (rng() < (prevSeason === 'Winter' ? 0.35 : 0.20)) {
         crop.floodedDays += 1;
         if (crop.floodedDays >= 2) {
@@ -1481,8 +1696,8 @@ export function advanceDay(
     if (wasWatered) {
       crop.daysUnwatered = 0;
       const isFavSeason = def.favoriteSeasons.includes(prevSeason);
-      // In winter, non-favorite crops grow half as likely unless warmed by lantern
-      const warmed = isProtectedFromFlood(state, tile.x, tile.y);
+      // In winter, non-favorite crops grow half as likely unless warmed or inside greenhouse
+      const warmed = isWarmedFromFrost(state, tile.x, tile.y);
       let grewToday = false;
       if (prevSeason === 'Winter' && !isFavSeason && !warmed) {
         if (rng() < 0.5 && crop.growthDays < def.daysToGrow) {
@@ -1495,12 +1710,12 @@ export function advanceDay(
         cropsGrown += 1;
         grewToday = true;
       }
-      // Organic Compost Bin accelerates nearby crop growth (+40% chance of extra growth day)
+      // Organic Compost Bin (+40%) or Mini Greenhouse Dome (+35%) extra growth boost
       if (
         grewToday &&
         crop.growthDays < def.daysToGrow &&
-        isCoveredByCompost(state, tile.x, tile.y) &&
-        rng() < 0.4
+        ((isCoveredByCompost(state, tile.x, tile.y) && rng() < 0.4) ||
+          (inGreenhouse && rng() < 0.35))
       ) {
         crop.growthDays += 1;
       }
@@ -1529,6 +1744,7 @@ export function advanceDay(
   const newSeasonIndex = Math.floor((state.day - 1) / DAYS_PER_SEASON);
   state.seasonIndex = newSeasonIndex;
   const newSeason = getSeason(newSeasonIndex);
+  const harvestFestival = isHarvestFestivalDay(state.day);
 
   // Use forecastWeather if present, otherwise roll; also roll tomorrow's forecast for NASA Station
   const nextWeather = state.forecastWeather ?? rollWeather(newSeason, rng);
@@ -1603,12 +1819,32 @@ export function advanceDay(
     state.stats.waterSavedLiters = (state.stats.waterSavedLiters ?? 0) + waterSavedLiters;
   }
 
-  // Farmyard chickens lay fresh morning eggs
+  // Farmyard chickens & Pond Ducks lay fresh morning eggs
   const chickens = state.chickens ?? [];
   const eggsCollected = chickens.length;
   if (eggsCollected > 0) {
     addInventoryItem(state, 'egg', eggsCollected);
     state.stats.eggsCollected = (state.stats.eggsCollected ?? 0) + eggsCollected;
+  }
+  const ducks = state.ducks ?? [];
+  const duckEggsCollected = ducks.length;
+  if (duckEggsCollected > 0) {
+    addInventoryItem(state, 'duck_egg', duckEggsCollected);
+    state.stats.duckEggsCollected = (state.stats.duckEggsCollected ?? 0) + duckEggsCollected;
+  }
+
+  // Barn Tabby Cat brings a lucky morning gift (fish or lucky coin)
+  let catGiftGold = 0;
+  let catGiftFish = 0;
+  if (state.cat) {
+    if (rng() < 0.5) {
+      catGiftFish = 1;
+      addInventoryItem(state, 'fish', 1);
+    } else {
+      catGiftGold = 15;
+      state.player.gold += 15;
+      state.stats.totalGoldEarned += 15;
+    }
   }
 
   // Dairy cows yield fresh morning milk & Fluffy sheep yield soft wool
@@ -1625,17 +1861,17 @@ export function advanceDay(
     state.stats.woolCollected = (state.stats.woolCollected ?? 0) + woolCollected;
   }
 
-  // Honeybee Hives yield fresh Wildflower Honey (+1 bonus honey if Fragrant Lavender grows nearby!)
+  // Honeybee Hives yield fresh Wildflower Honey (+1 bonus honey if Lavender or Sunflower grows nearby!)
   let honeyCollected = 0;
   for (const tile of state.tiles) {
     if (tile.structure?.type === 'beehive') {
-      const hasLavender = state.tiles.some(
+      const hasBloom = state.tiles.some(
         (lt) =>
-          lt.crop?.type === 'lavender' &&
+          (lt.crop?.type === 'lavender' || lt.crop?.type === 'sunflower') &&
           !lt.crop.withered &&
           Math.hypot(lt.x - tile.x, lt.y - tile.y) <= BEEHIVE_RADIUS + 0.5
       );
-      honeyCollected += hasLavender ? 2 : 1;
+      honeyCollected += hasBloom ? 2 : 1;
     }
   }
   if (honeyCollected > 0) {
@@ -1643,10 +1879,14 @@ export function advanceDay(
     state.stats.honeyCollected = (state.stats.honeyCollected ?? 0) + honeyCollected;
   }
 
-  // Artisan Machines overnight processing (Cheese Press & Berry Jam Maker) + Windmill passive income
+  // Artisan Machines overnight processing (Cheese Press, Jam Maker, Bakery Oven) + Windmill & Solar Panel income + Birdhouse seeds
   let cheeseMade = 0;
   let jamMade = 0;
+  let piesBaked = 0;
   let windmillGold = 0;
+  let solarGold = 0;
+  let birdhouseSeeds = 0;
+  const seedPool: ItemId[] = ['wheat_seed', 'carrot_seed', 'sunflower_seed', 'blueberry_seed', 'chili_seed'];
   for (const tile of state.tiles) {
     if (tile.structure?.type === 'cheese_press' && (state.inventory.milk ?? 0) >= 1) {
       consumeInventoryItem(state, 'milk', 1);
@@ -1658,13 +1898,30 @@ export function advanceDay(
       addInventoryItem(state, 'strawberry_jam', 1);
       jamMade += 1;
       state.stats.artisanProduced = (state.stats.artisanProduced ?? 0) + 1;
+    } else if (
+      tile.structure?.type === 'bakery_oven' &&
+      (state.inventory.wheat ?? 0) >= 1 &&
+      (state.inventory.egg ?? 0) >= 1
+    ) {
+      consumeInventoryItem(state, 'wheat', 1);
+      consumeInventoryItem(state, 'egg', 1);
+      addInventoryItem(state, 'farmer_pie', 1);
+      piesBaked += 1;
+      state.stats.artisanProduced = (state.stats.artisanProduced ?? 0) + 1;
+      state.stats.piesBaked = (state.stats.piesBaked ?? 0) + 1;
     } else if (tile.structure?.type === 'windmill') {
       windmillGold += WINDMILL_DAILY_GOLD;
+    } else if (tile.structure?.type === 'solar_panel') {
+      solarGold += SOLAR_PANEL_DAILY_GOLD;
+    } else if (tile.structure?.type === 'birdhouse' && rng() < 0.25) {
+      const pickedSeed = seedPool[Math.floor(rng() * seedPool.length)] ?? 'wheat_seed';
+      addInventoryItem(state, pickedSeed, 1);
+      birdhouseSeeds += 1;
     }
   }
-  if (windmillGold > 0) {
-    state.player.gold += windmillGold;
-    state.stats.totalGoldEarned += windmillGold;
+  if (windmillGold + solarGold > 0) {
+    state.player.gold += windmillGold + solarGold;
+    state.stats.totalGoldEarned += windmillGold + solarGold;
   }
 
   // Generate fresh Daily Village Order, Daily Market Surge (+50%), & reset harvest combo streak
@@ -1683,18 +1940,26 @@ export function advanceDay(
   const messageFrom2040 = getMessageFrom2040ForDay(state.day);
 
   const notes: string[] = [];
+  if (harvestFestival) notes.push('Harvest Festival (+40% Sale Price)!');
   if (cropsGrown > 0) notes.push(`${cropsGrown} crop${cropsGrown > 1 ? 's' : ''} grew`);
   if (rainbowActive) notes.push('Rainbow morning!');
   if (sprinklerWatered > 0) notes.push(`${sprinklerWatered} sprinkler-watered`);
   if (dripWatered > 0) notes.push(`${dripWatered} drip-irrigated (-${waterSavedLiters}L saved)`);
   if (rainCollectedLiters > 0) notes.push(`+${rainCollectedLiters}L rain stored`);
   if (eggsCollected > 0) notes.push(`+${eggsCollected} fresh egg${eggsCollected > 1 ? 's' : ''}`);
+  if (duckEggsCollected > 0) notes.push(`+${duckEggsCollected} duck egg${duckEggsCollected > 1 ? 's' : ''}`);
   if (milkCollected > 0) notes.push(`+${milkCollected} fresh milk`);
   if (woolCollected > 0) notes.push(`+${woolCollected} soft wool`);
   if (honeyCollected > 0) notes.push(`+${honeyCollected} wild honey`);
   if (cheeseMade > 0) notes.push(`+${cheeseMade} artisan cheese`);
   if (jamMade > 0) notes.push(`+${jamMade} berry jam`);
+  if (piesBaked > 0) notes.push(`+${piesBaked} golden pie`);
   if (windmillGold > 0) notes.push(`+${windmillGold}g windmill income`);
+  if (solarGold > 0) notes.push(`+${solarGold}g solar credit`);
+  if (catGiftGold > 0) notes.push(`+${catGiftGold}g cat lucky coin`);
+  if (catGiftFish > 0) notes.push(`+${catGiftFish} cat pond fish`);
+  if (birdhouseSeeds > 0) notes.push(`+${birdhouseSeeds} songbird seed`);
+  if (cropsFrosted > 0) notes.push(`${cropsFrosted} frosted`);
   if (cropsWithered > 0) notes.push(`${cropsWithered} withered`);
   if (wildlifeDamage > 0) notes.push(`${wildlifeDamage} lost to wildlife`);
   if (notes.length === 0) notes.push(`A fresh ${newSeason} morning begins`);
@@ -1707,14 +1972,22 @@ export function advanceDay(
     cropsWithered,
     cropsFlooded,
     cropsHeatDamaged,
+    cropsFrosted,
     wildlifeDamage,
     eggsCollected,
+    duckEggsCollected,
     honeyCollected,
     milkCollected,
     woolCollected,
     cheeseMade,
     jamMade,
+    piesBaked,
     windmillGold,
+    solarGold,
+    catGiftGold,
+    catGiftFish,
+    birdhouseSeeds,
+    harvestFestival,
     rainbowActive,
     sprinklerWatered,
     dripWatered,
@@ -1774,6 +2047,9 @@ export function sellCropItem(
   if (def.cropType && state.marketSurgeCrop === def.cropType) {
     unitPrice = Math.round(unitPrice * 1.5); // +50% daily Market Surge!
   }
+  if (def.category === 'crop' && isHarvestFestivalDay(state.day)) {
+    unitPrice = Math.round(unitPrice * HARVEST_FESTIVAL_BONUS); // +40% Harvest Festival!
+  }
 
   const earned = unitPrice * sellQty;
   consumeInventoryItem(state, itemId, sellQty);
@@ -1793,10 +2069,10 @@ export function upgradeTool(
       ? state.upgrades.canLevel
       : state.upgrades.axeLevel;
 
-  if (currentLvl >= 3) {
-    return { ok: false, message: 'Already at max Iron tier' };
+  if (currentLvl >= 4) {
+    return { ok: false, message: 'Already at max Eco-Emerald tier' };
   }
-  const cost = currentLvl === 1 ? 120 : 260;
+  const cost = currentLvl === 1 ? 120 : currentLvl === 2 ? 260 : 480;
   if (state.player.gold < cost) {
     return { ok: false, message: `Need ${cost}g to upgrade` };
   }
@@ -1804,12 +2080,14 @@ export function upgradeTool(
   if (tool === 'hoe') state.upgrades.hoeLevel += 1;
   else if (tool === 'watering_can') {
     state.upgrades.canLevel += 1;
-    state.player.maxWaterLevel = state.upgrades.canLevel === 2 ? 20 : 30;
+    state.player.maxWaterLevel =
+      state.upgrades.canLevel === 2 ? 20 : state.upgrades.canLevel === 3 ? 30 : 40;
     state.player.waterLevel = state.player.maxWaterLevel;
   } else {
     state.upgrades.axeLevel += 1;
   }
-  const tierName = currentLvl === 1 ? 'Copper' : 'Master';
+  const tierName =
+    currentLvl === 1 ? 'Copper' : currentLvl === 2 ? 'Master' : 'Eco-Emerald';
   return { ok: true, message: `Upgraded to ${tierName} tier!` };
 }
 
@@ -2002,6 +2280,52 @@ export function buyGuardDog(state: GameWorldState): { ok: boolean; message: stri
   return { ok: true, message: 'Adopted Loyal Farm Dog!' };
 }
 
+export function buyFarmCat(state: GameWorldState): { ok: boolean; message: string } {
+  if (state.cat) {
+    return { ok: false, message: 'Barn Cat already adopted (Max 1)' };
+  }
+  if (state.player.gold < CAT_PRICE) {
+    return { ok: false, message: 'Not enough Gold' };
+  }
+  state.player.gold -= CAT_PRICE;
+  state.cat = {
+    id: 1,
+    kind: 'cat',
+    x: 6.5,
+    y: 7.4,
+    vx: 0.45,
+    vy: 0,
+    facingX: 1,
+    hopPhase: 0.5,
+    moveTimer: 1.8,
+  };
+  return { ok: true, message: 'Adopted Barn Tabby Cat!' };
+}
+
+export function buyPondDuck(state: GameWorldState): { ok: boolean; message: string } {
+  if (!state.ducks) state.ducks = [];
+  if (state.ducks.length >= MAX_DUCKS) {
+    return { ok: false, message: 'Pond flock full (Max 2 Ducks)' };
+  }
+  if (state.player.gold < DUCK_PRICE) {
+    return { ok: false, message: 'Not enough Gold' };
+  }
+  state.player.gold -= DUCK_PRICE;
+  const idx = state.ducks.length;
+  state.ducks.push({
+    id: idx + 1,
+    kind: 'duck',
+    x: 22.8 + idx * 1.4,
+    y: 15.2 + idx * 0.6,
+    vx: 0.4,
+    vy: 0.2,
+    facingX: 1,
+    hopPhase: idx * 1.4,
+    moveTimer: 1.5,
+  });
+  return { ok: true, message: 'Adopted Pond Duck!' };
+}
+
 export function stepLivestockAndDog(
   state: GameWorldState,
   dt: number,
@@ -2036,6 +2360,70 @@ export function stepLivestockAndDog(
         animal.facingX = animal.vx >= 0 ? 1 : -1;
       }
       animal.hopPhase += dt * 5;
+    }
+  }
+
+  // Barn Tabby Cat gently strolls around the farmhouse porch
+  const cat = state.cat;
+  if (cat) {
+    cat.moveTimer -= dt;
+    if (cat.moveTimer <= 0) {
+      cat.moveTimer = 1.9 + rng() * 2.4;
+      if (rng() < 0.42) {
+        cat.vx = 0;
+        cat.vy = 0;
+      } else {
+        const angle = rng() * Math.PI * 2;
+        const speed = 0.65 + rng() * 0.4;
+        cat.vx = Math.cos(angle) * speed;
+        cat.vy = Math.sin(angle) * speed;
+        if (Math.abs(cat.vx) > 0.05) cat.facingX = cat.vx >= 0 ? 1 : -1;
+      }
+    }
+    if (cat.vx !== 0 || cat.vy !== 0) {
+      const nx = Math.max(5.3, Math.min(12.2, cat.x + cat.vx * dt));
+      const ny = Math.max(7.0, Math.min(8.8, cat.y + cat.vy * dt));
+      if (isTileWalkable(state, Math.floor(nx), Math.floor(ny))) {
+        cat.x = nx;
+        cat.y = ny;
+      } else {
+        cat.vx = -cat.vx;
+        cat.vy = -cat.vy;
+        cat.facingX = cat.vx >= 0 ? 1 : -1;
+      }
+      cat.hopPhase += dt * 7;
+    }
+  }
+
+  // Pond Ducks swim & waddle inside/beside the farm pond
+  for (const duck of state.ducks ?? []) {
+    duck.moveTimer -= dt;
+    if (duck.moveTimer <= 0) {
+      duck.moveTimer = 1.6 + rng() * 2.2;
+      if (rng() < 0.28) {
+        duck.vx = 0;
+        duck.vy = 0;
+      } else {
+        const angle = rng() * Math.PI * 2;
+        const speed = 0.55 + rng() * 0.35;
+        duck.vx = Math.cos(angle) * speed;
+        duck.vy = Math.sin(angle) * speed;
+        if (Math.abs(duck.vx) > 0.05) duck.facingX = duck.vx >= 0 ? 1 : -1;
+      }
+    }
+    if (duck.vx !== 0 || duck.vy !== 0) {
+      const nx = Math.max(21.6, Math.min(25.7, duck.x + duck.vx * dt));
+      const ny = Math.max(13.6, Math.min(17.7, duck.y + duck.vy * dt));
+      const destTile = getTile(state, Math.floor(nx), Math.floor(ny));
+      if (destTile && (destTile.terrain === 'water' || isTileWalkable(state, Math.floor(nx), Math.floor(ny)))) {
+        duck.x = nx;
+        duck.y = ny;
+      } else {
+        duck.vx = -duck.vx;
+        duck.vy = -duck.vy;
+        duck.facingX = duck.vx >= 0 ? 1 : -1;
+      }
+      duck.hopPhase += dt * 6;
     }
   }
 
@@ -2160,6 +2548,23 @@ export function getMissionProgress(state: GameWorldState, id: MissionId): number
       return (state.cows?.length ?? 0) + (state.sheep?.length ?? 0);
     case 'veteran_farmer':
       return state.level ?? 1;
+    case 'sunflower_berry':
+      return (state.inventory.sunflower ?? 0) + (state.inventory.blueberry ?? 0);
+    case 'bake_pie':
+      return stats.piesBaked ?? 0;
+    case 'seed_miller':
+      return stats.seedsMilled ?? 0;
+    case 'clean_energy':
+      return state.tiles.filter(
+        (t) =>
+          t.structure?.type === 'solar_panel' ||
+          t.structure?.type === 'campfire' ||
+          t.structure?.type === 'greenhouse_dome'
+      ).length;
+    case 'pond_companions':
+      return (state.cat ? 1 : 0) + (state.ducks?.length ?? 0);
+    case 'emerald_tools':
+      return Math.max(state.upgrades.hoeLevel, state.upgrades.canLevel, state.upgrades.axeLevel);
     default:
       return 0;
   }
@@ -2182,6 +2587,17 @@ export function getEarnedBadges(state: GameWorldState): BadgeId[] {
   if ((state.stats.beansHarvested ?? 0) >= 3) badges.push('soil_friend');
   if ((state.stats.fishCaught ?? 0) >= 5) badges.push('angler_pro');
   if ((state.stats.artisanProduced ?? 0) >= 3) badges.push('artisan_chef');
+  if ((state.stats.piesBaked ?? 0) >= 3) badges.push('artisan_baker');
+  const ecoTechCount = state.tiles.filter(
+    (t) =>
+      t.structure?.type === 'solar_panel' ||
+      t.structure?.type === 'greenhouse_dome' ||
+      t.structure?.type === 'seed_maker' ||
+      t.structure?.type === 'windmill' ||
+      t.structure?.type === 'nasa_station'
+  ).length;
+  if (ecoTechCount >= 3) badges.push('eco_engineer');
+  if ((state.stats.wildlifeRepelled ?? 0) >= 6) badges.push('wildlife_ranger');
   return badges;
 }
 
@@ -2228,7 +2644,8 @@ export function spawnNightWildlife(
   rng: () => number = Math.random
 ): WildlifeEntity | null {
   if (state.wildlife.length >= 4 + Math.floor(state.day / 4)) return null;
-  const kind = rng() < 0.62 ? 'rabbit' : 'boar';
+  const roll = rng();
+  const kind = roll < 0.28 ? 'fox' : roll < 0.74 ? 'rabbit' : 'boar';
 
   // Pick a random edge inside forest border
   const edge = Math.floor(rng() * 4);
@@ -2248,6 +2665,7 @@ export function spawnNightWildlife(
     y = 8 + Math.floor(rng() * (state.height - 10)) + 0.5;
   }
 
+  const maxHp = kind === 'boar' ? 3 : kind === 'fox' ? 2 : 1;
   const entity: WildlifeEntity = {
     id: nextWildlifeId++,
     kind,
@@ -2255,8 +2673,8 @@ export function spawnNightWildlife(
     y,
     vx: 0,
     vy: 0,
-    hp: kind === 'boar' ? 3 : 1,
-    maxHp: kind === 'boar' ? 3 : 1,
+    hp: maxHp,
+    maxHp,
     state: 'approaching',
     stateTimer: 0,
     targetTileX: null,
@@ -2292,7 +2710,7 @@ export function stepWildlife(
       const dx = w.x - state.player.x;
       const dy = w.y - state.player.y;
       const len = Math.hypot(dx, dy) || 1;
-      const speed = w.kind === 'rabbit' ? 3.8 : 2.9;
+      const speed = w.kind === 'rabbit' ? 3.8 : w.kind === 'fox' ? 4.2 : 2.9;
       w.x += (dx / len) * speed * dt;
       w.y += (dy / len) * speed * dt;
       w.hopPhase += dt * 14;
@@ -2309,9 +2727,9 @@ export function stepWildlife(
       continue;
     }
 
-    // Repelled by Scarecrow
-    if (isProtectedByScarecrow(state, Math.floor(w.x), Math.floor(w.y))) {
-      if (w.kind === 'rabbit') {
+    // Repelled by Scarecrow / Songbird Nest Box
+    if (isProtectedFromPests(state, Math.floor(w.x), Math.floor(w.y))) {
+      if (w.kind === 'rabbit' || w.kind === 'fox') {
         w.state = 'fleeing';
         w.stateTimer = 1.4;
         continue;
@@ -2372,7 +2790,7 @@ export function stepWildlife(
         continue;
       }
     } else if (distToPlayer < 1.6) {
-      // Rabbits spook if farmer gets very close
+      // Rabbits & Foxes spook if farmer gets very close
       w.state = 'fleeing';
       w.stateTimer = 1.2;
       continue;
@@ -2383,7 +2801,7 @@ export function stepWildlife(
     let bestDist = Infinity;
     for (const t of state.tiles) {
       if (!t.crop || t.crop.withered) continue;
-      if (w.kind === 'rabbit' && isProtectedByScarecrow(state, t.x, t.y)) continue;
+      if ((w.kind === 'rabbit' || w.kind === 'fox') && isProtectedFromPests(state, t.x, t.y)) continue;
       const d = Math.hypot(t.x + 0.5 - w.x, t.y + 0.5 - w.y);
       if (d < bestDist) {
         bestDist = d;
@@ -2409,7 +2827,7 @@ export function stepWildlife(
     if (dist < 0.45) {
       w.state = 'nibbling';
       w.stateTimer += dt;
-      if (w.stateTimer >= 1.6) {
+      if (w.stateTimer >= (w.kind === 'fox' ? 1.2 : 1.6)) {
         bestTile.crop = null;
         w.stateTimer = 0;
         w.state = 'approaching';
@@ -2417,7 +2835,7 @@ export function stepWildlife(
       }
     } else {
       w.state = 'approaching';
-      const speed = w.kind === 'rabbit' ? 2.1 : 1.45;
+      const speed = w.kind === 'fox' ? 2.65 : w.kind === 'rabbit' ? 2.1 : 1.45;
       const stepX = (dx / dist) * speed * dt;
       const stepY = (dy / dist) * speed * dt;
       const nextX = w.x + stepX;

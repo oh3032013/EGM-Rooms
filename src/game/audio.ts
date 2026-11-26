@@ -319,7 +319,11 @@ class CozyAudioEngine {
       | 'levelup'
       | 'wish'
       | 'bark'
-      | 'pet',
+      | 'pet'
+      | 'bake'
+      | 'cat'
+      | 'quack'
+      | 'frost',
     comboLevel = 2
   ): void {
     this.init();
@@ -364,6 +368,27 @@ class CozyAudioEngine {
     if (kind === 'bark') {
       this.tone(280, 180, 0.08, 'sawtooth', 0.15, now);
       this.tone(320, 210, 0.09, 'sawtooth', 0.16, now + 0.11);
+      return;
+    }
+    if (kind === 'cat') {
+      this.tone(620 * pitchJitter, 860, 0.09, 'sine', 0.15, now);
+      this.tone(860 * pitchJitter, 540, 0.16, 'sine', 0.14, now + 0.08);
+      return;
+    }
+    if (kind === 'quack') {
+      this.tone(370 * pitchJitter, 290, 0.09, 'sawtooth', 0.12, now);
+      this.tone(350 * pitchJitter, 260, 0.11, 'sawtooth', 0.12, now + 0.1);
+      return;
+    }
+    if (kind === 'bake') {
+      this.tone(392, 523.25, 0.1, 'triangle', 0.17, now);
+      this.tone(587.33, 783.99, 0.15, 'sine', 0.19, now + 0.08);
+      this.noiseBurst(0.08, 1300, 0.07, now);
+      return;
+    }
+    if (kind === 'frost') {
+      this.tone(1174.66, 1567.98, 0.18, 'sine', 0.13, now);
+      this.tone(1396.91, 1760, 0.22, 'triangle', 0.11, now + 0.09);
       return;
     }
     if (kind === 'pet') {

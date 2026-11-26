@@ -520,8 +520,19 @@ export function createStumpRingTexture(anisotropy: number): THREE.CanvasTexture 
 export class MaterialLibrary {
   private readonly anisotropy: number;
   private readonly isSoftwareGl: boolean;
+  private readonly isMobileGpu: boolean;
   private readonly textures: THREE.Texture[] = [];
   private readonly materials = new Map<string, THREE.Material>();
+  private readonly seasonCache = new Map<
+    Season,
+    {
+      grassTex: THREE.CanvasTexture;
+      outerGrassTex: THREE.CanvasTexture;
+      dirtTex: THREE.CanvasTexture;
+      roofMap: THREE.CanvasTexture;
+      roofNormalMap: THREE.DataTexture;
+    }
+  >();
   private currentSeason: Season | null = null;
 
   public grassMat!: THREE.MeshStandardMaterial;
@@ -530,7 +541,7 @@ export class MaterialLibrary {
   public tilledDryMat!: THREE.MeshStandardMaterial;
   public tilledWetMat!: THREE.MeshStandardMaterial;
   public tilledDroughtMat!: THREE.MeshStandardMaterial;
-  public waterMat!: THREE.MeshPhysicalMaterial;
+  public waterMat!: THREE.MeshStandardMaterial;
   public waterNormalTex!: THREE.DataTexture;
   public treeDarkMat!: THREE.MeshStandardMaterial;
   public treeMidMat!: THREE.MeshStandardMaterial;
@@ -547,14 +558,15 @@ export class MaterialLibrary {
   public watermelonMat!: THREE.MeshStandardMaterial;
   public ironMat!: THREE.MeshStandardMaterial;
   public copperMat!: THREE.MeshStandardMaterial;
-  public brassMat!: THREE.MeshPhysicalMaterial;
+  public brassMat!: THREE.MeshStandardMaterial;
   public glassGlowMat!: THREE.MeshStandardMaterial;
   public awningMat!: THREE.MeshStandardMaterial;
   public contactShadowMat!: THREE.MeshBasicMaterial;
 
-  constructor(anisotropy: number, isSoftwareGl: boolean) {
-    this.anisotropy = Math.max(1, anisotropy);
+  constructor(anisotropy: number, isSoftwareGl: boolean, isMobileGpu = false) {
     this.isSoftwareGl = isSoftwareGl;
+    this.isMobileGpu = isMobileGpu;
+    this.anisotropy = Math.max(1, Math.min(anisotropy, isMobileGpu ? 4 : 8));
     this.initShared();
     this.applySeason('Spring');
   }
@@ -599,7 +611,6 @@ export class MaterialLibrary {
     this.trackTex(wetSoil.normalMap);
 
     const grassNormal = this.trackTex(createGrassNormalMap(this.anisotropy, 1));
-    const outerGrassNormal = this.trackTex(createGrassNormalMap(this.anisotropy, 24));
     this.waterNormalTex = this.trackTex(createWaterNormalMap(this.anisotropy));
 
     const awningTex = this.trackTex(createAwningTexture(this.anisotropy));
@@ -609,8 +620,8 @@ export class MaterialLibrary {
     this.grassMat = this.trackMat(
       'grass',
       new THREE.MeshStandardMaterial({
-        normalMap: grassNormal,
-        normalScale: new THREE.Vector2(0.45, 0.45),
+        normalMap: this.isMobileGpu ? null : grassNormal,
+        normalScale: new THREE.Vector2(0.4, 0.4),
         roughness: 0.92,
         metalness: 0.0,
       })
@@ -618,17 +629,15 @@ export class MaterialLibrary {
     this.grassOuterMat = this.trackMat(
       'grassOuter',
       new THREE.MeshStandardMaterial({
-        normalMap: outerGrassNormal,
-        normalScale: new THREE.Vector2(0.45, 0.45),
-        roughness: 0.95,
+        roughness: 0.96,
         metalness: 0.0,
       })
     );
     this.dirtMat = this.trackMat(
       'dirt',
       new THREE.MeshStandardMaterial({
-        normalMap: grassNormal,
-        normalScale: new THREE.Vector2(0.35, 0.35),
+        normalMap: this.isMobileGpu ? null : grassNormal,
+        normalScale: new THREE.Vector2(0.32, 0.32),
         roughness: 0.9,
         metalness: 0.0,
       })
@@ -664,21 +673,18 @@ export class MaterialLibrary {
         metalness: 0.0,
       })
     );
+    // Reflective glossy water surface (avoids expensive double-scene transmission FBO pass on Android/mobile)
     this.waterMat = this.trackMat(
       'water',
-      new THREE.MeshPhysicalMaterial({
+      new THREE.MeshStandardMaterial({
         color: new THREE.Color('#2782c4'),
         normalMap: this.waterNormalTex,
-        normalScale: new THREE.Vector2(0.38, 0.38),
+        normalScale: new THREE.Vector2(0.42, 0.42),
         roughness: 0.08,
-        metalness: 0.05,
-        clearcoat: 0.9,
-        clearcoatRoughness: 0.1,
-        transmission: this.isSoftwareGl ? 0 : 0.48,
+        metalness: 0.16,
+        envMapIntensity: 1.4,
         transparent: true,
-        opacity: this.isSoftwareGl ? 0.82 : 0.9,
-        ior: 1.33,
-        thickness: 0.5,
+        opacity: 0.86,
       })
     );
     this.treeDarkMat = this.trackMat(
@@ -755,8 +761,6 @@ export class MaterialLibrary {
       'plaster',
       new THREE.MeshStandardMaterial({
         color: '#f4e8d1',
-        normalMap: grassNormal,
-        normalScale: new THREE.Vector2(0.2, 0.2),
         roughness: 0.88,
         metalness: 0.0,
       })
@@ -783,11 +787,10 @@ export class MaterialLibrary {
     );
     this.brassMat = this.trackMat(
       'brass',
-      new THREE.MeshPhysicalMaterial({
+      new THREE.MeshStandardMaterial({
         color: '#f2c14e',
         roughness: 0.2,
-        metalness: 0.94,
-        anisotropy: 0.65,
+        metalness: 0.92,
       })
     );
     this.glassGlowMat = this.trackMat(
@@ -802,12 +805,10 @@ export class MaterialLibrary {
     );
     this.awningMat = this.trackMat(
       'awning',
-      new THREE.MeshPhysicalMaterial({
+      new THREE.MeshStandardMaterial({
         map: awningTex,
         roughness: 0.82,
         metalness: 0.0,
-        sheen: 0.4,
-        sheenRoughness: 0.7,
         side: THREE.DoubleSide,
       })
     );
@@ -838,16 +839,14 @@ export class MaterialLibrary {
     return this.trackMat(key, mat);
   }
 
-  public getFabric(hex: string, roughness = 0.88): THREE.MeshPhysicalMaterial {
+  public getFabric(hex: string, roughness = 0.88): THREE.MeshStandardMaterial {
     const key = `fabric:${hex}:${roughness.toFixed(2)}`;
-    const cached = this.materials.get(key) as THREE.MeshPhysicalMaterial | undefined;
+    const cached = this.materials.get(key) as THREE.MeshStandardMaterial | undefined;
     if (cached) return cached;
-    const mat = new THREE.MeshPhysicalMaterial({
+    const mat = new THREE.MeshStandardMaterial({
       color: hex,
       roughness,
       metalness: 0.0,
-      sheen: 0.45,
-      sheenRoughness: 0.75,
     });
     return this.trackMat(key, mat);
   }
@@ -889,23 +888,34 @@ export class MaterialLibrary {
     if (this.currentSeason === season) return pal;
     this.currentSeason = season;
 
-    const grassTex = this.trackTex(createGrassTexture(pal, this.anisotropy));
-    const outerGrassTex = this.trackTex(createGrassTexture(pal, this.anisotropy));
-    outerGrassTex.repeat.set(24, 24);
-    const dirtTex = this.trackTex(createDirtTexture(pal, this.anisotropy));
-    const roofMaps = createRoofMaps(pal.roof, pal.roofTrim, this.anisotropy);
-    this.trackTex(roofMaps.map);
-    this.trackTex(roofMaps.normalMap);
+    let cached = this.seasonCache.get(season);
+    if (!cached) {
+      const grassTex = this.trackTex(createGrassTexture(pal, this.anisotropy));
+      const outerGrassTex = this.trackTex(createGrassTexture(pal, this.anisotropy));
+      outerGrassTex.repeat.set(24, 24);
+      const dirtTex = this.trackTex(createDirtTexture(pal, this.anisotropy));
+      const roofMaps = createRoofMaps(pal.roof, pal.roofTrim, this.anisotropy);
+      this.trackTex(roofMaps.map);
+      this.trackTex(roofMaps.normalMap);
+      cached = {
+        grassTex,
+        outerGrassTex,
+        dirtTex,
+        roofMap: roofMaps.map,
+        roofNormalMap: roofMaps.normalMap,
+      };
+      this.seasonCache.set(season, cached);
+    }
 
-    this.grassMat.map = grassTex;
+    this.grassMat.map = cached.grassTex;
     this.grassMat.needsUpdate = true;
-    this.grassOuterMat.map = outerGrassTex;
+    this.grassOuterMat.map = cached.outerGrassTex;
     this.grassOuterMat.color.set(pal.grassB);
     this.grassOuterMat.needsUpdate = true;
-    this.dirtMat.map = dirtTex;
+    this.dirtMat.map = cached.dirtTex;
     this.dirtMat.needsUpdate = true;
-    this.roofMat.map = roofMaps.map;
-    this.roofMat.normalMap = roofMaps.normalMap;
+    this.roofMat.map = cached.roofMap;
+    this.roofMat.normalMap = cached.roofNormalMap;
     this.roofMat.normalScale.set(0.95, 0.95);
     this.roofMat.needsUpdate = true;
     this.roofTrimMat.color.set(pal.roofTrim);
@@ -922,6 +932,7 @@ export class MaterialLibrary {
   }
 
   public dispose(): void {
+    this.seasonCache.clear();
     for (const tex of this.textures) {
       tex.dispose();
     }

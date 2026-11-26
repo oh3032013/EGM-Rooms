@@ -1,6 +1,6 @@
-import type { LocalePack } from './types';
+import type { LegacyLocalePack } from './types';
 
-export const KO_LOCALE: LocalePack = {
+export const KO_LOCALE: LegacyLocalePack = {
   ui: {
     brandTitle: 'EcoGrow Mission',
     saveYourFarm: '농장을 구하세요',
@@ -426,7 +426,7 @@ export const KO_LOCALE: LocalePack = {
   switchedMsg: '언어가 한국어로 변경되었습니다',
 };
 
-export const ZH_LOCALE: LocalePack = {
+export const ZH_LOCALE: LegacyLocalePack = {
   ui: {
     brandTitle: 'EcoGrow Mission',
     saveYourFarm: '拯救你的农场',

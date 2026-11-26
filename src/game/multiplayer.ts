@@ -166,7 +166,7 @@ export type ClientToServerMessage =
   | { type: 'action:assign_hotbar'; id: ItemId; slotIdx: number }
   | { type: 'action:mission_claim'; id: MissionId }
   | { type: 'action:order_fulfill' }
-  | { type: 'action:buy_animal'; kind: 'chicken' | 'cow' | 'sheep' | 'dog' }
+  | { type: 'action:buy_animal'; kind: 'chicken' | 'cow' | 'sheep' | 'dog' | 'cat' | 'duck' }
   | { type: 'action:sleep_vote'; ready: boolean }
   | { type: 'action:chat'; text: string }
   | { type: 'voice:state'; enabled: boolean; muted: boolean; speaking?: boolean }
@@ -209,6 +209,8 @@ export type ServerToClientMessage =
       cows: LivestockEntity[];
       sheep: LivestockEntity[];
       dog: LivestockEntity | null;
+      cat?: LivestockEntity | null;
+      ducks?: LivestockEntity[];
     }
   | { type: 'fx:event'; fx: FxPayload }
   | { type: 'chat:message'; message: ChatMessage }

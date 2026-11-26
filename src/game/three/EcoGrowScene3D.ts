@@ -27,7 +27,6 @@ import {
   createDogGroup,
   createFarmerRig,
   createFarmhouseGroup,
-  createForestTreeGroup,
   createObstacleGroup,
   createSheepGroup,
   createShippingBinGroup,
@@ -37,6 +36,7 @@ import {
   createWellGroup,
   createWildlifeGroup,
   GeometryCache,
+  getInstancedTreeTemplates,
   type FarmerModelRig,
 } from './models';
 
@@ -60,6 +60,7 @@ const _v3A = new THREE.Vector3();
 const _v3B = new THREE.Vector3();
 const _mat4 = new THREE.Matrix4();
 const _quat = new THREE.Quaternion();
+const _euler = new THREE.Euler();
 const _scale = new THREE.Vector3(1, 1, 1);
 const _colorA = new THREE.Color();
 const _colorB = new THREE.Color();
@@ -68,20 +69,40 @@ const _ndc = new THREE.Vector2();
 const _groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const _hitPoint = new THREE.Vector3();
 
-function detectSoftwareWebGL(): boolean {
-  if (typeof document === 'undefined') return false;
+function detectGpuProfile(): { isSoftwareGl: boolean; isMobileGpu: boolean } {
+  if (typeof document === 'undefined') {
+    return { isSoftwareGl: false, isMobileGpu: false };
+  }
+  const uaMobile =
+    typeof navigator !== 'undefined' &&
+    (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(
+      navigator.userAgent
+    ) ||
+      (navigator.maxTouchPoints > 1 && window.innerWidth <= 1024));
+
+  let isSoftwareGl = false;
+  let gpuMobile = false;
   try {
     const probeCanvas = document.createElement('canvas');
     const gl = probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl');
-    if (!gl) return true;
-    const ext = gl.getExtension('WEBGL_debug_renderer_info');
-    const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
-    const gpu = String(gl.getParameter(param) || '');
-    gl.getExtension('WEBGL_lose_context')?.loseContext();
-    return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
+    if (!gl) {
+      isSoftwareGl = true;
+    } else {
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
+      const gpu = String(gl.getParameter(param) || '');
+      isSoftwareGl = /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
+      gpuMobile = /Adreno|Mali|PowerVR|Immortalis|Xclipse|Tegra|Apple GPU/i.test(gpu);
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+    }
   } catch {
-    return false;
+    isSoftwareGl = false;
   }
+
+  return {
+    isSoftwareGl,
+    isMobileGpu: uaMobile || (gpuMobile && typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0),
+  };
 }
 
 function makeBillboardSprite(text: string, colorHex: string, bgColor?: string): THREE.Sprite {
@@ -160,6 +181,7 @@ function updateBillboardTexture(
 export class EcoGrowScene3D {
   public readonly renderer: THREE.WebGLRenderer;
   public readonly isSoftwareGl: boolean;
+  public readonly isMobileGpu: boolean;
   private readonly container: HTMLElement;
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.PerspectiveCamera;
@@ -170,8 +192,12 @@ export class EcoGrowScene3D {
   // Lighting & Atmosphere
   private readonly hemiLight: THREE.HemisphereLight;
   private readonly sunLight: THREE.DirectionalLight;
+  private readonly shadowHalfExtent: number;
+  private readonly shadowMapSize: number;
   private readonly porchLight: THREE.PointLight;
   private readonly lanternLights: THREE.PointLight[] = [];
+  private readonly lanternSpotsX = new Float32Array(4);
+  private readonly lanternSpotsZ = new Float32Array(4);
   private readonly fog: THREE.FogExp2;
 
   // World groups
@@ -183,9 +209,22 @@ export class EcoGrowScene3D {
 
   private outerGround!: THREE.Mesh;
   private baseTerrainBuiltKey = '';
-  private tilledMeshes = new Map<string, { sig: string; mesh: THREE.Mesh; bonusRing?: THREE.Mesh }>();
-  private tilePropGroups = new Map<string, { sig: string; group: THREE.Group }>();
-  private waterTiles: THREE.Mesh[] = [];
+  private waterInstanced: THREE.InstancedMesh | null = null;
+  private waterCoordsX: number[] = [];
+  private waterCoordsZ: number[] = [];
+
+  // Instanced tilled soil layers (0 allocations, max 4 draw calls for entire farm)
+  private tilledDryInst!: THREE.InstancedMesh;
+  private tilledWetInst!: THREE.InstancedMesh;
+  private tilledDroughtInst!: THREE.InstancedMesh;
+  private beanRingInst!: THREE.InstancedMesh;
+  private prevTilledCode = new Uint8Array(0);
+  private tilledDirty = true;
+
+  // Numeric-indexed tile props (no string keys or Set allocations)
+  private tilePropGroups = new Map<number, { sig: string; animType?: string; group: THREE.Group }>();
+  private tileSeenStamp = new Int32Array(0);
+  private syncEpoch = 1;
   private animatedStructures: { type: string; group: THREE.Group }[] = [];
   private treasureProp: { key: string; group: THREE.Group } | null = null;
 
@@ -199,15 +238,31 @@ export class EcoGrowScene3D {
   private sheep = new Map<number, THREE.Group>();
   private dogGroup: THREE.Group | null = null;
   private wildlife = new Map<number, { kind: string; group: THREE.Group }>();
+  private readonly scratchIdSet = new Set<string>();
+  private readonly scratchNumSet = new Set<number>();
 
   // Weather, Sky, Rainbow, Cursors & Particles
   private rainbowGroup: THREE.Group;
   private rainMesh: THREE.InstancedMesh;
+  private readonly rainMaxCount: number;
   private ambientSpecMesh: THREE.InstancedMesh;
+  private lastAmbientColorKey = '';
   private particleMesh: THREE.InstancedMesh;
   private hoverCursor: THREE.Mesh;
   private facingCursor: THREE.Mesh;
   private floatingSprites = new Map<number, { sprite: THREE.Sprite; text: string }>();
+
+  // Adaptive Dynamic Resolution Scaling (keeps Android sharp & thermal-safe)
+  private currentDpr: number;
+  private readonly minDpr: number;
+  private readonly maxDpr: number;
+  private lastRenderTs = 0;
+  private avgFrameMs = 16.6;
+  private drsWarmupFrames = 0;
+  private drsCooldown = 0;
+  private frameCounter = 0;
+  private lastShadowCamX = 9999;
+  private lastShadowCamZ = 9999;
 
   // User camera interaction offsets
   public userZoomMultiplier = 1.0;
@@ -218,26 +273,37 @@ export class EcoGrowScene3D {
 
   constructor(container: HTMLElement) {
     this.container = container;
-    this.isSoftwareGl = detectSoftwareWebGL();
+    const profile = detectGpuProfile();
+    this.isSoftwareGl = profile.isSoftwareGl;
+    this.isMobileGpu = profile.isMobileGpu;
+
+    const nativeDpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+    this.minDpr = this.isSoftwareGl ? 1 : this.isMobileGpu ? 1.0 : 1.25;
+    this.maxDpr = this.isSoftwareGl ? 1 : Math.min(nativeDpr, this.isMobileGpu ? 1.55 : 2.0);
+    this.currentDpr = this.isSoftwareGl
+      ? 1
+      : Math.min(nativeDpr, this.isMobileGpu ? 1.35 : 1.75);
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: !this.isSoftwareGl,
       powerPreference: 'high-performance',
+      stencil: false,
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
-    this.renderer.setPixelRatio(
-      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2)
-    );
+    this.renderer.setPixelRatio(this.currentDpr);
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = this.isMobileGpu ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
+    if (this.isMobileGpu && !this.isSoftwareGl) {
+      this.renderer.shadowMap.autoUpdate = false;
+    }
     this.renderer.domElement.className = 'block w-full h-full cursor-crosshair select-none';
     this.renderer.domElement.setAttribute('data-testid', 'farm-canvas');
     this.container.appendChild(this.renderer.domElement);
 
     const maxAniso = this.renderer.capabilities.getMaxAnisotropy();
-    this.mats = new MaterialLibrary(maxAniso, this.isSoftwareGl);
+    this.mats = new MaterialLibrary(maxAniso, this.isSoftwareGl, this.isMobileGpu);
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#8ecae6');
@@ -255,27 +321,28 @@ export class EcoGrowScene3D {
 
     const rect = this.container.getBoundingClientRect();
     const aspect = Math.max(0.5, rect.width / Math.max(1, rect.height));
-    this.camera = new THREE.PerspectiveCamera(40, aspect, 0.5, 160);
+    this.camera = new THREE.PerspectiveCamera(40, aspect, 0.5, 140);
     this.camera.position.set(14, 11, 20);
 
     // 3-Point + Dynamic Sky Lighting Rig
     this.hemiLight = new THREE.HemisphereLight('#b5e2fa', '#785a3c', 0.85);
     this.scene.add(this.hemiLight);
 
+    this.shadowMapSize = this.isMobileGpu ? 1024 : 1536;
+    this.shadowHalfExtent = this.isMobileGpu ? 10.5 : 12.5;
     this.sunLight = new THREE.DirectionalLight('#fff3d6', 2.05);
     this.sunLight.position.set(22, 26, 18);
     this.sunLight.castShadow = !this.isSoftwareGl;
-    this.sunLight.shadow.mapSize.set(2048, 2048);
-    this.sunLight.shadow.radius = 2.2;
+    this.sunLight.shadow.mapSize.set(this.shadowMapSize, this.shadowMapSize);
+    this.sunLight.shadow.radius = this.isMobileGpu ? 1.5 : 2.0;
     this.sunLight.shadow.camera.near = 2;
-    this.sunLight.shadow.camera.far = 70;
-    const d = 16;
-    this.sunLight.shadow.camera.left = -d;
-    this.sunLight.shadow.camera.right = d;
-    this.sunLight.shadow.camera.top = d;
-    this.sunLight.shadow.camera.bottom = -d;
-    this.sunLight.shadow.bias = -0.0004;
-    this.sunLight.shadow.normalBias = 0.02;
+    this.sunLight.shadow.camera.far = 65;
+    this.sunLight.shadow.camera.left = -this.shadowHalfExtent;
+    this.sunLight.shadow.camera.right = this.shadowHalfExtent;
+    this.sunLight.shadow.camera.top = this.shadowHalfExtent;
+    this.sunLight.shadow.camera.bottom = -this.shadowHalfExtent;
+    this.sunLight.shadow.bias = -0.0005;
+    this.sunLight.shadow.normalBias = 0.025;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
 
@@ -287,7 +354,8 @@ export class EcoGrowScene3D {
     );
     this.scene.add(this.porchLight);
 
-    for (let i = 0; i < 4; i++) {
+    const maxLanternLights = this.isMobileGpu ? 2 : 3;
+    for (let i = 0; i < maxLanternLights; i++) {
       const pl = new THREE.PointLight('#ffb74d', 0, 7, 1.8);
       pl.position.set(0, 1.1, 0);
       this.scene.add(pl);
@@ -299,6 +367,55 @@ export class EcoGrowScene3D {
     this.scene.add(this.dynamicPropsGroup);
     this.scene.add(this.actorsGroup);
     this.scene.add(this.fxGroup);
+
+    // Pooled Instanced Tilled Soil Pads (max 560 tiles -> 1-4 draw calls total!)
+    const tilledGeo = this.geos.get('tilled_pad_v2', () => {
+      const s = new THREE.Shape();
+      const hw = 0.42;
+      s.moveTo(-hw + 0.06, -hw);
+      s.lineTo(hw - 0.06, -hw);
+      s.quadraticCurveTo(hw, -hw, hw, -hw + 0.06);
+      s.lineTo(hw, hw - 0.06);
+      s.quadraticCurveTo(hw, hw, hw - 0.06, hw);
+      s.lineTo(-hw + 0.06, hw);
+      s.quadraticCurveTo(-hw, hw, -hw, hw - 0.06);
+      s.lineTo(-hw, -hw + 0.06);
+      s.quadraticCurveTo(-hw, -hw, -hw + 0.06, -hw);
+      const geo = new THREE.ExtrudeGeometry(s, {
+        depth: 0.032,
+        bevelEnabled: true,
+        bevelThickness: 0.015,
+        bevelSize: 0.025,
+        bevelSegments: 2,
+      });
+      geo.rotateX(-Math.PI / 2);
+      geo.center();
+      return geo;
+    });
+    const maxTiles = 560;
+    this.tilledDryInst = new THREE.InstancedMesh(tilledGeo, this.mats.tilledDryMat, maxTiles);
+    this.tilledWetInst = new THREE.InstancedMesh(tilledGeo, this.mats.tilledWetMat, maxTiles);
+    this.tilledDroughtInst = new THREE.InstancedMesh(tilledGeo, this.mats.tilledDroughtMat, maxTiles);
+    const beanRingGeo = this.geos.get('bean_ring', () => {
+      const rg = new THREE.RingGeometry(0.36, 0.43, 16);
+      rg.rotateX(-Math.PI / 2);
+      return rg;
+    });
+    this.beanRingInst = new THREE.InstancedMesh(
+      beanRingGeo,
+      this.mats.getEmissive('#86efac', '#22c55e', 0.65),
+      maxTiles
+    );
+    for (const inst of [this.tilledDryInst, this.tilledWetInst, this.tilledDroughtInst]) {
+      inst.receiveShadow = true;
+      inst.castShadow = false;
+      inst.frustumCulled = false;
+      inst.count = 0;
+      this.dynamicPropsGroup.add(inst);
+    }
+    this.beanRingInst.frustumCulled = false;
+    this.beanRingInst.count = 0;
+    this.dynamicPropsGroup.add(this.beanRingInst);
 
     // Build static landmarks + outer natural world skirt
     this.initStaticWorld();
@@ -355,10 +472,11 @@ export class EcoGrowScene3D {
     this.fxGroup.add(this.rainbowGroup);
 
     // Pooled 3D Rain streaks (InstancedMesh)
+    this.rainMaxCount = this.isMobileGpu ? 85 : 140;
     this.rainMesh = new THREE.InstancedMesh(
       new THREE.BoxGeometry(0.028, 0.55, 0.028),
       new THREE.MeshBasicMaterial({ color: '#bae6fd', transparent: true, opacity: 0.55 }),
-      140
+      this.rainMaxCount
     );
     this.rainMesh.frustumCulled = false;
     this.rainMesh.visible = false;
@@ -396,7 +514,7 @@ export class EcoGrowScene3D {
     this.outerGround.receiveShadow = true;
     this.terrainGroup.add(this.outerGround);
 
-    // Landmarks
+    // Landmarks (pre-baked by material for minimal draw calls)
     const farmhouse = createFarmhouseGroup(this.geos, this.mats);
     farmhouse.position.set(
       FARMHOUSE_POS.x + FARMHOUSE_POS.w / 2,
@@ -420,22 +538,6 @@ export class EcoGrowScene3D {
     const bin = createShippingBinGroup(this.geos, this.mats);
     bin.position.set(SHIPPING_BIN_POS.x + 0.5, 0, SHIPPING_BIN_POS.y + 0.5);
     this.staticPropsGroup.add(bin);
-
-    // Surrounding horizon trees outside the playable 28x20 grid for natural forest perimeter
-    for (let x = -4; x <= 32; x += 2) {
-      for (const z of [-2.2, 22.2]) {
-        const tree = createForestTreeGroup(this.geos, this.mats, Math.abs(x + Math.round(z)));
-        tree.position.set(x + (x % 3) * 0.25, -0.04, z + ((x * 7) % 3) * 0.2);
-        this.staticPropsGroup.add(tree);
-      }
-    }
-    for (let z = 0; z <= 20; z += 2) {
-      for (const x of [-2.2, 30.2]) {
-        const tree = createForestTreeGroup(this.geos, this.mats, Math.abs(Math.round(x) + z));
-        tree.position.set(x + ((z * 5) % 3) * 0.2, -0.04, z + (z % 3) * 0.2);
-        this.staticPropsGroup.add(tree);
-      }
-    }
   }
 
   public resize(width: number, height: number): void {
@@ -470,33 +572,73 @@ export class EcoGrowScene3D {
       const ch = this.terrainGroup.children[this.terrainGroup.children.length - 1];
       this.terrainGroup.remove(ch);
     }
-    this.waterTiles.length = 0;
+    this.waterInstanced = null;
+    this.waterCoordsX.length = 0;
+    this.waterCoordsZ.length = 0;
 
-    const grassPositions: THREE.Vector3[] = [];
-    const dirtPositions: THREE.Vector3[] = [];
-    const waterPositions: THREE.Vector3[] = [];
+    const grassX: number[] = [];
+    const grassZ: number[] = [];
+    const dirtX: number[] = [];
+    const dirtZ: number[] = [];
+
+    const broadleafTrees: { x: number; y: number; z: number; s: number }[] = [];
+    const pineTrees: { x: number; y: number; z: number; s: number }[] = [];
 
     for (let y = 0; y < state.height; y++) {
       for (let x = 0; x < state.width; x++) {
         const tile = state.tiles[y * state.width + x];
         if (tile.terrain === 'water') {
-          waterPositions.push(new THREE.Vector3(x + 0.5, -0.05, y + 0.5));
+          this.waterCoordsX.push(x + 0.5);
+          this.waterCoordsZ.push(y + 0.5);
         } else if (tile.terrain === 'dirt_path') {
-          dirtPositions.push(new THREE.Vector3(x + 0.5, 0, y + 0.5));
+          dirtX.push(x + 0.5);
+          dirtZ.push(y + 0.5);
         } else {
-          grassPositions.push(new THREE.Vector3(x + 0.5, 0, y + 0.5));
+          grassX.push(x + 0.5);
+          grassZ.push(y + 0.5);
+          if (tile.terrain === 'forest_edge') {
+            const variant = x + y;
+            const s = 0.92 + (variant % 3) * 0.12;
+            if (variant % 2 === 1) {
+              broadleafTrees.push({ x: x + 0.5, y: 0, z: y + 0.5, s });
+            } else {
+              pineTrees.push({ x: x + 0.5, y: 0, z: y + 0.5, s });
+            }
+          }
         }
       }
     }
 
+    // Outer perimeter horizon trees (merged into the exact same 8 InstancedMeshes!)
+    for (let x = -4; x <= 32; x += 2) {
+      for (const z of [-2.2, 22.2]) {
+        const variant = Math.abs(x + Math.round(z));
+        const s = 0.92 + (variant % 3) * 0.12;
+        const tx = x + (x % 3) * 0.25;
+        const tz = z + ((x * 7) % 3) * 0.2;
+        if (variant % 2 === 1) broadleafTrees.push({ x: tx, y: -0.04, z: tz, s });
+        else pineTrees.push({ x: tx, y: -0.04, z: tz, s });
+      }
+    }
+    for (let z = 0; z <= 20; z += 2) {
+      for (const x of [-2.2, 30.2]) {
+        const variant = Math.abs(Math.round(x) + z);
+        const s = 0.92 + (variant % 3) * 0.12;
+        const tx = x + ((z * 5) % 3) * 0.2;
+        const tz = z + (z % 3) * 0.2;
+        if (variant % 2 === 1) broadleafTrees.push({ x: tx, y: -0.04, z: tz, s });
+        else pineTrees.push({ x: tx, y: -0.04, z: tz, s });
+      }
+    }
+
     const tileGeo = this.geos.get('terrain_tile', () => new THREE.BoxGeometry(1, 0.14, 1));
-    if (grassPositions.length > 0) {
-      const grassInst = new THREE.InstancedMesh(tileGeo, this.mats.grassMat, grassPositions.length);
+    if (grassX.length > 0) {
+      const grassInst = new THREE.InstancedMesh(tileGeo, this.mats.grassMat, grassX.length);
       grassInst.receiveShadow = true;
-      grassPositions.forEach((pos, idx) => {
-        _mat4.makeTranslation(pos.x, -0.07, pos.z);
-        grassInst.setMatrixAt(idx, _mat4);
-      });
+      for (let i = 0; i < grassX.length; i++) {
+        _mat4.makeTranslation(grassX[i], -0.07, grassZ[i]);
+        grassInst.setMatrixAt(i, _mat4);
+      }
       grassInst.instanceMatrix.needsUpdate = true;
       grassInst.computeBoundingSphere();
       this.terrainGroup.add(grassInst);
@@ -531,8 +673,9 @@ export class EcoGrowScene3D {
         const tuftInst = new THREE.InstancedMesh(bladeGeo, this.mats.treeLightMat, tuftSpots.length);
         tuftSpots.forEach((t, idx) => {
           _v3A.set(t.x, 0.06 * t.s, t.z);
-          _quat.setFromEuler(new THREE.Euler(0.15, t.rot, 0.1));
-          _scale.set(t.s, t.s, t.s);
+          _euler.set(0.15, t.rot, 0.1);
+          _quat.setFromEuler(_euler);
+          _scale.setScalar(t.s);
           _mat4.compose(_v3A, _quat, _scale);
           tuftInst.setMatrixAt(idx, _mat4);
         });
@@ -542,144 +685,170 @@ export class EcoGrowScene3D {
       }
     }
 
-    if (dirtPositions.length > 0) {
-      const dirtInst = new THREE.InstancedMesh(tileGeo, this.mats.dirtMat, dirtPositions.length);
+    if (dirtX.length > 0) {
+      const dirtInst = new THREE.InstancedMesh(tileGeo, this.mats.dirtMat, dirtX.length);
       dirtInst.receiveShadow = true;
-      dirtPositions.forEach((pos, idx) => {
-        _mat4.makeTranslation(pos.x, -0.065, pos.z);
-        dirtInst.setMatrixAt(idx, _mat4);
-      });
+      for (let i = 0; i < dirtX.length; i++) {
+        _mat4.makeTranslation(dirtX[i], -0.065, dirtZ[i]);
+        dirtInst.setMatrixAt(i, _mat4);
+      }
       dirtInst.instanceMatrix.needsUpdate = true;
       dirtInst.computeBoundingSphere();
       this.terrainGroup.add(dirtInst);
     }
 
-    if (waterPositions.length > 0) {
+    if (this.waterCoordsX.length > 0) {
       const bedGeo = this.geos.get('water_bed', () => new THREE.BoxGeometry(1, 0.1, 1));
       const bedInst = new THREE.InstancedMesh(
         bedGeo,
         this.mats.getSolid('#1b4f72', 0.9, 0.0),
-        waterPositions.length
+        this.waterCoordsX.length
       );
       bedInst.receiveShadow = true;
-      const waterSurfaceGeo = this.geos.get('water_surf', () => new THREE.PlaneGeometry(1, 1));
-      waterPositions.forEach((pos, idx) => {
-        _mat4.makeTranslation(pos.x, -0.18, pos.z);
-        bedInst.setMatrixAt(idx, _mat4);
-        const wMesh = new THREE.Mesh(waterSurfaceGeo, this.mats.waterMat);
-        wMesh.rotation.x = -Math.PI / 2;
-        wMesh.position.set(pos.x, -0.04, pos.z);
-        wMesh.receiveShadow = true;
-        this.terrainGroup.add(wMesh);
-        this.waterTiles.push(wMesh);
+      const waterSurfaceGeo = this.geos.get('water_surf', () => {
+        const pg = new THREE.PlaneGeometry(1, 1);
+        pg.rotateX(-Math.PI / 2);
+        return pg;
       });
+      const wInst = new THREE.InstancedMesh(
+        waterSurfaceGeo,
+        this.mats.waterMat,
+        this.waterCoordsX.length
+      );
+      wInst.receiveShadow = true;
+      wInst.frustumCulled = false;
+
+      for (let i = 0; i < this.waterCoordsX.length; i++) {
+        _mat4.makeTranslation(this.waterCoordsX[i], -0.18, this.waterCoordsZ[i]);
+        bedInst.setMatrixAt(i, _mat4);
+        _mat4.makeTranslation(this.waterCoordsX[i], -0.04, this.waterCoordsZ[i]);
+        wInst.setMatrixAt(i, _mat4);
+      }
       bedInst.instanceMatrix.needsUpdate = true;
       bedInst.computeBoundingSphere();
+      wInst.instanceMatrix.needsUpdate = true;
       this.terrainGroup.add(bedInst);
+      this.terrainGroup.add(wInst);
+      this.waterInstanced = wInst;
+    }
+
+    // Build ALL ~150 forest trees as 8 InstancedMeshes (vs 700+ draw calls!)
+    const treeTmpl = getInstancedTreeTemplates(this.geos);
+    if (broadleafTrees.length > 0) {
+      const blTrunk = new THREE.InstancedMesh(treeTmpl.broadleafTrunkGeo, this.mats.barkMat, broadleafTrees.length);
+      const blDark = new THREE.InstancedMesh(treeTmpl.broadleafDarkGeo, this.mats.treeDarkMat, broadleafTrees.length);
+      const blMid = new THREE.InstancedMesh(treeTmpl.broadleafMidGeo, this.mats.treeMidMat, broadleafTrees.length);
+      const blLight = new THREE.InstancedMesh(treeTmpl.broadleafLightGeo, this.mats.treeLightMat, broadleafTrees.length);
+      const layers = [blTrunk, blDark, blMid, blLight];
+      for (const l of layers) {
+        l.castShadow = !this.isSoftwareGl;
+        l.receiveShadow = true;
+        l.frustumCulled = false;
+      }
+      broadleafTrees.forEach((t, idx) => {
+        _v3A.set(t.x, t.y, t.z);
+        _quat.identity();
+        _scale.setScalar(t.s);
+        _mat4.compose(_v3A, _quat, _scale);
+        for (const l of layers) l.setMatrixAt(idx, _mat4);
+      });
+      for (const l of layers) {
+        l.instanceMatrix.needsUpdate = true;
+        this.terrainGroup.add(l);
+      }
+    }
+    if (pineTrees.length > 0) {
+      const pTrunk = new THREE.InstancedMesh(treeTmpl.pineTrunkGeo, this.mats.barkMat, pineTrees.length);
+      const p1 = new THREE.InstancedMesh(treeTmpl.pineTier1Geo, this.mats.treeDarkMat, pineTrees.length);
+      const p2 = new THREE.InstancedMesh(treeTmpl.pineTier2Geo, this.mats.treeMidMat, pineTrees.length);
+      const p3 = new THREE.InstancedMesh(treeTmpl.pineTier3Geo, this.mats.treeLightMat, pineTrees.length);
+      const layers = [pTrunk, p1, p2, p3];
+      for (const l of layers) {
+        l.castShadow = !this.isSoftwareGl;
+        l.receiveShadow = true;
+        l.frustumCulled = false;
+      }
+      pineTrees.forEach((t, idx) => {
+        _v3A.set(t.x, t.y, t.z);
+        _quat.identity();
+        _scale.setScalar(t.s);
+        _mat4.compose(_v3A, _quat, _scale);
+        for (const l of layers) l.setMatrixAt(idx, _mat4);
+      });
+      for (const l of layers) {
+        l.instanceMatrix.needsUpdate = true;
+        this.terrainGroup.add(l);
+      }
     }
   }
 
   private syncTilesIncremental(state: GameWorldState): void {
-    const activeKeys = new Set<string>();
-    const activeTilledKeys = new Set<string>();
-    const lanternPositions: THREE.Vector3[] = [];
-    this.animatedStructures.length = 0;
+    const totalTiles = state.width * state.height;
+    if (this.tileSeenStamp.length !== totalTiles) {
+      this.tileSeenStamp = new Int32Array(totalTiles);
+      this.prevTilledCode = new Uint8Array(totalTiles);
+      this.tilledDirty = true;
+    }
+
+    this.syncEpoch++;
+    let animChanged = false;
+    let lanternCount = 0;
+    let soilChanged = this.tilledDirty;
 
     for (let y = 0; y < state.height; y++) {
+      const rowOffset = y * state.width;
       for (let x = 0; x < state.width; x++) {
-        const tile = state.tiles[y * state.width + x];
-        const key = `${x},${y}`;
+        const idx = rowOffset + x;
+        const tile = state.tiles[idx];
 
-        // Tilled soil pad
-        if (tile.tilled) {
-          activeTilledKeys.add(key);
-          const soilSig = `${tile.watered ? 1 : 0}:${tile.droughtDriedToday ? 1 : 0}:${tile.beanRotationBonus ? 1 : 0}`;
-          let entry = this.tilledMeshes.get(key);
-          const targetMat = tile.watered
-            ? this.mats.tilledWetMat
-            : tile.droughtDriedToday
-            ? this.mats.tilledDroughtMat
-            : this.mats.tilledDryMat;
-
-          if (!entry) {
-            const mesh = new THREE.Mesh(
-              this.geos.get('tilled_pad_v2', () => {
-                const s = new THREE.Shape();
-                const hw = 0.42;
-                s.moveTo(-hw + 0.06, -hw);
-                s.lineTo(hw - 0.06, -hw);
-                s.quadraticCurveTo(hw, -hw, hw, -hw + 0.06);
-                s.lineTo(hw, hw - 0.06);
-                s.quadraticCurveTo(hw, hw, hw - 0.06, hw);
-                s.lineTo(-hw + 0.06, hw);
-                s.quadraticCurveTo(-hw, hw, -hw, hw - 0.06);
-                s.lineTo(-hw, -hw + 0.06);
-                s.quadraticCurveTo(-hw, -hw, -hw + 0.06, -hw);
-                const geo = new THREE.ExtrudeGeometry(s, {
-                  depth: 0.032,
-                  bevelEnabled: true,
-                  bevelThickness: 0.015,
-                  bevelSize: 0.025,
-                  bevelSegments: 2,
-                });
-                geo.rotateX(-Math.PI / 2);
-                geo.center();
-                return geo;
-              }),
-              targetMat
-            );
-            mesh.position.set(x + 0.5, 0.018, y + 0.5);
-            mesh.receiveShadow = true;
-            this.dynamicPropsGroup.add(mesh);
-            entry = { sig: soilSig, mesh };
-            this.tilledMeshes.set(key, entry);
-          } else if (entry.sig !== soilSig) {
-            entry.sig = soilSig;
-            entry.mesh.material = targetMat;
-          }
-
-          if (tile.beanRotationBonus && !entry.bonusRing) {
-            const ring = new THREE.Mesh(
-              this.geos.get('bean_ring', () => new THREE.RingGeometry(0.36, 0.43, 16)),
-              this.mats.getEmissive('#86efac', '#22c55e', 0.65)
-            );
-            ring.rotation.x = -Math.PI / 2;
-            ring.position.set(x + 0.5, 0.038, y + 0.5);
-            this.dynamicPropsGroup.add(ring);
-            entry.bonusRing = ring;
-          } else if (!tile.beanRotationBonus && entry.bonusRing) {
-            this.dynamicPropsGroup.remove(entry.bonusRing);
-            entry.bonusRing = undefined;
-          }
+        // Check tilled soil bitmask: 0=untilled, bit0=tilled, bit1=watered, bit2=drought, bit3=beanBonus
+        const soilCode = tile.tilled
+          ? 1 |
+            (tile.watered ? 2 : 0) |
+            (tile.droughtDriedToday ? 4 : 0) |
+            (tile.beanRotationBonus ? 8 : 0)
+          : 0;
+        if (this.prevTilledCode[idx] !== soilCode) {
+          this.prevTilledCode[idx] = soilCode;
+          soilChanged = true;
         }
 
-        // Tile prop: forest_edge tree, crop, obstacle, or structure
+        // Tile prop (excluding forest_edge which is instanced in ensureBaseTerrain)
         let propSig = '';
-        if (tile.terrain === 'forest_edge') {
-          propSig = `tree:${(x + y) % 3}`;
-        } else if (tile.structure) {
-          propSig = `str:${tile.structure.type}:${tile.structure.hp}`;
-          if (tile.structure.type === 'lantern') {
-            lanternPositions.push(new THREE.Vector3(x + 0.5, 1.0, y + 0.5));
+        if (tile.structure) {
+          propSig = `s:${tile.structure.type}:${tile.structure.hp}`;
+          if (tile.structure.type === 'lantern' && lanternCount < this.lanternLights.length) {
+            this.lanternSpotsX[lanternCount] = x + 0.5;
+            this.lanternSpotsZ[lanternCount] = y + 0.5;
+            lanternCount++;
           }
         } else if (tile.crop) {
-          propSig = `crop:${tile.crop.type}:${tile.crop.growthDays}:${tile.crop.withered ? 1 : 0}`;
+          propSig = `c:${tile.crop.type}:${tile.crop.growthDays}:${tile.crop.withered ? 1 : 0}`;
         } else if (tile.obstacle) {
-          propSig = `obs:${tile.obstacle}`;
+          propSig = `o:${tile.obstacle}`;
         }
 
         if (propSig) {
-          activeKeys.add(key);
-          const existing = this.tilePropGroups.get(key);
+          this.tileSeenStamp[idx] = this.syncEpoch;
+          const existing = this.tilePropGroups.get(idx);
           if (!existing || existing.sig !== propSig) {
             if (existing) {
               this.dynamicPropsGroup.remove(existing.group);
+              if (existing.animType) animChanged = true;
             }
             let group: THREE.Group;
-            if (tile.terrain === 'forest_edge') {
-              group = createForestTreeGroup(this.geos, this.mats, x + y);
-            } else if (tile.structure) {
+            let animType: string | undefined;
+            if (tile.structure) {
               group = createStructureGroup(tile.structure, this.geos, this.mats);
+              if (
+                tile.structure.type === 'windmill' ||
+                tile.structure.type === 'sprinkler' ||
+                tile.structure.type === 'drip_sprinkler' ||
+                tile.structure.type === 'nasa_station'
+              ) {
+                animType = tile.structure.type;
+                animChanged = true;
+              }
             } else if (tile.crop) {
               group = createCropGroup(tile.crop, this.geos, this.mats);
             } else {
@@ -687,40 +856,66 @@ export class EcoGrowScene3D {
             }
             group.position.set(x + 0.5, 0, y + 0.5);
             this.dynamicPropsGroup.add(group);
-            this.tilePropGroups.set(key, { sig: propSig, group });
-          }
-
-          if (
-            tile.structure &&
-            (tile.structure.type === 'windmill' ||
-              tile.structure.type === 'sprinkler' ||
-              tile.structure.type === 'drip_sprinkler' ||
-              tile.structure.type === 'nasa_station')
-          ) {
-            const cur = this.tilePropGroups.get(key);
-            if (cur) {
-              this.animatedStructures.push({ type: tile.structure.type, group: cur.group });
-            }
+            this.tilePropGroups.set(idx, { sig: propSig, animType, group });
           }
         }
       }
     }
 
-    // Remove stale tilled soils
-    for (const [k, entry] of this.tilledMeshes.entries()) {
-      if (!activeTilledKeys.has(k)) {
-        this.dynamicPropsGroup.remove(entry.mesh);
-        if (entry.bonusRing) this.dynamicPropsGroup.remove(entry.bonusRing);
-        this.tilledMeshes.delete(k);
+    // Remove stale crops/obstacles/structures
+    for (const [idx, entry] of this.tilePropGroups.entries()) {
+      if (this.tileSeenStamp[idx] !== this.syncEpoch) {
+        this.dynamicPropsGroup.remove(entry.group);
+        if (entry.animType) animChanged = true;
+        this.tilePropGroups.delete(idx);
       }
     }
 
-    // Remove stale crops/obstacles/structures
-    for (const [k, entry] of this.tilePropGroups.entries()) {
-      if (!activeKeys.has(k)) {
-        this.dynamicPropsGroup.remove(entry.group);
-        this.tilePropGroups.delete(k);
+    if (animChanged) {
+      this.animatedStructures.length = 0;
+      for (const entry of this.tilePropGroups.values()) {
+        if (entry.animType) {
+          this.animatedStructures.push({ type: entry.animType, group: entry.group });
+        }
       }
+    }
+
+    // Rebuild instanced tilled soil pads only when any soil tile changed
+    if (soilChanged) {
+      this.tilledDirty = false;
+      let dryCount = 0;
+      let wetCount = 0;
+      let droughtCount = 0;
+      let ringCount = 0;
+
+      for (let y = 0; y < state.height; y++) {
+        const rowOffset = y * state.width;
+        for (let x = 0; x < state.width; x++) {
+          const code = this.prevTilledCode[rowOffset + x];
+          if (code === 0) continue;
+          _mat4.makeTranslation(x + 0.5, 0.018, y + 0.5);
+          if ((code & 2) !== 0) {
+            this.tilledWetInst.setMatrixAt(wetCount++, _mat4);
+          } else if ((code & 4) !== 0) {
+            this.tilledDroughtInst.setMatrixAt(droughtCount++, _mat4);
+          } else {
+            this.tilledDryInst.setMatrixAt(dryCount++, _mat4);
+          }
+          if ((code & 8) !== 0) {
+            _mat4.makeTranslation(x + 0.5, 0.038, y + 0.5);
+            this.beanRingInst.setMatrixAt(ringCount++, _mat4);
+          }
+        }
+      }
+
+      this.tilledDryInst.count = dryCount;
+      this.tilledWetInst.count = wetCount;
+      this.tilledDroughtInst.count = droughtCount;
+      this.beanRingInst.count = ringCount;
+      this.tilledDryInst.instanceMatrix.needsUpdate = true;
+      this.tilledWetInst.instanceMatrix.needsUpdate = true;
+      this.tilledDroughtInst.instanceMatrix.needsUpdate = true;
+      this.beanRingInst.instanceMatrix.needsUpdate = true;
     }
 
     // Daily treasure
@@ -739,11 +934,10 @@ export class EcoGrowScene3D {
       }
     }
 
-    // Position up to 4 nearest placed lanterns
+    // Position active placed lanterns
     for (let i = 0; i < this.lanternLights.length; i++) {
-      const lp = lanternPositions[i];
-      if (lp) {
-        this.lanternLights[i].position.copy(lp);
+      if (i < lanternCount) {
+        this.lanternLights[i].position.set(this.lanternSpotsX[i], 1.0, this.lanternSpotsZ[i]);
         this.lanternLights[i].userData.active = true;
       } else {
         this.lanternLights[i].userData.active = false;
@@ -853,9 +1047,9 @@ export class EcoGrowScene3D {
     }
 
     // Remote co-op players
-    const activeRemoteIds = new Set<string>();
+    this.scratchIdSet.clear();
     for (const rp of remotePlayers) {
-      activeRemoteIds.add(rp.id);
+      this.scratchIdSet.add(rp.id);
       let entry = this.remoteFarmers.get(rp.id);
       const vp = voiceStates?.[rp.id];
       const emote = activeEmotes?.[rp.id];
@@ -892,7 +1086,7 @@ export class EcoGrowScene3D {
       entry.label.position.set(rp.x, 1.55, rp.y);
     }
     for (const [id, entry] of this.remoteFarmers.entries()) {
-      if (!activeRemoteIds.has(id)) {
+      if (!this.scratchIdSet.has(id)) {
         this.actorsGroup.remove(entry.rig.root);
         this.actorsGroup.remove(entry.label);
         (entry.label.material as THREE.SpriteMaterial).map?.dispose();
@@ -902,9 +1096,9 @@ export class EcoGrowScene3D {
     }
 
     // Chickens
-    const chickenIds = new Set<number>();
+    this.scratchNumSet.clear();
     for (const c of state.chickens) {
-      chickenIds.add(c.id);
+      this.scratchNumSet.add(c.id);
       let cg = this.chickens.get(c.id);
       if (!cg) {
         cg = createChickenGroup(this.geos, this.mats);
@@ -915,16 +1109,16 @@ export class EcoGrowScene3D {
       cg.rotation.y = Math.atan2(c.vx || c.facingX, c.vy || 0.01);
     }
     for (const [id, cg] of this.chickens.entries()) {
-      if (!chickenIds.has(id)) {
+      if (!this.scratchNumSet.has(id)) {
         this.actorsGroup.remove(cg);
         this.chickens.delete(id);
       }
     }
 
     // Cows
-    const cowIds = new Set<number>();
+    this.scratchNumSet.clear();
     for (const cow of state.cows ?? []) {
-      cowIds.add(cow.id);
+      this.scratchNumSet.add(cow.id);
       let cg = this.cows.get(cow.id);
       if (!cg) {
         cg = createCowGroup(this.geos, this.mats);
@@ -935,16 +1129,16 @@ export class EcoGrowScene3D {
       cg.rotation.y = Math.atan2(cow.vx || cow.facingX, cow.vy || 0.01);
     }
     for (const [id, cg] of this.cows.entries()) {
-      if (!cowIds.has(id)) {
+      if (!this.scratchNumSet.has(id)) {
         this.actorsGroup.remove(cg);
         this.cows.delete(id);
       }
     }
 
     // Sheep
-    const sheepIds = new Set<number>();
+    this.scratchNumSet.clear();
     for (const sh of state.sheep ?? []) {
-      sheepIds.add(sh.id);
+      this.scratchNumSet.add(sh.id);
       let sg = this.sheep.get(sh.id);
       if (!sg) {
         sg = createSheepGroup(this.geos, this.mats);
@@ -955,7 +1149,7 @@ export class EcoGrowScene3D {
       sg.rotation.y = Math.atan2(sh.vx || sh.facingX, sh.vy || 0.01);
     }
     for (const [id, sg] of this.sheep.entries()) {
-      if (!sheepIds.has(id)) {
+      if (!this.scratchNumSet.has(id)) {
         this.actorsGroup.remove(sg);
         this.sheep.delete(id);
       }
@@ -979,10 +1173,10 @@ export class EcoGrowScene3D {
     }
 
     // Night Wildlife (Rabbits & Boars)
-    const wildIds = new Set<number>();
+    this.scratchNumSet.clear();
     for (const w of state.wildlife) {
       if (w.state === 'ko') continue;
-      wildIds.add(w.id);
+      this.scratchNumSet.add(w.id);
       let entry = this.wildlife.get(w.id);
       if (!entry || entry.kind !== w.kind) {
         if (entry) this.actorsGroup.remove(entry.group);
@@ -998,7 +1192,7 @@ export class EcoGrowScene3D {
       entry.group.scale.setScalar(pulse);
     }
     for (const [id, entry] of this.wildlife.entries()) {
-      if (!wildIds.has(id)) {
+      if (!this.scratchNumSet.has(id)) {
         this.actorsGroup.remove(entry.group);
         this.wildlife.delete(id);
       }
@@ -1047,15 +1241,18 @@ export class EcoGrowScene3D {
     this.fog.color.copy(_colorA);
     this.fog.density = state.weather === 'Rainstorm' ? 0.022 : 0.014;
 
-    // Sun angle & color
+    // Texel-snapped directional sun shadow frustum (eliminates shadow edge crawling/shimmer)
+    const texelSize = (this.shadowHalfExtent * 2) / this.shadowMapSize;
+    const snappedX = Math.round(camTargetX / texelSize) * texelSize;
+    const snappedZ = Math.round(camTargetZ / texelSize) * texelSize;
     const sunProgress = Math.max(0, Math.min(1, (tMin - 360) / (1440 - 360)));
     const sunAngle = sunProgress * Math.PI;
     this.sunLight.position.set(
-      camTargetX + Math.cos(sunAngle) * -22,
+      snappedX + Math.cos(sunAngle) * -22,
       8 + Math.sin(sunAngle) * 24,
-      camTargetZ + 12
+      snappedZ + 12
     );
-    this.sunLight.target.position.set(camTargetX, 0, camTargetZ);
+    this.sunLight.target.position.set(snappedX, 0, snappedZ);
 
     if (nightFactor > 0.5) {
       this.sunLight.color.set('#7aa2e3');
@@ -1082,10 +1279,18 @@ export class EcoGrowScene3D {
     // Rainbow arch
     this.rainbowGroup.visible = Boolean(state.rainbowActive) && phase !== 'Night';
 
-    // Water shimmer & live scrolling ripple normal map
+    // Water shimmer & live scrolling ripple normal map (single InstancedMesh)
     this.mats.waterNormalTex.offset.set(elapsedSec * 0.045, elapsedSec * 0.028);
-    for (let i = 0; i < this.waterTiles.length; i++) {
-      this.waterTiles[i].position.y = -0.045 + Math.sin(elapsedSec * 2.4 + i * 0.6) * 0.012;
+    if (this.waterInstanced && this.waterCoordsX.length > 0) {
+      for (let i = 0; i < this.waterCoordsX.length; i++) {
+        _mat4.makeTranslation(
+          this.waterCoordsX[i],
+          -0.045 + Math.sin(elapsedSec * 2.4 + i * 0.6) * 0.012,
+          this.waterCoordsZ[i]
+        );
+        this.waterInstanced.setMatrixAt(i, _mat4);
+      }
+      this.waterInstanced.instanceMatrix.needsUpdate = true;
     }
 
     // Spinning Windmill / Sprinklers / NASA Station
@@ -1110,7 +1315,7 @@ export class EcoGrowScene3D {
     // 3D Rain streaks
     if (state.weather === 'Rainstorm') {
       this.rainMesh.visible = true;
-      for (let i = 0; i < 140; i++) {
+      for (let i = 0; i < this.rainMaxCount; i++) {
         const rx = camTargetX - 14 + ((i * 3.17) % 28);
         const rz = camTargetZ - 11 + ((i * 5.43) % 22);
         const ry = 10 - ((elapsedSec * 14 + i * 1.37) % 10.5);
@@ -1127,7 +1332,21 @@ export class EcoGrowScene3D {
 
     // 3D Fireflies at Night / Seasonal Petals, Autumn Leaves, Winter Snow
     const isNight = phase === 'Night';
-    const specCount = isNight ? 28 : season === 'Winter' ? 36 : 18;
+    const ambientColorKey = isNight ? 'N' : season;
+    const specCount = this.isMobileGpu
+      ? isNight
+        ? 18
+        : season === 'Winter'
+        ? 22
+        : 12
+      : isNight
+      ? 28
+      : season === 'Winter'
+      ? 36
+      : 18;
+    const colorDirty = this.lastAmbientColorKey !== ambientColorKey;
+    this.lastAmbientColorKey = ambientColorKey;
+
     this.ambientSpecMesh.count = specCount;
     for (let i = 0; i < specCount; i++) {
       if (isNight) {
@@ -1137,36 +1356,38 @@ export class EcoGrowScene3D {
         const glowScale = 0.6 + Math.max(0, Math.sin(elapsedSec * 3.8 + i * 1.9)) * 0.9;
         _v3A.set(fx, fy, fz);
         _scale.setScalar(glowScale);
-        _colorA.set(i % 2 === 0 ? '#fde047' : '#bef264');
+        if (colorDirty) _colorA.set(i % 2 === 0 ? '#fde047' : '#bef264');
       } else if (season === 'Winter') {
         const sx = camTargetX - 13 + ((i * 2.3 + Math.sin(elapsedSec + i) * 1.2) % 26);
         const sz = camTargetZ - 10 + ((i * 3.1) % 20);
         const sy = 7.5 - ((elapsedSec * 1.8 + i * 0.9) % 7.5);
         _v3A.set(sx, sy, sz);
         _scale.setScalar(0.8);
-        _colorA.set('#f8fafc');
+        if (colorDirty) _colorA.set('#f8fafc');
       } else if (season === 'Autumn') {
         const lx = camTargetX - 12 + ((i * 2.8 + elapsedSec * 1.4 + Math.sin(elapsedSec + i)) % 24);
         const lz = camTargetZ - 9 + ((i * 3.3) % 18);
         const ly = 6.5 - ((elapsedSec * 1.4 + i * 1.1) % 6.5);
         _v3A.set(lx, ly, lz);
         _scale.set(1.4, 0.4, 1.0);
-        _colorA.set(i % 2 === 0 ? '#ea580c' : '#eab308');
+        if (colorDirty) _colorA.set(i % 2 === 0 ? '#ea580c' : '#eab308');
       } else {
         const bx = 3 + ((i * 4.1 + elapsedSec * 1.1) % 22);
         const bz = 3 + ((i * 3.1 + Math.sin(elapsedSec * 1.8 + i) * 1.5) % 14);
         const by = 0.9 + Math.sin(elapsedSec * 4.5 + i) * 0.4;
         _v3A.set(bx, by, bz);
         _scale.set(1.2, 0.5, 0.9);
-        _colorA.set(i % 2 === 0 ? '#f472b6' : '#fde047');
+        if (colorDirty) _colorA.set(i % 2 === 0 ? '#f472b6' : '#fde047');
       }
       _quat.identity();
       _mat4.compose(_v3A, _quat, _scale);
       this.ambientSpecMesh.setMatrixAt(i, _mat4);
-      this.ambientSpecMesh.setColorAt(i, _colorA);
+      if (colorDirty) {
+        this.ambientSpecMesh.setColorAt(i, _colorA);
+      }
     }
     this.ambientSpecMesh.instanceMatrix.needsUpdate = true;
-    if (this.ambientSpecMesh.instanceColor) {
+    if (colorDirty && this.ambientSpecMesh.instanceColor) {
       this.ambientSpecMesh.instanceColor.needsUpdate = true;
     }
   }
@@ -1191,15 +1412,17 @@ export class EcoGrowScene3D {
       pCount++;
     }
     this.particleMesh.count = pCount;
-    this.particleMesh.instanceMatrix.needsUpdate = true;
-    if (this.particleMesh.instanceColor) {
-      this.particleMesh.instanceColor.needsUpdate = true;
+    if (pCount > 0) {
+      this.particleMesh.instanceMatrix.needsUpdate = true;
+      if (this.particleMesh.instanceColor) {
+        this.particleMesh.instanceColor.needsUpdate = true;
+      }
     }
 
     // Floating texts
-    const activeIds = new Set<number>();
+    this.scratchNumSet.clear();
     for (const ft of floatingTexts) {
-      activeIds.add(ft.id);
+      this.scratchNumSet.add(ft.id);
       let entry = this.floatingSprites.get(ft.id);
       if (!entry) {
         const sprite = makeBillboardSprite(ft.text, ft.color);
@@ -1215,13 +1438,39 @@ export class EcoGrowScene3D {
       (entry.sprite.material as THREE.SpriteMaterial).opacity = Math.min(1, ft.life * 2);
     }
     for (const [id, entry] of this.floatingSprites.entries()) {
-      if (!activeIds.has(id)) {
+      if (!this.scratchNumSet.has(id)) {
         this.fxGroup.remove(entry.sprite);
         (entry.sprite.material as THREE.SpriteMaterial).map?.dispose();
         entry.sprite.material.dispose();
         this.floatingSprites.delete(id);
       }
     }
+  }
+
+  private updateAdaptiveResolution(nowMs: number): void {
+    if (this.isSoftwareGl) return;
+    if (this.lastRenderTs > 0) {
+      const dtMs = nowMs - this.lastRenderTs;
+      // Ignore modal-throttled or backgrounded frames (> 90ms)
+      if (dtMs > 4 && dtMs < 90) {
+        this.avgFrameMs = this.avgFrameMs * 0.9 + dtMs * 0.1;
+        this.drsWarmupFrames++;
+        if (this.drsCooldown > 0) this.drsCooldown--;
+
+        if (this.drsWarmupFrames >= 45 && this.drsCooldown === 0) {
+          if (this.avgFrameMs > 22.5 && this.currentDpr > this.minDpr + 0.02) {
+            this.currentDpr = Math.max(this.minDpr, Math.round((this.currentDpr - 0.15) * 20) / 20);
+            this.renderer.setPixelRatio(this.currentDpr);
+            this.drsCooldown = 90;
+          } else if (this.avgFrameMs < 15.2 && this.currentDpr < this.maxDpr - 0.02) {
+            this.currentDpr = Math.min(this.maxDpr, Math.round((this.currentDpr + 0.1) * 20) / 20);
+            this.renderer.setPixelRatio(this.currentDpr);
+            this.drsCooldown = 140;
+          }
+        }
+      }
+    }
+    this.lastRenderTs = nowMs;
   }
 
   public render(
@@ -1239,6 +1488,9 @@ export class EcoGrowScene3D {
     localEmote?: string
   ): void {
     if (this.disposed) return;
+    this.frameCounter++;
+    this.updateAdaptiveResolution(performance.now());
+
     const season = getSeason(state.seasonIndex);
 
     this.ensureBaseTerrain(state, season);
@@ -1314,6 +1566,18 @@ export class EcoGrowScene3D {
       this.renderer.compile(this.scene, this.camera);
     }
 
+    // On mobile/Android, refresh shadow map every 2nd frame or on camera shift to cut shadow GPU load in half
+    if (this.isMobileGpu && !this.isSoftwareGl) {
+      const camJumped =
+        Math.abs(camTargetX - this.lastShadowCamX) > 0.35 ||
+        Math.abs(camTargetZ - this.lastShadowCamZ) > 0.35;
+      if (camJumped || this.frameCounter % 2 === 0) {
+        this.renderer.shadowMap.needsUpdate = true;
+        this.lastShadowCamX = camTargetX;
+        this.lastShadowCamZ = camTargetZ;
+      }
+    }
+
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -1373,6 +1637,7 @@ export class EcoGrowScene3D {
       (entry.sprite.material as THREE.SpriteMaterial).map?.dispose();
       entry.sprite.material.dispose();
     }
+    (this.beanRingInst.material as THREE.Material).dispose();
     this.rainMesh.geometry.dispose();
     (this.rainMesh.material as THREE.Material).dispose();
     this.ambientSpecMesh.geometry.dispose();

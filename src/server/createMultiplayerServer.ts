@@ -26,9 +26,11 @@ import { COOP_EMOTES, MAX_ROOM_PLAYERS, PLAYER_PALETTE } from '../game/multiplay
 import {
   advanceDay,
   buyDairyCow,
+  buyFarmCat,
   buyFarmChicken,
   buyFluffySheep,
   buyGuardDog,
+  buyPondDuck,
   buyShopItem,
   claimMissionReward,
   craftItem,
@@ -40,6 +42,7 @@ import {
   performTileAction,
   sellCropItem,
   spawnNightWildlife,
+  stepCampfireAura,
   stepChickens,
   stepLivestockAndDog,
   stepWildlife,
@@ -1051,13 +1054,27 @@ export function createMultiplayerServer(
           ? buyDairyCow(room.world)
           : msg.kind === 'sheep'
           ? buyFluffySheep(room.world)
+          : msg.kind === 'cat'
+          ? buyFarmCat(room.world)
+          : msg.kind === 'duck'
+          ? buyPondDuck(room.world)
           : buyGuardDog(room.world);
       extractPlayerFromWorld(room, player);
       if (res.ok) {
         syncWorldToRoom(room);
         sendToClient(ws, {
           type: 'fx:event',
-          fx: { kind: 'toast', sfx: msg.kind === 'dog' ? 'bark' : 'harvest' },
+          fx: {
+            kind: 'toast',
+            sfx:
+              msg.kind === 'dog'
+                ? 'bark'
+                : msg.kind === 'cat'
+                ? 'cat'
+                : msg.kind === 'duck'
+                ? 'quack'
+                : 'harvest',
+          },
         });
       } else {
         sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
@@ -1198,12 +1215,24 @@ export function createMultiplayerServer(
         });
       });
 
+      // Warm campfire stamina & HP healing aura for each connected player
+      for (const p of activePlayers) {
+        if (p.stamina < p.maxStamina || p.health < p.maxHealth) {
+          applyPlayerIntoWorld(room, p);
+          stepCampfireAura(world, dt);
+          p.stamina = world.player.stamina;
+          p.health = world.player.health;
+        }
+      }
+
       if (world.wildlife.length > 0) {
         room.dirtyActiveEntities = true;
       } else if (
         world.chickens.some((c) => c.vx !== 0 || c.vy !== 0) ||
         (world.cows ?? []).some((c) => c.vx !== 0 || c.vy !== 0) ||
         (world.sheep ?? []).some((s) => s.vx !== 0 || s.vy !== 0) ||
+        (world.ducks ?? []).some((d) => d.vx !== 0 || d.vy !== 0) ||
+        Boolean(world.cat && (world.cat.vx !== 0 || world.cat.vy !== 0)) ||
         Boolean(world.dog && (world.dog.vx !== 0 || world.dog.vy !== 0))
       ) {
         room.dirtyPassiveEntities = true;
@@ -1244,6 +1273,8 @@ export function createMultiplayerServer(
           cows: world.cows ?? [],
           sheep: world.sheep ?? [],
           dog: world.dog ?? null,
+          cat: world.cat ?? null,
+          ducks: world.ducks ?? [],
         });
       }
     }

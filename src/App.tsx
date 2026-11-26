@@ -2579,13 +2579,15 @@ export default function App() {
         }
 
         // 2. Player WASD / Arrow / Touch Thumbstick movement
-        const keys = modalOpen ? new Set<string>() : keysPressedRef.current;
+        const keys = modalOpen ? null : keysPressedRef.current;
         let mx = modalOpen ? 0 : joystickRef.current.x;
         let my = modalOpen ? 0 : joystickRef.current.y;
-        if (keys.has('w') || keys.has('arrowup')) my -= 1;
-        if (keys.has('s') || keys.has('arrowdown')) my += 1;
-        if (keys.has('a') || keys.has('arrowleft')) mx -= 1;
-        if (keys.has('d') || keys.has('arrowright')) mx += 1;
+        if (keys) {
+          if (keys.has('w') || keys.has('arrowup')) my -= 1;
+          if (keys.has('s') || keys.has('arrowdown')) my += 1;
+          if (keys.has('a') || keys.has('arrowleft')) mx -= 1;
+          if (keys.has('d') || keys.has('arrowright')) mx += 1;
+        }
 
         if (mx !== 0 || my !== 0) {
           const len = Math.hypot(mx, my);
@@ -2602,7 +2604,7 @@ export default function App() {
             mx = rx;
             my = ry;
           }
-          const sprinting = sprintActiveRef.current || keys.has('shift');
+          const sprinting = sprintActiveRef.current || Boolean(keys?.has('shift'));
           const speed = sprinting ? 4.5 * 1.45 : 4.5; // tiles/sec
           const nx = world.player.x + mx * speed * dt;
           const ny = world.player.y + my * speed * dt;

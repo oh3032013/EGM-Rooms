@@ -47,7 +47,7 @@ export function NetDebugPanel({ onClose, onPingNow, onProbeHttp }: NetDebugPanel
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-2 sm:p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-2 sm:p-4"
       dir="ltr"
       role="dialog"
       aria-label="WebSocket Network Diagnostics"
