@@ -5,6 +5,7 @@ import type {
   ItemId,
   MissionId,
   PlaceableType,
+  RealmId,
   Season,
   WeatherType,
 } from './types';
@@ -108,8 +109,6 @@ export function translateWeather(weather: WeatherType, lang: Language): string {
       return 'عاصفة';
     case 'Heatwave':
       return 'موجة حر';
-    case 'Frost':
-      return 'صقيع';
   }
 }
 
@@ -178,24 +177,29 @@ export const ITEM_AR: Record<
     roleClue: 'نمو 4 أيام · +عسل إضافي',
   },
   sunflower_seed: {
-    name: 'بذور عباد الشمس الذهبي',
-    description: 'زهور مشرقة (3 أيام) تزيد إنتاج العسل في خلايا النحل القريبة!',
-    roleClue: 'نمو 3 أيام · +عسل النحل',
+    name: 'بذور عباد الشمس',
+    description: 'أزهار صيفية وخريفية مبهجة (3 أيام) تجذب النحل وترفع فرص البذور عند الحصاد.',
+    roleClue: 'نمو 3 أيام · +عسل وبذور',
   },
-  blueberry_seed: {
-    name: 'بذور التوت الأزرق المعمر',
-    description: 'شجيرة معمرة (4 أيام) تعيد النمو كل يومين بعد الحصاد دون إعادة زرع!',
-    roleClue: 'معمر · ينمو كل يومين',
+  potato_seed: {
+    name: 'درنات البطاطس الذهبية',
+    description: 'محصول مشبع (3 أيام) يمنح حبة إضافية في التربة المسقية أو المغطاة بالمهاد!',
+    roleClue: 'نمو 3 أيام · +1 درنة عند السقي',
   },
   chili_seed: {
-    name: 'بذور الفلفل البركاني',
-    description: 'محصول صيفي وخريفي حار (3 أيام) مقاوم تماماً لموجات الحر!',
-    roleClue: 'نمو 3 أيام · ضد موجة الحر',
+    name: 'بذور الفلفل الحار',
+    description: 'فلفل قرمزي مقاوم للفيضان والأمطار (4 أيام) في الصيف والخريف.',
+    roleClue: 'نمو 4 أيام · مقاوم للفيضان',
   },
   fertilizer: {
     name: 'سماد عضوي فوري',
     description: 'رُشّه على أي محصول مزروع لتسريع نموه يوماً كاملاً فوراً.',
     roleClue: '+1 يوم نمو فوراً',
+  },
+  bio_mulch: {
+    name: 'مهاد حيوي عضوي',
+    description: 'يغطي التربة المحروثة بطبقة قش تحفظ الرطوبة يومين وتحميها من الجفاف.',
+    roleClue: 'درع رطوبة يومين',
   },
   fence: {
     name: 'سياج خشبي',
@@ -282,45 +286,25 @@ export const ITEM_AR: Record<
     description: 'ألقِ 10g مرة كل يوم لتنال بركة: ذهب، طاقة كاملة، طقس صحو، أو بذور نادرة!',
     roleClue: 'أمنية يومية (10g)',
   },
-  bakery_oven: {
-    name: 'فرن المخبوزات الحجري',
-    description: 'يخبز 1 قمح + 1 بيضة ليصنع فطيرة المزارع الذهبية (195g) تلقائياً أو عند النقر.',
-    roleClue: 'قمح + بيضة ← فطيرة (195g)',
+  greenhouse: {
+    name: 'صوبة زجاجية ذكية (3×3)',
+    description: 'قبة زجاجية تحمي 3×3 مربعات من الجفاف وموجات الحر والفيضان وتتيح النمو في الشتاء!',
+    roleClue: 'زراعة شتوية + حماية 3×3',
   },
-  seed_maker: {
-    name: 'مطحنة استخراج البذور',
-    description: 'تحوّل أي محصول محصود من مخزونك إلى بذرتين مطابقتين عند النقر.',
-    roleClue: '1 محصول ← 2 بذور',
+  owl_box: {
+    name: 'عش البومة الحارسة',
+    description: 'يستضيف بومة ليلية تصدّ تسلل الأرانب والخنازير تلقائياً مرة كل ليلة.',
+    roleClue: 'صد غارة ليلية تلقائياً',
   },
-  solar_panel: {
-    name: 'لوح الطاقة الشمسية النظيفة',
-    description: 'لوح شمسي صامت يولد +20g رصيد طاقة نظيفة كل صباح تلقائياً.',
-    roleClue: '+20g دخل صباحي نظيف',
+  butter_churn: {
+    name: 'مخضة الزبدة الخشبية',
+    description: 'تخض الحليب الطازج إلى زبدة مزرعة ذهبية (130g) صباحاً أو عند النقر.',
+    roleClue: 'حليب ← زبدة (130g)',
   },
-  campfire: {
-    name: 'موقد التدفئة والراحة',
-    description: 'يحمي المحاصيل القريبة من الصقيع ويشفي +5 طاقة و+2 صحة/ث للواقفين حوله.',
-    roleClue: 'ضد الصقيع + تجديد الطاقة',
-  },
-  greenhouse_dome: {
-    name: 'قبة البيت الزجاجي المصغر',
-    description: 'تحمي مساحة 3×3 من الصقيع والحر والفيضان وتمنح +35% فرصة نمو إضافية.',
-    roleClue: 'حماية شاملة 3×3 + نمو',
-  },
-  birdhouse: {
-    name: 'عش عصافير الحقل',
-    description: 'يبعد الأرانب والثعالب ضمن 3 مربعات ويجلب بذوراً مجانية في الصباح.',
-    roleClue: 'صد الآفات + بذور صباحية',
-  },
-  duck_egg: {
-    name: 'بيض البط الذهبي',
-    description: 'بيض غني تضعه بطات البركة كل صباح. بيعه بـ 58g أو تناوله لاستعادة +40 طاقة.',
-    roleClue: 'بيع 58g · +40 طاقة',
-  },
-  farmer_pie: {
-    name: 'فطيرة المزارع الذهبية',
-    description: 'فطيرة دافئة مخبوزة بالقمح والبيض. تمنح +85 طاقة و+45 صحة أو تُباع بـ 195g!',
-    roleClue: 'بيع 195g · +85 طاقة',
+  tea_kettle: {
+    name: 'إبريق الشاي العشبي',
+    description: 'يغلي الخزامى أو العسل لإعداد شاي أعشاب (+45 طاقة + سرعة فائقة).',
+    roleClue: 'خزامى/عسل ← شاي سرعة',
   },
   egg: {
     name: 'بيض مزرعة طازج',
@@ -334,7 +318,7 @@ export const ITEM_AR: Record<
   },
   milk: {
     name: 'حليب طازج',
-    description: 'حليب كريمي من بقرة المزرعة. بِعه، اشربه (+40 طاقة)، أو اصنع منه جبناً.',
+    description: 'حليب كريمي من بقرة المزرعة. بِعه، اشربه (+40 طاقة)، أو اصنع منه جبناً وزبدة.',
     roleClue: 'بيع 75g · +40 طاقة',
   },
   wool: {
@@ -352,10 +336,25 @@ export const ITEM_AR: Record<
     description: 'مربى فاخر من فراولة المزرعة. يمنح +45 طاقة وقيمة بيع ممتازة.',
     roleClue: 'بيع 175g · +45 طاقة',
   },
+  butter: {
+    name: 'زبدة المزرعة الذهبية',
+    description: 'زبدة غنية مخضوضة في المزرعة. تمنح +48 طاقة و+20 صحة أو تُباع بـ 130g.',
+    roleClue: 'بيع 130g · +48 طاقة',
+  },
+  herbal_tea: {
+    name: 'شاي الأعشاب المنشط',
+    description: 'كوب ساخن يمنح +45 طاقة، +15 صحة، وتأثير السرعة (+25% سرعة و-1 طاقة للأدوات 3 ساعات).',
+    roleClue: 'بيع 155g · تعزيز السرعة',
+  },
   fish: {
     name: 'سمكة البركة الطازجة',
     description: 'تم اصطيادها من بركة المزرعة. تُباع بـ 52g أو تمنح +28 طاقة.',
     roleClue: 'بيع 52g · +28 طاقة',
+  },
+  golden_koi: {
+    name: 'سمكة الكوي الذهبية',
+    description: 'سمكة أسطورية نادرة من بركة المزرعة! تُباع بـ 220g أو تمنح +60 طاقة.',
+    roleClue: 'بيع 220g · نادرة جداً',
   },
   wheat: {
     name: 'قمح ذهبي',
@@ -403,19 +402,19 @@ export const ITEM_AR: Record<
     roleClue: 'بيع 92g · +12 طاقة',
   },
   sunflower: {
-    name: 'عباد الشمس الذهبي',
-    description: 'زهرة مشرقة غنية بالبذور وتزيد إنتاج العسل في الخلايا المجاورة.',
-    roleClue: 'بيع 88g · +18 طاقة',
+    name: 'زهرة عباد الشمس',
+    description: 'زهرة ذهبية لامعة محبوبة في القرية ولدى النحل.',
+    roleClue: 'بيع 112g · +15 طاقة',
   },
-  blueberry: {
-    name: 'توت أزرق بري',
-    description: 'توت لذيذ من شجيرة معمرة تعطي حصاداً متجدداً كل يومين.',
-    roleClue: 'بيع 72g · +24 طاقة',
+  potato: {
+    name: 'بطاطس ذهبية',
+    description: 'درنات لذيذة تمنح +24 طاقة ومضاعفة عند السقي.',
+    roleClue: 'بيع 54g · +24 طاقة',
   },
   chili: {
-    name: 'فلفل بركاني حار',
-    description: 'فلفل أحمر لاذع لا يذبل في موجات الحر الشديدة!',
-    roleClue: 'بيع 104g · +22 طاقة',
+    name: 'فلفل أحمر حار',
+    description: 'فلفل حار يقاوم العواصف ويمنح +20 طاقة.',
+    roleClue: 'بيع 128g · +20 طاقة',
   },
   wood: {
     name: 'خشب طبيعي',
@@ -441,7 +440,7 @@ export function getItemLabel(id: ItemId, lang: Language) {
 }
 
 export function getRecipeLabel(
-  id: PlaceableType | 'fertilizer',
+  id: PlaceableType | 'fertilizer' | 'bio_mulch',
   fallbackName: string,
   fallbackDesc: string,
   lang: Language
@@ -455,7 +454,7 @@ export function getRecipeLabel(
   return { name: fallbackName, description: fallbackDesc };
 }
 
-export const RECIPE_AR: Partial<Record<PlaceableType | 'fertilizer', { name: string; description: string }>> = {
+export const RECIPE_AR: Partial<Record<PlaceableType | 'fertilizer' | 'bio_mulch', { name: string; description: string }>> = {
   fence: {
     name: 'سياج خشبي (×2)',
     description: 'يمنع الأرانب ويبطئ الخنازير البرية ليلاً.',
@@ -492,6 +491,26 @@ export const RECIPE_AR: Partial<Record<PlaceableType | 'fertilizer', { name: str
     name: 'سماد عضوي فوري (×2)',
     description: 'يسرّع نمو أي محصول مزروع بمقدار +1 يوم فوراً.',
   },
+  bio_mulch: {
+    name: 'مهاد حيوي عضوي (×2)',
+    description: 'يغطي التربة المحروثة ليحفظ رطوبتها يومين كاملين ويحميها من الجفاف.',
+  },
+  owl_box: {
+    name: 'عش البومة الحارسة',
+    description: 'يصدّ غارة ليلية تلقائياً دون خسائر في المحاصيل.',
+  },
+  butter_churn: {
+    name: 'مخضة الزبدة الخشبية',
+    description: 'تخض الحليب الطازج إلى زبدة ذهبية فاخرة.',
+  },
+  tea_kettle: {
+    name: 'إبريق الشاي العشبي',
+    description: 'يعدّ شاي الأعشاب المنشط من الخزامى أو العسل.',
+  },
+  greenhouse: {
+    name: 'صوبة زجاجية ذكية (3×3)',
+    description: 'تحمي 3×3 مربعات من القسوة الجوية وتسمح بالزراعة في الشتاء.',
+  },
   cheese_press: {
     name: 'مكبس الجبن الحرفي',
     description: 'يصنع جبن المزرعة الفاخر من الحليب الطازج.',
@@ -499,26 +518,6 @@ export const RECIPE_AR: Partial<Record<PlaceableType | 'fertilizer', { name: str
   jam_maker: {
     name: 'صانعة مربى التوت',
     description: 'تطهى الفراولة لإنتاج مربى الفراولة الشهي.',
-  },
-  bakery_oven: {
-    name: 'فرن المخبوزات الحجري',
-    description: 'يخبز 1 قمح + 1 بيضة إلى فطيرة المزارع الذهبية (195g).',
-  },
-  seed_maker: {
-    name: 'مطحنة استخراج البذور',
-    description: 'تحوّل أي محصول محصود إلى بذرتين متطابقتين.',
-  },
-  solar_panel: {
-    name: 'لوح الطاقة الشمسية',
-    description: 'يولّد +20g كل صباح من الطاقة النظيفة المتجددة.',
-  },
-  campfire: {
-    name: 'موقد التدفئة والراحة',
-    description: 'يدفئ المحاصيل من الصقيع ويشفي طاقة وصحة المزارعين حوله.',
-  },
-  birdhouse: {
-    name: 'عش عصافير الحقل',
-    description: 'يحمي المحاصيل القريبة من الأرانب والثعالب ويجلب بذوراً.',
   },
 };
 
@@ -726,64 +725,64 @@ const BASE_MISSION_TEXT: Record<
       desc: 'اوصل لمستوى المزارع 3 عبر الحصاد والصيد والدفاع.',
     },
   },
-  sunflower_berry: {
+  greenhouse_pioneer: {
     en: {
-      title: '21. Sunflowers & Berries',
-      desc: 'Harvest and hold 2 Golden Sunflowers or Wild Blueberries.',
+      title: '21. Greenhouse Pioneer',
+      desc: 'Build & place 1 Glass Greenhouse (3×3) for all-season crops.',
     },
     ar: {
-      title: '21. عباد الشمس والتوت',
-      desc: 'احصد واحتفظ باثنين من عباد الشمس أو التوت الأزرق.',
+      title: '21. رائد الصوبة الذكية',
+      desc: 'اصنع وضع صوبة زجاجية (3×3) للزراعة في جميع الفصول.',
     },
   },
-  bake_pie: {
+  cat_lover: {
     en: {
-      title: '22. Homestead Baker',
-      desc: 'Bake 1 Farmer Golden Pie in a Bakery Oven.',
+      title: '22. Cozy Cat Companion',
+      desc: 'Adopt 1 Cozy Barn Cat in the Village Shop.',
     },
     ar: {
-      title: '22. خباز المزرعة',
-      desc: 'اخبز فطيرة المزارع الذهبية في فرن المخبوزات.',
+      title: '22. صديق القط اللطيف',
+      desc: 'تبنّ قط المزرعة اللطيف من متجر القرية.',
     },
   },
-  seed_miller: {
+  tea_brewer: {
     en: {
-      title: '23. Seed Recycler',
-      desc: 'Mill harvested crops into fresh seeds twice using a Seed Maker.',
+      title: '23. Tea & Butter Artisan',
+      desc: 'Craft 2 cups of Herbal Tea or Golden Farm Butter.',
     },
     ar: {
-      title: '23. طاحن البذور',
-      desc: 'استخدم مطحنة البذور مرتين لاستخراج بذور جديدة.',
+      title: '23. صانع الشاي والزبدة',
+      desc: 'اصنع قطعتين من شاي الأعشاب أو زبدة المزرعة الذهبية.',
     },
   },
-  clean_energy: {
+  titanium_smith: {
     en: {
-      title: '24. Clean Homestead Tech',
-      desc: 'Build a Solar Panel, Warm Campfire, or Mini Greenhouse.',
+      title: '24. Titanium Craftsmanship',
+      desc: 'Upgrade any farm tool to Titanium Tier (Lv.4).',
     },
     ar: {
-      title: '24. التقنية الخضراء',
-      desc: 'ضع لوح طاقة شمسية أو موقداً أو قبة زجاجية في الحقل.',
+      title: '24. براعة التيتانيوم',
+      desc: 'طوّر أي أداة زراعية إلى مستوى التيتانيوم (المستوى 4).',
     },
   },
-  pond_companions: {
+  portal_awakener: {
     en: {
-      title: '25. Homestead Companions',
-      desc: 'Adopt a Barn Tabby Cat or a Pond Duck from the Village Shop.',
+      title: '25. Ancient Gatekeeper',
+      desc: 'Unlock your first new realm through the Ancient Portal.',
     },
     ar: {
-      title: '25. رفاق المزرعة',
-      desc: 'تبنّ قطة المزرعة أو بطة البركة من سوق القرية.',
+      title: '25. حارس البوابات القديمة',
+      desc: 'افتح أول عالم جديد عبر البوابة القديمة.',
     },
   },
-  emerald_tools: {
+  realm_voyager: {
     en: {
-      title: '26. Eco-Emerald Craft',
-      desc: 'Upgrade any farm tool to Tier 4 Eco-Emerald.',
+      title: '26. Voyager of Worlds',
+      desc: 'Unlock and discover all 4 EcoGrow realms.',
     },
     ar: {
-      title: '26. أدوات الزمرد البيئية',
-      desc: 'رقِّ أي أداة زراعية إلى المستوى الرابع (الزمرد البيئي).',
+      title: '26. رحالة العوالم',
+      desc: 'افتح واكتشف جميع عوالم EcoGrow الأربعة.',
     },
   },
 };
@@ -842,34 +841,34 @@ const BASE_BADGE_TEXT: Record<
       desc: 'إنتاج 3 قطع جبن أو مربى حرفي.',
     },
   },
-  artisan_baker: {
+  eco_architect: {
     en: {
-      title: 'Master Baker',
-      desc: 'Bake 3 Farmer Golden Pies.',
+      title: 'Eco Architect',
+      desc: 'Place 1 Greenhouse or Owl Box on your farm.',
     },
     ar: {
-      title: 'الخباز الماهر',
-      desc: 'خبز 3 فطائر مزارع ذهبية.',
+      title: 'مهندس البيئة',
+      desc: 'وضع صوبة زجاجية أو عش بومة في مزرعتك.',
     },
   },
-  eco_engineer: {
+  farm_tycoon: {
     en: {
-      title: 'Eco Engineer',
-      desc: 'Build 3 green tech structures (Solar, Greenhouse, Seed Maker, Windmill, or NASA Station).',
+      title: 'Farm Tycoon',
+      desc: 'Earn 1,000 total Gold across your farm career.',
     },
     ar: {
-      title: 'المهندس البيئي',
-      desc: 'بناء 3 منشآت بيئية متقدمة (طاقة شمسية، قبة، مطحنة، طاحونة، أو محطة رصد).',
+      title: 'قطب المزرعة',
+      desc: 'جمع 1,000 ذهب إجمالاً في مسيرتك الزراعية.',
     },
   },
-  wildlife_ranger: {
+  world_explorer: {
     en: {
-      title: 'Night Ranger',
-      desc: 'Repel 6 nocturnal wildlife prowlers.',
+      title: 'World Explorer',
+      desc: 'Unlock all 4 realms via the Ancient World Portal.',
     },
     ar: {
-      title: 'حارس الليل الشجاع',
-      desc: 'صدّ 6 حيوانات برية متسللة ليلاً.',
+      title: 'مستكشف العوالم',
+      desc: 'افتح جميع العوالم الأربعة عبر بوابة العوالم القديمة.',
     },
   },
 };
@@ -909,7 +908,6 @@ export function formatMorningSummaryText(summary: DaySummary, lang: Language): s
   if (lang !== 'ar') {
     const m = EXTRA_LOCALES[lang].morning;
     const notes: string[] = [];
-    if (summary.harvestFestival) notes.push(m.festival);
     if (summary.cropsGrown > 0) notes.push(m.cropsGrown.replace('{n}', String(summary.cropsGrown)));
     if (summary.rainbowActive) notes.push(m.rainbow);
     if ((summary.sprinklerWatered ?? 0) > 0) {
@@ -926,23 +924,17 @@ export function formatMorningSummaryText(summary: DaySummary, lang: Language): s
       notes.push(m.rain.replace('{l}', String(summary.rainCollectedLiters)));
     }
     if ((summary.eggsCollected ?? 0) > 0) notes.push(m.eggs.replace('{n}', String(summary.eggsCollected)));
-    if ((summary.duckEggsCollected ?? 0) > 0) {
-      notes.push(m.duckEggs.replace('{n}', String(summary.duckEggsCollected)));
-    }
     if ((summary.milkCollected ?? 0) > 0) notes.push(m.milk.replace('{n}', String(summary.milkCollected)));
     if ((summary.woolCollected ?? 0) > 0) notes.push(m.wool.replace('{n}', String(summary.woolCollected)));
     if ((summary.honeyCollected ?? 0) > 0) notes.push(m.honey.replace('{n}', String(summary.honeyCollected)));
     if ((summary.cheeseMade ?? 0) > 0) notes.push(m.cheese.replace('{n}', String(summary.cheeseMade)));
     if ((summary.jamMade ?? 0) > 0) notes.push(m.jam.replace('{n}', String(summary.jamMade)));
-    if ((summary.piesBaked ?? 0) > 0) notes.push(m.pies.replace('{n}', String(summary.piesBaked)));
+    if ((summary.butterMade ?? 0) > 0) notes.push(m.butter.replace('{n}', String(summary.butterMade)));
+    if ((summary.teaMade ?? 0) > 0) notes.push(m.tea.replace('{n}', String(summary.teaMade)));
     if ((summary.windmillGold ?? 0) > 0) notes.push(m.windmill.replace('{n}', String(summary.windmillGold)));
-    if ((summary.solarGold ?? 0) > 0) notes.push(m.solar.replace('{n}', String(summary.solarGold)));
-    if ((summary.catGiftGold ?? 0) > 0) notes.push(m.catGold.replace('{n}', String(summary.catGiftGold)));
-    if ((summary.catGiftFish ?? 0) > 0) notes.push(m.catFish.replace('{n}', String(summary.catGiftFish)));
-    if ((summary.birdhouseSeeds ?? 0) > 0) {
-      notes.push(m.birdSeeds.replace('{n}', String(summary.birdhouseSeeds)));
-    }
-    if ((summary.cropsFrosted ?? 0) > 0) notes.push(m.frosted.replace('{n}', String(summary.cropsFrosted)));
+    if ((summary.morningBonusGold ?? 0) > 0) notes.push(m.streakGold.replace('{n}', String(summary.morningBonusGold)));
+    if ((summary.owlRepelled ?? 0) > 0) notes.push(m.owlSaved.replace('{n}', String(summary.owlRepelled)));
+    if (summary.catGift) notes.push(m.catGift.replace('{gift}', summary.catGift));
     if (summary.cropsWithered > 0) notes.push(m.withered.replace('{n}', String(summary.cropsWithered)));
     if (summary.wildlifeDamage > 0) notes.push(m.wildlife.replace('{n}', String(summary.wildlifeDamage)));
     if (notes.length === 0) {
@@ -951,7 +943,6 @@ export function formatMorningSummaryText(summary: DaySummary, lang: Language): s
     return notes.join(' · ');
   }
   const notes: string[] = [];
-  if (summary.harvestFestival) notes.push('مهرجان الحصاد اليوم (+40% سعر البيع)!');
   if (summary.cropsGrown > 0) notes.push(`نما ${summary.cropsGrown} محصول`);
   if (summary.rainbowActive) notes.push('صباح قوس قزح!');
   if ((summary.sprinklerWatered ?? 0) > 0) notes.push(`سقت المرشة ${summary.sprinklerWatered} تربة`);
@@ -962,19 +953,17 @@ export function formatMorningSummaryText(summary: DaySummary, lang: Language): s
     notes.push(`تخزين ${summary.rainCollectedLiters} لتر مطر`);
   }
   if ((summary.eggsCollected ?? 0) > 0) notes.push(`+${summary.eggsCollected} بيض طازج`);
-  if ((summary.duckEggsCollected ?? 0) > 0) notes.push(`+${summary.duckEggsCollected} بيض بط ذهبي`);
   if ((summary.milkCollected ?? 0) > 0) notes.push(`+${summary.milkCollected} حليب طازج`);
   if ((summary.woolCollected ?? 0) > 0) notes.push(`+${summary.woolCollected} صوف ناعم`);
   if ((summary.honeyCollected ?? 0) > 0) notes.push(`+${summary.honeyCollected} عسل بري`);
   if ((summary.cheeseMade ?? 0) > 0) notes.push(`+${summary.cheeseMade} جبن فاخر`);
   if ((summary.jamMade ?? 0) > 0) notes.push(`+${summary.jamMade} مربى توت`);
-  if ((summary.piesBaked ?? 0) > 0) notes.push(`+${summary.piesBaked} فطيرة ذهبية`);
+  if ((summary.butterMade ?? 0) > 0) notes.push(`+${summary.butterMade} زبدة ذهبية`);
+  if ((summary.teaMade ?? 0) > 0) notes.push(`+${summary.teaMade} شاي أعشاب`);
   if ((summary.windmillGold ?? 0) > 0) notes.push(`+${summary.windmillGold}g دخل الطاحونة`);
-  if ((summary.solarGold ?? 0) > 0) notes.push(`+${summary.solarGold}g طاقة شمسية`);
-  if ((summary.catGiftGold ?? 0) > 0) notes.push(`+${summary.catGiftGold}g هدية القطة الذهبية`);
-  if ((summary.catGiftFish ?? 0) > 0) notes.push(`+${summary.catGiftFish} سمكة من القطة`);
-  if ((summary.birdhouseSeeds ?? 0) > 0) notes.push(`+${summary.birdhouseSeeds} بذور من العصافير`);
-  if ((summary.cropsFrosted ?? 0) > 0) notes.push(`تجمّد ${summary.cropsFrosted} من الصقيع`);
+  if ((summary.morningBonusGold ?? 0) > 0) notes.push(`+${summary.morningBonusGold}g مكافأة المواظبة`);
+  if ((summary.owlRepelled ?? 0) > 0) notes.push(`البومة صدّت ${summary.owlRepelled} غارة`);
+  if (summary.catGift) notes.push(`هدية القط: ${summary.catGift === 'fish' ? 'سمكة' : summary.catGift}`);
   if (summary.cropsWithered > 0) notes.push(`ذبل ${summary.cropsWithered}`);
   if (summary.wildlifeDamage > 0) notes.push(`أكلت الحيوانات ${summary.wildlifeDamage}`);
   if (notes.length === 0) {
@@ -1003,11 +992,6 @@ export function formatFeedbackMessage(res: ActionFeedback, lang: Language): stri
     }
     if (res.message.startsWith('Drip row watered:')) {
       return res.message.replace('Drip row watered:', fb.dripRow);
-    }
-    if (res.message.startsWith('Milled 2x ')) {
-      const raw = res.message.replace('Milled 2x ', '').replace('!', '');
-      const match = (Object.keys(ITEMS) as ItemId[]).find((k) => ITEMS[k].name === raw);
-      return match ? `2× ${pack.items[match].name}!` : res.message;
     }
     if (res.message.startsWith('Placed ')) {
       const raw = res.message.replace('Placed ', '');
@@ -1126,28 +1110,37 @@ export function formatFeedbackMessage(res: ActionFeedback, lang: Language): stri
       return 'الخروف سعيد باهتمامك! ♥';
     case 'Chicken clucks happily!':
       return 'الدجاجة سعيدة باهتمامك! ♥';
-    case 'Baked 1 Farmer Golden Pie!':
-      return 'تم خبز 1 فطيرة المزارع الذهبية!';
-    case 'Need 1 Wheat + 1 Egg to bake Pie':
-      return 'يلزم 1 قمح + 1 بيضة لخبز الفطيرة';
-    case 'Need 1 harvested crop to make seeds':
-      return 'يلزم 1 محصول محصود لاستخراج البذور';
-    case 'Petted Barn Cat (+8 Stam)!':
-      return 'دلّلت قطة المزرعة (+8 طاقة) ♥';
-    case 'Petted Pond Duck (+5 Stam)!':
-      return 'دلّلت بطة البركة (+5 طاقة) ♥';
-    case 'Barn Cat purrs softly!':
-      return 'قطة المزرعة تخرخر بسعادة! ♥';
-    case 'Pond Duck quacks happily!':
-      return 'بطة البركة تبطبط بسعادة! ♥';
-    case 'Already at max Eco-Emerald tier':
-      return 'وصلت بالفعل لأعلى مستوى (الزمرد البيئي)';
+    case 'Churned 1 Golden Farm Butter!':
+      return 'تم خضّ 1 زبدة مزرعة ذهبية!';
+    case 'Need 1 Fresh Milk to churn Butter':
+      return 'يلزم 1 حليب طازج لخضّ الزبدة';
+    case 'Brewed 1 Soothing Herbal Tea!':
+      return 'تم تحضير 1 شاي أعشاب منشط!';
+    case 'Need 1 Lavender or Honey to brew Tea':
+      return 'يلزم 1 خزامى أو عسل لإعداد الشاي';
+    case 'Caught Rare Golden Koi!':
+      return 'اصطدت سمكة الكوي الذهبية النادرة!';
+    case 'Reeled Sunken Chest (+45g & Seeds)!':
+      return 'اصطدت صندوق كنز غارق (+45g وبذور)!';
+    case 'Applied Bio-Mulch (2d moisture shield)!':
+      return 'تم وضع المهاد الحيوي (حماية رطوبة يومين)!';
+    case 'Apply Bio-Mulch on tilled soil':
+      return 'استخدم المهاد الحيوي على تربة محروثة';
+    case 'Out of Bio-Mulch':
+      return 'نفد المهاد الحيوي';
+    case 'Petted Cozy Barn Cat (+10 HP, +8 Stam)!':
+      return 'دلّلت قط المزرعة (+10 صحة، +8 طاقة) ♥';
+    case 'Barn Cat purrs happily!':
+      return 'قط المزرعة يخرخر بسعادة! ♥';
+    case '+5 Timber Wood (Forest Bonus)!':
+      return '+5 خشب (مكافأة الغابة الهامسة)!';
+    case '+2 Stone +8g Crystal Shard!':
+      return '+2 حجر و +8g شظية كريستال!';
+    case 'Crystal Shard! Caught Golden Koi!':
+      return 'واحة الكريستال! اصطدت سمكة الكوي الذهبية!';
+    case 'Reeled Crystal Oasis Pearl (+60g)!':
+      return 'اصطدت لؤلؤة واحة الكريستال (+60g)!';
     default:
-      if (res.message?.startsWith('Milled 2x ')) {
-        const raw = res.message.replace('Milled 2x ', '').replace('!', '');
-        const match = (Object.keys(ITEMS) as ItemId[]).find((k) => ITEMS[k].name === raw);
-        return match ? `تم طحن 2× ${ITEM_AR[match].name}!` : res.message;
-      }
       if (res.message?.startsWith('Wishing Fountain gifted +1 ')) {
         const raw = res.message.replace('Wishing Fountain gifted +1 ', '').replace('!', '');
         const match = (Object.keys(ITEMS) as ItemId[]).find((k) => ITEMS[k].name === raw);
@@ -1165,8 +1158,71 @@ export function formatFeedbackMessage(res: ActionFeedback, lang: Language): stri
   }
 }
 
+const BASE_REALM_TEXT: Record<
+  RealmId,
+  { en: { name: string; desc: string; perk: string }; ar: { name: string; desc: string; perk: string } }
+> = {
+  homestead: {
+    en: {
+      name: 'Homestead Valley',
+      desc: 'Your lush home farm valley with farmhouse, village shop, livestock pastures, and seasonal pond.',
+      perk: 'Home Base · Farmhouse, Village Shop & Livestock',
+    },
+    ar: {
+      name: 'وادي المزرعة',
+      desc: 'مزرعتك الرئيسية الدافئة مع المنزل وسوق القرية والحيوانات وبركة الصيد.',
+      perk: 'القاعدة الرئيسية · المنزل، السوق والحيوانات',
+    },
+  },
+  whispering_woods: {
+    en: {
+      name: 'Whispering Woods',
+      desc: 'Ancient emerald clearing rich with tall timber stumps, wild ferns, and mystic forest soil.',
+      perk: '+2 Bonus Timber Wood per chopped stump',
+    },
+    ar: {
+      name: 'الغابة الهامسة',
+      desc: 'ساحة غابة زمردية عتيقة غنية بالأشجار والجذوع والأخشاب والنباتات البرية.',
+      perk: '+2 خشب إضافي من كل جذع شجرة',
+    },
+  },
+  crystal_oasis: {
+    en: {
+      name: 'Crystal Oasis',
+      desc: 'Sun-drenched desert lagoon glittering with mineral rocks, crystal shards, and rare pond treasures.',
+      perk: '+8g Crystal Shard per mined rock · Richer Oasis Fishing',
+    },
+    ar: {
+      name: 'واحة الكريستال',
+      desc: 'واحة صحراوية مشمسة تلمع بالصخور المعدنية وشظايا الكريستال وبحيرة الكنوز النادرة.',
+      perk: '+8g كريستال من كل صخرة · صيد أغنى بالكنوز',
+    },
+  },
+  sky_sanctuary: {
+    en: {
+      name: 'Sky Sanctuary',
+      desc: 'Floating celestial garden above the clouds bathed in starlight—permanently sheltered from harsh weather.',
+      perk: '2× Crop Growth · Auto-Watered · Immune to Storms, Heat & Beasts',
+    },
+    ar: {
+      name: 'ملاذ السماء',
+      desc: 'حديقة سماوية معلّقة فوق السحاب تغمرها النجوم ومحمية تماماً من العواصف والوحوش.',
+      perk: 'نمو مضاعف 2× · ري ذاتي · مناعة من الطقس والوحوش',
+    },
+  },
+};
+
+export function getRealmLabel(
+  id: RealmId,
+  lang: Language
+): { name: string; desc: string; perk: string } {
+  if (lang === 'en') return BASE_REALM_TEXT[id].en;
+  if (lang === 'ar') return BASE_REALM_TEXT[id].ar;
+  return EXTRA_LOCALES[lang].realms[id];
+}
+
 export function getNearPromptLabel(
-  action: 'sleep' | 'shop' | 'well' | 'bin',
+  action: 'sleep' | 'shop' | 'well' | 'bin' | 'portal',
   lang: Language
 ): string {
   if (lang === 'en') {
@@ -1179,6 +1235,8 @@ export function getNearPromptLabel(
         return 'Use Watering Can or E at Well to Refill';
       case 'bin':
         return 'Press E or Tap to Sell at Shipping Bin';
+      case 'portal':
+        return 'Press E or Tap to Open World Portals';
     }
   }
   if (lang !== 'ar') {
@@ -1193,6 +1251,8 @@ export function getNearPromptLabel(
       return 'املأ مرش المياه من البئر';
     case 'bin':
       return 'اضغط E أو تفاعل للبيع في الصندوق';
+    case 'portal':
+      return 'اضغط E أو تفاعل لفتح بوابة العوالم';
   }
 }
 
@@ -1456,15 +1516,24 @@ const BASE_UI_TEXT: { en: UiTextMap; ar: UiTextMap } = {
     forceUpdateModeServerOnly: 'Server-only update (no game files to download)',
     forceUpdateModeDelta: 'Smart delta update (downloads changed files only)',
     forceUpdateReadyReload: 'Update applied! Reloading inside this window...',
-    tierEmerald: 'Eco-Emerald',
-    catName: 'Barn Tabby Cat',
-    catDesc: 'Patrols the farmhouse porch and brings a lucky morning fish or +15g.',
-    duckName: 'Pond Duck',
-    duckDesc: 'Swims on the pond, lays 1 Golden Duck Egg daily, and boosts Golden Pearl odds.',
-    festivalBanner: 'Harvest Festival (+40% Sell Bonus)',
-    quickEatBtn: 'Snack (Q)',
-    resetCamBtn: 'Reset View',
-    frostHit: 'Morning Frost! Warm crops with a Campfire, Lantern, or Greenhouse Dome.',
+    tierTitanium: 'Titanium Tier',
+    catName: 'Cozy Barn Cat',
+    catDesc: 'Purrs around your farm, restores +10 HP & +8 Stam when petted, and brings morning gifts!',
+    quickEatBtn: 'Quick Eat (Q)',
+    miniMapBtn: 'Map (Z)',
+    miniMapTitle: 'Farm Radar Map',
+    swiftBuffBadge: 'Swift Brew',
+    streakBadge: 'Day {n} (+{g}g)',
+    almanacStatsTab: 'Farm Records',
+    portalsBtn: 'Realms',
+    portalModalTitle: 'Ancient World Portals',
+    portalModalSub: 'Unlock and travel to new fertile lands, crystal oases, and floating sky gardens',
+    travelBtn: 'Travel',
+    unlockRealmBtn: 'Unlock Realm',
+    currentRealmBadge: 'Current Realm',
+    unlockedLabel: 'Discovered',
+    lockedLabel: 'Sealed',
+    realmArrivalToast: 'Arrived in {realm}!',
   },
   ar: {
     brandTitle: 'EcoGrow Mission',
@@ -1725,15 +1794,24 @@ const BASE_UI_TEXT: { en: UiTextMap; ar: UiTextMap } = {
     forceUpdateModeServerOnly: 'تحديث للسيرفر فقط (بدون تحميل ملفات اللعبة)',
     forceUpdateModeDelta: 'تحديث ذكي (ينزّل الملفات التي تغيرت فقط)',
     forceUpdateReadyReload: 'تم تطبيق التحديث! جارٍ إعادة التشغيل في نفس النافذة...',
-    tierEmerald: 'الزمرد البيئي',
-    catName: 'قطة المزرعة الحلوة',
-    catDesc: 'تتجول عند شرفة المنزل وتجلب لك كل صباح سمكة أو +15g عملة حظ.',
-    duckName: 'بطة البركة',
-    duckDesc: 'تسبح في البركة وتضع بيضة بط ذهبية كل صباح وتزيد فرص اللؤلؤ.',
-    festivalBanner: 'مهرجان الحصاد (+40% أسعار البيع)',
-    quickEatBtn: 'وجبة (Q)',
-    resetCamBtn: 'ضبط الكاميرا',
-    frostHit: 'صقيع صباحي! دفّئ المحاصيل بموقد أو فانوس أو قبة زجاجية.',
+    tierTitanium: 'المستوى التيتانيوم',
+    catName: 'قط المزرعة اللطيف',
+    catDesc: 'يتجول في المزرعة، يمنح +10 صحة و+8 طاقة عند ملاطفته، ويحضر هدية كل صباح!',
+    quickEatBtn: 'أكل سريع (Q)',
+    miniMapBtn: 'الخريطة (Z)',
+    miniMapTitle: 'خريطة المزرعة المصغرة',
+    swiftBuffBadge: 'تأثير الشاي',
+    streakBadge: 'يوم {n} (+{g}g)',
+    almanacStatsTab: 'إحصائيات المزرعة',
+    portalsBtn: 'العوالم',
+    portalModalTitle: 'بوابة العوالم والمناطق الجديدة',
+    portalModalSub: 'افتح بوابات قديمة وسافر لاكتشاف الغابة الهامسة وواحة الكريستال وملاذ السماء',
+    travelBtn: 'سفر',
+    unlockRealmBtn: 'فتح العالم',
+    currentRealmBadge: 'أنت هنا',
+    unlockedLabel: 'مفتوح',
+    lockedLabel: 'مغلق',
+    realmArrivalToast: 'وصلت إلى {realm}!',
   },
 };
 

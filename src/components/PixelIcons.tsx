@@ -42,7 +42,10 @@ export function ItemIcon({ id, className = 'w-6 h-6' }: { id: ItemId; className?
     case 'bean_seed':
     case 'corn_seed':
     case 'watermelon_seed':
-    case 'lavender_seed': {
+    case 'lavender_seed':
+    case 'sunflower_seed':
+    case 'potato_seed':
+    case 'chili_seed': {
       const accent =
         id === 'wheat_seed'
           ? '#e6b84c'
@@ -60,6 +63,12 @@ export function ItemIcon({ id, className = 'w-6 h-6' }: { id: ItemId; className?
           ? '#22c55e'
           : id === 'lavender_seed'
           ? '#9333ea'
+          : id === 'sunflower_seed'
+          ? '#facc15'
+          : id === 'potato_seed'
+          ? '#d9a45b'
+          : id === 'chili_seed'
+          ? '#ef4444'
           : '#de6f1f';
       return (
         <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
@@ -77,6 +86,15 @@ export function ItemIcon({ id, className = 'w-6 h-6' }: { id: ItemId; className?
           <rect x="8" y="4" width="8" height="3" fill="#7d5333" />
           <rect x="9" y="11" width="6" height="6" fill="#4ade80" />
           <rect x="11" y="9" width="2" height="4" fill="#22c55e" />
+        </svg>
+      );
+    case 'bio_mulch':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="4" y="8" width="16" height="12" rx="2" fill="#7c4a21" stroke="#45250d" strokeWidth="1.5" />
+          <rect x="7" y="5" width="10" height="3" fill="#d9a441" />
+          <rect x="7" y="11" width="10" height="3" fill="#f5d061" />
+          <rect x="8" y="15" width="8" height="2" fill="#84cc16" />
         </svg>
       );
     case 'wheat':
@@ -156,6 +174,32 @@ export function ItemIcon({ id, className = 'w-6 h-6' }: { id: ItemId; className?
           <rect x="8" y="6" width="3" height="8" fill="#9333ea" />
           <rect x="13" y="7" width="3" height="8" fill="#9333ea" />
           <rect x="10" y="4" width="4" height="8" fill="#c084fc" />
+        </svg>
+      );
+    case 'sunflower':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="11" y="13" width="2" height="8" fill="#3f7d32" />
+          <rect x="6" y="4" width="12" height="11" rx="3" fill="#facc15" />
+          <rect x="8" y="6" width="8" height="7" rx="2" fill="#fde047" />
+          <rect x="9" y="7" width="6" height="5" fill="#451a03" />
+        </svg>
+      );
+    case 'potato':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="8" y="5" width="8" height="4" fill="#4d8c3a" />
+          <rect x="5" y="10" width="8" height="7" rx="3" fill="#d9a45b" stroke="#854d0e" strokeWidth="1.2" />
+          <rect x="11" y="12" width="8" height="7" rx="3" fill="#e5b873" stroke="#854d0e" strokeWidth="1.2" />
+        </svg>
+      );
+    case 'chili':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="10" y="4" width="4" height="3" fill="#2f732e" />
+          <rect x="7" y="7" width="4" height="11" rx="2" fill="#ef4444" />
+          <rect x="13" y="8" width="4" height="11" rx="2" fill="#dc2626" />
+          <rect x="8" y="9" width="2" height="5" fill="#fca5a5" />
         </svg>
       );
     case 'fence':
@@ -399,6 +443,77 @@ export function ItemIcon({ id, className = 'w-6 h-6' }: { id: ItemId; className?
           <rect x="11" y="4" width="2" height="3" fill="#fde047" />
         </svg>
       );
+    case 'greenhouse':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="4" y="16" width="16" height="4" fill="#6b4528" />
+          <rect x="5" y="7" width="14" height="10" fill="#6ee7b7" opacity="0.7" />
+          <rect x="7" y="4" width="10" height="4" fill="#a7f3d0" />
+          <rect x="11" y="5" width="2" height="12" fill="#047857" />
+          <rect x="8" y="13" width="3" height="3" fill="#16a34a" />
+          <rect x="14" y="13" width="3" height="3" fill="#16a34a" />
+        </svg>
+      );
+    case 'owl_box':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="11" y="14" width="2" height="7" fill="#5c3a21" />
+          <rect x="6" y="6" width="12" height="9" fill="#8c5a35" />
+          <rect x="5" y="4" width="14" height="3" fill="#52341d" />
+          <rect x="9" y="9" width="6" height="4" fill="#1c120c" />
+          <rect x="10" y="10" width="2" height="2" fill="#fde047" />
+          <rect x="13" y="10" width="2" height="2" fill="#fde047" />
+        </svg>
+      );
+    case 'butter_churn':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="11" y="3" width="2" height="7" fill="#d9be8c" />
+          <rect x="9" y="2" width="6" height="2" fill="#d9be8c" />
+          <rect x="6" y="10" width="12" height="10" fill="#8c5a35" />
+          <rect x="5" y="13" width="14" height="2" fill="#64748b" />
+          <rect x="5" y="17" width="14" height="2" fill="#64748b" />
+          <rect x="8" y="9" width="8" height="2" fill="#fef08a" />
+        </svg>
+      );
+    case 'tea_kettle':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="5" y="17" width="14" height="3" fill="#475569" />
+          <rect x="6" y="9" width="11" height="8" rx="2" fill="#c2592c" />
+          <rect x="8" y="7" width="7" height="3" fill="#ea8c55" />
+          <rect x="17" y="10" width="3" height="3" fill="#c2592c" />
+          <rect x="11" y="4" width="2" height="2" fill="#e2e8f0" />
+        </svg>
+      );
+    case 'butter':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="3" y="14" width="18" height="4" rx="1" fill="#cbd5e1" />
+          <rect x="6" y="8" width="12" height="7" rx="1" fill="#fde047" stroke="#ca8a04" strokeWidth="1.5" />
+          <rect x="8" y="10" width="5" height="2" fill="#fef9c3" />
+        </svg>
+      );
+    case 'herbal_tea':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="6" y="9" width="11" height="10" rx="2" fill="#f8fafc" stroke="#64748b" strokeWidth="1.5" />
+          <rect x="17" y="11" width="3" height="5" fill="#cbd5e1" />
+          <rect x="8" y="11" width="7" height="4" fill="#22c55e" />
+          <rect x="9" y="5" width="2" height="3" fill="#bbf7d0" />
+          <rect x="13" y="4" width="2" height="4" fill="#bbf7d0" />
+        </svg>
+      );
+    case 'golden_koi':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="4" y="10" width="4" height="4" fill="#f59e0b" />
+          <rect x="7" y="7" width="11" height="9" rx="3" fill="#facc15" stroke="#b45309" strokeWidth="1.2" />
+          <rect x="10" y="9" width="6" height="5" fill="#fef08a" />
+          <rect x="15" y="10" width="2" height="2" fill="#0f172a" />
+          <rect x="11" y="4" width="3" height="2" fill="#fde047" />
+        </svg>
+      );
   }
 }
 
@@ -542,6 +657,24 @@ export function DogIcon({ className = 'w-8 h-8' }: { className?: string }) {
       <rect x="13" y="11" width="4" height="2" fill="#ef4444" />
       <rect x="6" y="18" width="2" height="3" fill="#925828" />
       <rect x="13" y="18" width="2" height="3" fill="#925828" />
+    </svg>
+  );
+}
+
+export function CatIcon({ className = 'w-8 h-8' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <rect x="6" y="11" width="10" height="7" rx="1" fill="#f97316" />
+      <rect x="8" y="11" width="2" height="3" fill="#c2410c" />
+      <rect x="12" y="11" width="2" height="3" fill="#c2410c" />
+      <rect x="13" y="6" width="6" height="6" fill="#fb923c" />
+      <rect x="13" y="4" width="2" height="2" fill="#f97316" />
+      <rect x="17" y="4" width="2" height="2" fill="#f97316" />
+      <rect x="14" y="11" width="4" height="2" fill="#22c55e" />
+      <rect x="16" y="8" width="2" height="2" fill="#26180f" />
+      <rect x="4" y="8" width="2" height="5" fill="#f97316" />
+      <rect x="7" y="18" width="2" height="3" fill="#ea580c" />
+      <rect x="13" y="18" width="2" height="3" fill="#ea580c" />
     </svg>
   );
 }

@@ -10,7 +10,7 @@ interface CraftModalProps {
   gold: number;
   inventory: Partial<Record<ItemId, number>>;
   hotbar: (ItemId | null)[];
-  onCraft: (id: PlaceableType | 'fertilizer') => void;
+  onCraft: (id: PlaceableType | 'fertilizer' | 'bio_mulch') => void;
   onEatCrop: (id: ItemId) => void;
   onAssignHotbar: (id: ItemId, slotIdx: number) => void;
   onClose: () => void;

@@ -1,4 +1,4 @@
-import type { BadgeId, ItemId, MissionId, PlaceableType, Season, WeatherType } from '../types';
+import type { BadgeId, ItemId, MissionId, PlaceableType, RealmId, Season, WeatherType } from '../types';
 
 export type ExtraLanguage = 'fr' | 'es' | 'de' | 'it' | 'pt' | 'tr' | 'ru' | 'ja' | 'ko' | 'zh';
 
@@ -264,38 +264,35 @@ export interface UiTextMap {
   forceUpdateModeServerOnly: string;
   forceUpdateModeDelta: string;
   forceUpdateReadyReload: string;
-  tierEmerald: string;
+  tierTitanium: string;
   catName: string;
   catDesc: string;
-  duckName: string;
-  duckDesc: string;
-  festivalBanner: string;
   quickEatBtn: string;
-  resetCamBtn: string;
-  frostHit: string;
+  miniMapBtn: string;
+  miniMapTitle: string;
+  swiftBuffBadge: string;
+  streakBadge: string;
+  almanacStatsTab: string;
+  portalsBtn: string;
+  portalModalTitle: string;
+  portalModalSub: string;
+  travelBtn: string;
+  unlockRealmBtn: string;
+  currentRealmBadge: string;
+  unlockedLabel: string;
+  lockedLabel: string;
+  realmArrivalToast: string;
 }
-
-export type LegacyUiTextMap = Omit<
-  UiTextMap,
-  | 'tierEmerald'
-  | 'catName'
-  | 'catDesc'
-  | 'duckName'
-  | 'duckDesc'
-  | 'festivalBanner'
-  | 'quickEatBtn'
-  | 'resetCamBtn'
-  | 'frostHit'
->;
 
 export interface LocalePack {
   ui: UiTextMap;
   seasons: Record<Season, string>;
   weathers: Record<WeatherType, string>;
   timePeriod: { am: string; pm: string };
-  nearPrompts: Record<'sleep' | 'shop' | 'well' | 'bin', string>;
+  nearPrompts: Record<'sleep' | 'shop' | 'well' | 'bin' | 'portal', string>;
+  realms: Record<RealmId, { name: string; desc: string; perk: string }>;
   items: Record<ItemId, { name: string; description: string; roleClue: string }>;
-  recipes: Partial<Record<PlaceableType | 'fertilizer', { name: string; description: string }>>;
+  recipes: Partial<Record<PlaceableType | 'fertilizer' | 'bio_mulch', { name: string; description: string }>>;
   missions: Record<MissionId, { title: string; desc: string }>;
   badges: Record<BadgeId, { title: string; desc: string }>;
   morning: {
@@ -305,20 +302,17 @@ export interface LocalePack {
     drip: string;
     rain: string;
     eggs: string;
-    duckEggs: string;
     milk: string;
     wool: string;
     honey: string;
     cheese: string;
     jam: string;
-    pies: string;
+    butter: string;
+    tea: string;
     windmill: string;
-    solar: string;
-    catGold: string;
-    catFish: string;
-    birdSeeds: string;
-    frosted: string;
-    festival: string;
+    owlSaved: string;
+    streakGold: string;
+    catGift: string;
     withered: string;
     wildlife: string;
     fallback: string;
@@ -332,53 +326,5 @@ export interface LocalePack {
     placed: string;
     exact: Record<string, string>;
   };
-  switchedMsg: string;
-}
-
-export type LegacyItemId = Exclude<
-  ItemId,
-  | 'sunflower_seed'
-  | 'blueberry_seed'
-  | 'chili_seed'
-  | 'bakery_oven'
-  | 'seed_maker'
-  | 'solar_panel'
-  | 'campfire'
-  | 'greenhouse_dome'
-  | 'birdhouse'
-  | 'duck_egg'
-  | 'farmer_pie'
-  | 'sunflower'
-  | 'blueberry'
-  | 'chili'
->;
-
-export type LegacyMissionId = Exclude<
-  MissionId,
-  | 'sunflower_berry'
-  | 'bake_pie'
-  | 'seed_miller'
-  | 'clean_energy'
-  | 'pond_companions'
-  | 'emerald_tools'
->;
-
-export type LegacyBadgeId = Exclude<BadgeId, 'artisan_baker' | 'eco_engineer' | 'wildlife_ranger'>;
-
-export interface LegacyLocalePack {
-  ui: LegacyUiTextMap;
-  seasons: Record<Season, string>;
-  weathers: Record<Exclude<WeatherType, 'Frost'>, string>;
-  timePeriod: { am: string; pm: string };
-  nearPrompts: Record<'sleep' | 'shop' | 'well' | 'bin', string>;
-  items: Record<LegacyItemId, { name: string; description: string; roleClue: string }>;
-  recipes: Partial<Record<PlaceableType | 'fertilizer', { name: string; description: string }>>;
-  missions: Record<LegacyMissionId, { title: string; desc: string }>;
-  badges: Record<LegacyBadgeId, { title: string; desc: string }>;
-  morning: Omit<
-    LocalePack['morning'],
-    'duckEggs' | 'pies' | 'solar' | 'catGold' | 'catFish' | 'birdSeeds' | 'frosted' | 'festival'
-  >;
-  feedback: LocalePack['feedback'];
   switchedMsg: string;
 }

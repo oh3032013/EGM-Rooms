@@ -4,6 +4,7 @@ import {
   CROPS,
   FARMHOUSE_POS,
   NIGHT_START_MINUTES,
+  REALM_DEFS,
   SCARECROW_RADIUS,
   SENSOR_RADIUS,
   SHIPPING_BIN_POS,
@@ -13,7 +14,7 @@ import {
   TILE_SIZE,
   WELL_POS,
 } from './constants';
-import { getSeason, getTile, getTimePhase } from './rules';
+import { getSeason, getTile, getTimePhase, isSwiftBuffActive } from './rules';
 import { PLAYER_PALETTE, type RemotePlayerState, type VoicePeerState } from './multiplayer';
 import type {
   FarmChicken,
@@ -23,6 +24,7 @@ import type {
   LivestockEntity,
   Particle,
   PlayerState,
+  RealmId,
   Season,
   WildlifeEntity,
 } from './types';
@@ -91,10 +93,50 @@ const SEASON_PALETTES: Record<Season, SeasonPalette> = {
   },
 };
 
+const BIOME_PALETTES: Partial<Record<RealmId, SeasonPalette>> = {
+  whispering_woods: {
+    grassA: '#2d6a4f',
+    grassB: '#265b44',
+    grassTuft: '#52b788',
+    treeDark: '#123326',
+    treeMid: '#1b4332',
+    treeLight: '#40916c',
+    dirt: '#7c5d3f',
+    dirtSpeck: '#5e432b',
+    roof: '#2d6a4f',
+    roofTrim: '#74c69d',
+  },
+  crystal_oasis: {
+    grassA: '#d4b475',
+    grassB: '#c7a463',
+    grassTuft: '#e9d399',
+    treeDark: '#1b5e54',
+    treeMid: '#2a8072',
+    treeLight: '#6ed4c4',
+    dirt: '#b88346',
+    dirtSpeck: '#966631',
+    roof: '#0e7490',
+    roofTrim: '#67e8f9',
+  },
+  sky_sanctuary: {
+    grassA: '#3b4f7a',
+    grassB: '#33456b',
+    grassTuft: '#7aa2f7',
+    treeDark: '#1e1b4b',
+    treeMid: '#3730a3',
+    treeLight: '#a5b4fc',
+    dirt: '#64748b',
+    dirtSpeck: '#94a3b8',
+    roof: '#4f46e5',
+    roofTrim: '#c7d2fe',
+  },
+};
+
 // Pre-allocated offscreen light canvas for crisp Day/Sunset/Night lighting
 let lightCanvas: HTMLCanvasElement | null = null;
 let terrainCacheCanvas: HTMLCanvasElement | null = null;
 let terrainCacheSeason: Season | null = null;
+let terrainCacheRealm: RealmId | null = null;
 
 function getLightCtx(w: number, h: number): CanvasRenderingContext2D | null {
   if (!lightCanvas) {
@@ -107,23 +149,34 @@ function getLightCtx(w: number, h: number): CanvasRenderingContext2D | null {
   return lightCanvas.getContext('2d');
 }
 
-function getCachedTerrainCanvas(state: GameWorldState, season: Season, pal: SeasonPalette): HTMLCanvasElement {
+function getCachedTerrainCanvas(
+  state: GameWorldState,
+  season: Season,
+  pal: SeasonPalette,
+  realm: RealmId
+): HTMLCanvasElement {
   const totalW = state.width * TILE_SIZE;
   const totalH = state.height * TILE_SIZE;
   if (!terrainCacheCanvas) {
     terrainCacheCanvas = document.createElement('canvas');
   }
-  if (terrainCacheCanvas.width !== totalW || terrainCacheCanvas.height !== totalH || terrainCacheSeason !== season) {
+  if (
+    terrainCacheCanvas.width !== totalW ||
+    terrainCacheCanvas.height !== totalH ||
+    terrainCacheSeason !== season ||
+    terrainCacheRealm !== realm
+  ) {
     terrainCacheCanvas.width = totalW;
     terrainCacheCanvas.height = totalH;
     terrainCacheSeason = season;
+    terrainCacheRealm = realm;
     const tCtx = terrainCacheCanvas.getContext('2d');
     if (tCtx) {
       tCtx.imageSmoothingEnabled = false;
       for (let y = 0; y < state.height; y++) {
         for (let x = 0; x < state.width; x++) {
           const tile = state.tiles[y * state.width + x];
-          drawStaticTerrainTile(tCtx, tile, x * TILE_SIZE, y * TILE_SIZE, pal, season);
+          drawStaticTerrainTile(tCtx, tile, x * TILE_SIZE, y * TILE_SIZE, pal, season, realm);
         }
       }
     }
@@ -164,11 +217,19 @@ export function renderGameWorld(
   localEmote?: string
 ): void {
   const season = getSeason(state.seasonIndex);
-  const pal = SEASON_PALETTES[season];
+  const realm: RealmId = state.activeRealm ?? 'homestead';
+  const pal = BIOME_PALETTES[realm] ?? SEASON_PALETTES[season];
   const timePhase = getTimePhase(state.timeMinutes);
 
   ctx.imageSmoothingEnabled = false;
-  ctx.fillStyle = '#182419';
+  ctx.fillStyle =
+    realm === 'sky_sanctuary'
+      ? '#0f172a'
+      : realm === 'crystal_oasis'
+      ? '#2d2015'
+      : realm === 'whispering_woods'
+      ? '#14261c'
+      : '#182419';
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
   ctx.save();
@@ -187,7 +248,7 @@ export function renderGameWorld(
   const maxTY = Math.min(state.height - 1, Math.ceil((camera.y + halfH) / TILE_SIZE));
 
   // 1. Draw Cached Terrain Layer in a single blit + animated water/tilled soil
-  const terrainImg = getCachedTerrainCanvas(state, season, pal);
+  const terrainImg = getCachedTerrainCanvas(state, season, pal, realm);
   ctx.drawImage(terrainImg, 0, 0);
 
   for (let y = minTY; y <= maxTY; y++) {
@@ -196,20 +257,22 @@ export function renderGameWorld(
       const px = x * TILE_SIZE;
       const py = y * TILE_SIZE;
       if (tile.terrain === 'water') {
-        drawAnimatedWaterTile(ctx, tile, px, py, elapsedSec);
+        drawAnimatedWaterTile(ctx, tile, px, py, elapsedSec, realm);
       } else if (tile.tilled) {
         drawTilledSoil(ctx, tile, px, py);
       }
     }
   }
 
-  // 2. Draw Subtle Plot Boundary Markers (helps player see farmable central plot)
-  ctx.save();
-  ctx.strokeStyle = 'rgba(255, 244, 214, 0.14)';
-  ctx.lineWidth = 1;
-  ctx.setLineDash([4, 4]);
-  ctx.strokeRect(5 * TILE_SIZE + 1, 9 * TILE_SIZE + 1, 16 * TILE_SIZE - 2, 9 * TILE_SIZE - 2);
-  ctx.restore();
+  // 2. Draw Subtle Plot Boundary Markers on Homestead (helps player see farmable central plot)
+  if (realm === 'homestead') {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 244, 214, 0.14)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(5 * TILE_SIZE + 1, 9 * TILE_SIZE + 1, 16 * TILE_SIZE - 2, 9 * TILE_SIZE - 2);
+    ctx.restore();
+  }
 
   // 3. Hover / Facing Tile Highlight & Scarecrow Ward Preview
   if (!isTitleBackdrop) {
@@ -249,10 +312,11 @@ export function renderGameWorld(
       ctx.strokeRect(hx + 1, hy + 1, TILE_SIZE - 2, TILE_SIZE - 2);
 
       const selectedId = state.hotbar[state.player.selectedHotbarIndex];
-      if (selectedId === 'shade_net') {
-        ctx.fillStyle = 'rgba(56, 189, 248, 0.14)';
+      if (selectedId === 'shade_net' || selectedId === 'greenhouse') {
+        const isGreenhouse = selectedId === 'greenhouse';
+        ctx.fillStyle = isGreenhouse ? 'rgba(52, 211, 153, 0.16)' : 'rgba(56, 189, 248, 0.14)';
         ctx.fillRect(hx - TILE_SIZE, hy - TILE_SIZE, TILE_SIZE * 3, TILE_SIZE * 3);
-        ctx.strokeStyle = 'rgba(56, 189, 248, 0.65)';
+        ctx.strokeStyle = isGreenhouse ? 'rgba(52, 211, 153, 0.78)' : 'rgba(56, 189, 248, 0.65)';
         ctx.lineWidth = 1.5;
         ctx.strokeRect(hx - TILE_SIZE, hy - TILE_SIZE, TILE_SIZE * 3, TILE_SIZE * 3);
       } else if (selectedId === 'drip_sprinkler') {
@@ -314,23 +378,25 @@ export function renderGameWorld(
   type DrawItem = { sortY: number; draw: () => void };
   const drawList: DrawItem[] = [];
 
-  // Buildings
-  drawList.push({
-    sortY: (FARMHOUSE_POS.y + FARMHOUSE_POS.h) * TILE_SIZE,
-    draw: () => drawFarmhouse(ctx, pal, timePhase, elapsedSec),
-  });
-  drawList.push({
-    sortY: (SHOP_STALL_POS.y + SHOP_STALL_POS.h) * TILE_SIZE,
-    draw: () => drawShopStall(ctx, timePhase, elapsedSec),
-  });
-  drawList.push({
-    sortY: (WELL_POS.y + 1) * TILE_SIZE,
-    draw: () => drawStoneWell(ctx, elapsedSec),
-  });
-  drawList.push({
-    sortY: (SHIPPING_BIN_POS.y + 1) * TILE_SIZE,
-    draw: () => drawShippingBin(ctx),
-  });
+  // Homestead Buildings
+  if (realm === 'homestead') {
+    drawList.push({
+      sortY: (FARMHOUSE_POS.y + FARMHOUSE_POS.h) * TILE_SIZE,
+      draw: () => drawFarmhouse(ctx, pal, timePhase, elapsedSec),
+    });
+    drawList.push({
+      sortY: (SHOP_STALL_POS.y + SHOP_STALL_POS.h) * TILE_SIZE,
+      draw: () => drawShopStall(ctx, timePhase, elapsedSec),
+    });
+    drawList.push({
+      sortY: (WELL_POS.y + 1) * TILE_SIZE,
+      draw: () => drawStoneWell(ctx, elapsedSec),
+    });
+    drawList.push({
+      sortY: (SHIPPING_BIN_POS.y + 1) * TILE_SIZE,
+      draw: () => drawShippingBin(ctx),
+    });
+  }
 
   // Tile contents (culled to camera viewport)
   for (let y = minTY; y <= maxTY; y++) {
@@ -342,7 +408,13 @@ export function renderGameWorld(
       if (tile.terrain === 'forest_edge') {
         drawList.push({
           sortY: py + TILE_SIZE,
-          draw: () => drawForestTree(ctx, px, py, x, y, pal, elapsedSec),
+          draw: () => drawForestTree(ctx, px, py, x, y, pal, elapsedSec, realm),
+        });
+      }
+      if (tile.terrain === 'portal') {
+        drawList.push({
+          sortY: py + TILE_SIZE - 1,
+          draw: () => drawAncientPortal(ctx, px, py, realm, elapsedSec),
         });
       }
       if (tile.obstacle) {
@@ -380,6 +452,7 @@ export function renderGameWorld(
 
   // Local Player & Remote Multiplayer Farmers
   if (!isTitleBackdrop) {
+    const swiftActive = isSwiftBuffActive(state);
     drawList.push({
       sortY: state.player.y * TILE_SIZE + 4,
       draw: () =>
@@ -390,7 +463,8 @@ export function renderGameWorld(
           localPlayerMeta?.colorIndex ?? 0,
           localPlayerMeta?.name,
           localPlayerMeta?.voice,
-          localEmote ?? localPlayerMeta?.emote
+          localEmote ?? localPlayerMeta?.emote,
+          swiftActive
         ),
     });
     for (const rp of remotePlayers) {
@@ -403,33 +477,40 @@ export function renderGameWorld(
     }
   }
 
-  // Farmyard Chickens
-  for (const c of state.chickens ?? []) {
-    drawList.push({
-      sortY: c.y * TILE_SIZE + 3,
-      draw: () => drawChicken(ctx, c, elapsedSec),
-    });
-  }
-
-  // Dairy Cows, Fluffy Sheep, & Guard Dog
-  for (const cow of state.cows ?? []) {
-    drawList.push({
-      sortY: cow.y * TILE_SIZE + 4,
-      draw: () => drawLivestock(ctx, cow, elapsedSec),
-    });
-  }
-  for (const s of state.sheep ?? []) {
-    drawList.push({
-      sortY: s.y * TILE_SIZE + 3.5,
-      draw: () => drawLivestock(ctx, s, elapsedSec),
-    });
-  }
-  if (state.dog) {
-    const dog = state.dog;
-    drawList.push({
-      sortY: dog.y * TILE_SIZE + 3.8,
-      draw: () => drawLivestock(ctx, dog, elapsedSec),
-    });
+  // Farmyard Chickens, Dairy Cows, Fluffy Sheep, Guard Dog & Cozy Cat (Homestead only)
+  if (realm === 'homestead') {
+    for (const c of state.chickens ?? []) {
+      drawList.push({
+        sortY: c.y * TILE_SIZE + 3,
+        draw: () => drawChicken(ctx, c, elapsedSec),
+      });
+    }
+    for (const cow of state.cows ?? []) {
+      drawList.push({
+        sortY: cow.y * TILE_SIZE + 4,
+        draw: () => drawLivestock(ctx, cow, elapsedSec),
+      });
+    }
+    for (const s of state.sheep ?? []) {
+      drawList.push({
+        sortY: s.y * TILE_SIZE + 3.5,
+        draw: () => drawLivestock(ctx, s, elapsedSec),
+      });
+    }
+    if (state.dog) {
+      const dog = state.dog;
+      drawList.push({
+        sortY: dog.y * TILE_SIZE + 3.8,
+        draw: () => drawLivestock(ctx, dog, elapsedSec),
+      });
+    }
+    if (state.cat) {
+      const cat = state.cat;
+      drawList.push({
+        sortY: cat.y * TILE_SIZE + 3.6,
+        draw: () => drawLivestock(ctx, cat, elapsedSec),
+      });
+    }
   }
 
   // Wildlife
@@ -472,15 +553,16 @@ export function renderGameWorld(
 
   ctx.restore();
 
-  // 7. Weather Screen Effects (Rain streaks / Drought shimmer / Heatwave haze)
-  if (state.weather === 'Rainstorm') {
-    drawRainOverlay(ctx, canvasWidth, canvasHeight, elapsedSec);
-  } else if (state.weather === 'Drought') {
-    ctx.save();
-    ctx.fillStyle = 'rgba(255, 190, 85, 0.09)';
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-    ctx.restore();
-  } else if (state.weather === 'Heatwave') {
+  // 7. Weather Screen Effects (Sky Sanctuary is sheltered above the clouds!)
+  if (realm !== 'sky_sanctuary') {
+    if (state.weather === 'Rainstorm') {
+      drawRainOverlay(ctx, canvasWidth, canvasHeight, elapsedSec);
+    } else if (state.weather === 'Drought') {
+      ctx.save();
+      ctx.fillStyle = 'rgba(255, 190, 85, 0.09)';
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+      ctx.restore();
+    } else if (state.weather === 'Heatwave') {
     ctx.save();
     const pulse = 0.13 + Math.sin(elapsedSec * 2.5) * 0.03;
     ctx.fillStyle = `rgba(245, 108, 45, ${pulse.toFixed(3)})`;
@@ -494,8 +576,9 @@ export function renderGameWorld(
       ctx.moveTo(hx, hy);
       ctx.lineTo(hx + 22, hy - 4);
     }
-    ctx.stroke();
-    ctx.restore();
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   // 8. Dynamic Day / Sunset / Night Lighting Overlay
@@ -511,13 +594,16 @@ function drawStaticTerrainTile(
   px: number,
   py: number,
   pal: SeasonPalette,
-  season: Season
+  season: Season,
+  realm: RealmId
 ): void {
   const checker = (tile.x + tile.y) % 2 === 0;
   if (tile.terrain === 'water') {
-    ctx.fillStyle = '#38769c';
+    ctx.fillStyle =
+      realm === 'crystal_oasis' ? '#0e7490' : realm === 'sky_sanctuary' ? '#312e81' : '#38769c';
     ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-    ctx.fillStyle = '#4c90b8';
+    ctx.fillStyle =
+      realm === 'crystal_oasis' ? '#22d3ee' : realm === 'sky_sanctuary' ? '#6366f1' : '#4c90b8';
     ctx.fillRect(px + 2, py + 4, TILE_SIZE - 4, TILE_SIZE - 8);
     return;
   }
@@ -533,19 +619,39 @@ function drawStaticTerrainTile(
     return;
   }
 
-  // Grass base
+  if (tile.terrain === 'portal') {
+    // Ancient stone dais underneath portal arch
+    ctx.fillStyle = checker ? pal.grassA : pal.grassB;
+    ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+    ctx.fillStyle = '#475569';
+    ctx.fillRect(px + 2, py + 4, TILE_SIZE - 4, TILE_SIZE - 6);
+    ctx.fillStyle = '#64748b';
+    ctx.fillRect(px + 4, py + 6, TILE_SIZE - 8, TILE_SIZE - 10);
+    return;
+  }
+
+  // Grass / Biome ground base
   ctx.fillStyle = checker ? pal.grassA : pal.grassB;
   ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
 
-  // Grass tufts & seasonal blossoms
+  // Tufts & biome accents
   const hash = (tile.x * 37 + tile.y * 17) % 11;
   if (hash < 3) {
     ctx.fillStyle = pal.grassTuft;
     ctx.fillRect(px + 6 + hash * 4, py + 10, 2, 4);
     ctx.fillRect(px + 10 + hash * 4, py + 12, 2, 3);
-    if (season === 'Spring' && hash === 1) {
+    if (realm === 'homestead' && season === 'Spring' && hash === 1) {
       ctx.fillStyle = '#f5d76e';
       ctx.fillRect(px + 20, py + 20, 3, 3);
+    } else if (realm === 'whispering_woods' && hash === 2) {
+      ctx.fillStyle = '#5eead4';
+      ctx.fillRect(px + 18, py + 20, 2, 2);
+    } else if (realm === 'crystal_oasis' && hash === 1) {
+      ctx.fillStyle = '#67e8f9';
+      ctx.fillRect(px + 19, py + 19, 3, 2);
+    } else if (realm === 'sky_sanctuary' && hash === 0) {
+      ctx.fillStyle = '#fde047';
+      ctx.fillRect(px + 21, py + 18, 2, 2);
     }
   }
 }
@@ -555,12 +661,21 @@ function drawAnimatedWaterTile(
   tile: FarmTile,
   px: number,
   py: number,
-  elapsedSec: number
+  elapsedSec: number,
+  realm: RealmId
 ): void {
   if (Math.sin(elapsedSec * 2.5 + tile.x * 0.8 + tile.y * 0.6) > 0.25) {
-    ctx.fillStyle = '#92d1eb';
+    ctx.fillStyle =
+      realm === 'crystal_oasis' ? '#a5f3fc' : realm === 'sky_sanctuary' ? '#c7d2fe' : '#92d1eb';
     ctx.fillRect(px + 6, py + 10, 10, 2);
     ctx.fillRect(px + 16, py + 22, 8, 2);
+  }
+  const fishPhase = Math.sin(elapsedSec * 1.45 + tile.x * 2.3 + tile.y * 1.9);
+  if (fishPhase > 0.945 && (tile.x + tile.y) % 2 === 0) {
+    ctx.fillStyle = '#e0f2fe';
+    ctx.fillRect(px + 12, py + 15, 8, 2);
+    ctx.fillStyle = '#fde047';
+    ctx.fillRect(px + 14, py + 11, 4, 3);
   }
 }
 
@@ -579,6 +694,21 @@ function drawTilledSoil(
   ctx.fillRect(px + 4, py + 16, TILE_SIZE - 8, 3);
   ctx.fillRect(px + 4, py + 24, TILE_SIZE - 8, 3);
 
+  if (tile.watered) {
+    ctx.fillStyle = 'rgba(125, 211, 252, 0.32)';
+    ctx.fillRect(px + 7, py + 6, 4, 2);
+    ctx.fillRect(px + 20, py + 19, 5, 2);
+  }
+  if ((tile.mulchedDays ?? 0) > 0) {
+    // Rich golden straw & bio-mulch layer
+    ctx.fillStyle = '#d9a441';
+    ctx.fillRect(px + 4, py + 4, 6, 2);
+    ctx.fillRect(px + 18, py + 11, 7, 2);
+    ctx.fillRect(px + 6, py + 21, 6, 2);
+    ctx.fillStyle = '#f5d061';
+    ctx.fillRect(px + 13, py + 14, 4, 2);
+    ctx.fillRect(px + 22, py + 25, 5, 2);
+  }
   if (tile.droughtDriedToday && !tile.watered) {
     ctx.fillStyle = '#c4986e';
     ctx.fillRect(px + 8, py + 12, 6, 2);
@@ -600,9 +730,35 @@ function drawForestTree(
   tx: number,
   ty: number,
   pal: SeasonPalette,
-  elapsedSec: number
+  elapsedSec: number,
+  realm: RealmId
 ): void {
   const sway = Math.round(Math.sin(elapsedSec * 1.4 + tx * 0.7 + ty * 0.5) * 1);
+  if (realm === 'crystal_oasis') {
+    // Oasis sandstone spire / palm tree
+    ctx.fillStyle = '#925828';
+    ctx.fillRect(px + 13, py + 14, 6, 18);
+    ctx.fillStyle = pal.treeDark;
+    ctx.fillRect(px + 3 + sway, py + 6, 26, 8);
+    ctx.fillStyle = pal.treeMid;
+    ctx.fillRect(px + 5 + sway, py + 2, 22, 8);
+    ctx.fillStyle = pal.treeLight;
+    ctx.fillRect(px + 11 + sway, py + 4, 10, 4);
+    return;
+  }
+  if (realm === 'sky_sanctuary') {
+    // Celestial marble pillar & floating crystal orb
+    ctx.fillStyle = '#334155';
+    ctx.fillRect(px + 8, py + 14, 16, 18);
+    ctx.fillStyle = '#cbd5e1';
+    ctx.fillRect(px + 10, py + 10, 12, 18);
+    const hover = Math.round(Math.sin(elapsedSec * 2.4 + tx + ty) * 2);
+    ctx.fillStyle = '#818cf8';
+    ctx.fillRect(px + 11, py + 1 + hover, 10, 9);
+    ctx.fillStyle = '#e0e7ff';
+    ctx.fillRect(px + 13, py + 3 + hover, 5, 4);
+    return;
+  }
   // Trunk
   ctx.fillStyle = '#543824';
   ctx.fillRect(px + 12, py + 20, 8, 12);
@@ -615,6 +771,53 @@ function drawForestTree(
   // Top highlight
   ctx.fillStyle = pal.treeLight;
   ctx.fillRect(px + 8 + sway, py + 2, 14, 8);
+  if (realm === 'whispering_woods' && (tx + ty) % 3 === 0) {
+    ctx.fillStyle = Math.sin(elapsedSec * 3 + tx) > 0 ? '#5eead4' : '#34d399';
+    ctx.fillRect(px + 10 + sway, py + 10, 3, 3);
+    ctx.fillRect(px + 19 + sway, py + 6, 2, 2);
+  }
+}
+
+function drawAncientPortal(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  realm: RealmId,
+  elapsedSec: number
+): void {
+  const accent = REALM_DEFS[realm].accentColor;
+  const pulse = 0.72 + Math.sin(elapsedSec * 3.8) * 0.28;
+
+  // Shadow & stone base
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.fillRect(px + 2, py + 26, TILE_SIZE - 4, 5);
+
+  // Carved Rune Archway Pillars
+  ctx.fillStyle = '#334155';
+  ctx.fillRect(px + 3, py + 2, 6, 26);
+  ctx.fillRect(px + TILE_SIZE - 9, py + 2, 6, 26);
+  ctx.fillRect(px + 3, py - 2, TILE_SIZE - 6, 6);
+
+  ctx.fillStyle = '#64748b';
+  ctx.fillRect(px + 5, py + 4, 2, 22);
+  ctx.fillRect(px + TILE_SIZE - 7, py + 4, 2, 22);
+  ctx.fillRect(px + 5, py, TILE_SIZE - 10, 3);
+
+  // Swirling Inner Portal Vortex
+  ctx.save();
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = accent;
+  ctx.fillRect(px + 9, py + 4, 14, 22);
+  ctx.fillStyle = '#f5f3ff';
+  const swirlY = py + 8 + Math.round(Math.sin(elapsedSec * 5) * 4);
+  ctx.fillRect(px + 13, swirlY, 6, 6);
+  ctx.fillRect(px + 11, py + 13 + Math.round(Math.cos(elapsedSec * 4) * 3), 3, 3);
+  ctx.fillRect(px + 18, py + 15 - Math.round(Math.cos(elapsedSec * 4) * 3), 3, 3);
+  ctx.restore();
+
+  // Keystone rune gem
+  ctx.fillStyle = '#e879f9';
+  ctx.fillRect(px + 14, py - 1, 4, 3);
 }
 
 function drawFarmhouse(
@@ -941,6 +1144,41 @@ function drawCrop(
     ctx.fillRect(px + 20 + sway, py + 8, 4, 10);
     ctx.fillStyle = def.accentColor;
     ctx.fillRect(px + 15 + sway, py + 6, 2, 7);
+  } else if (crop.type === 'sunflower') {
+    // Tall Golden Sunflower
+    ctx.fillStyle = '#3f7d32';
+    ctx.fillRect(px + 14, py + 13, 4, 14);
+    ctx.fillRect(px + 9, py + 18, 5, 3);
+    ctx.fillRect(px + 18, py + 16, 5, 3);
+    ctx.fillStyle = def.color;
+    ctx.fillRect(px + 8 + sway, py + 3, 16, 14);
+    ctx.fillStyle = def.accentColor;
+    ctx.fillRect(px + 10 + sway, py + 5, 12, 10);
+    ctx.fillStyle = '#451a03';
+    ctx.fillRect(px + 12 + sway, py + 7, 8, 6);
+  } else if (crop.type === 'potato') {
+    // Hearty Golden Potatoes under leafy bush
+    ctx.fillStyle = '#4d8c3a';
+    ctx.fillRect(px + 8 + sway, py + 7, 16, 9);
+    ctx.fillStyle = '#6bb34e';
+    ctx.fillRect(px + 11 + sway, py + 5, 10, 5);
+    ctx.fillStyle = def.color;
+    ctx.fillRect(px + 7, py + 17, 8, 7);
+    ctx.fillRect(px + 16, py + 19, 9, 7);
+    ctx.fillStyle = def.accentColor;
+    ctx.fillRect(px + 9, py + 18, 4, 3);
+    ctx.fillRect(px + 18, py + 20, 4, 3);
+  } else if (crop.type === 'chili') {
+    // Fiery Red Chili Peppers
+    ctx.fillStyle = '#2f732e';
+    ctx.fillRect(px + 7 + sway, py + 7, 18, 13);
+    ctx.fillStyle = def.color;
+    ctx.fillRect(px + 9 + sway, py + 13, 4, 10);
+    ctx.fillRect(px + 15 + sway, py + 15, 4, 10);
+    ctx.fillRect(px + 20 + sway, py + 12, 4, 9);
+    ctx.fillStyle = def.accentColor;
+    ctx.fillRect(px + 10 + sway, py + 14, 2, 5);
+    ctx.fillRect(px + 16 + sway, py + 16, 2, 5);
   } else {
     // Pumpkin
     ctx.fillStyle = '#477d34';
@@ -1322,6 +1560,100 @@ function drawStructure(
     }
     return;
   }
+
+  if (s.type === 'greenhouse') {
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    ctx.fillRect(px + 3, py + 25, 26, 5);
+    // Warm timber base
+    ctx.fillStyle = '#6b4528';
+    ctx.fillRect(px + 3, py + 20, 26, 7);
+    // Translucent emerald glass dome
+    ctx.fillStyle = 'rgba(110, 231, 183, 0.45)';
+    ctx.fillRect(px + 4, py + 6, 24, 15);
+    ctx.fillStyle = 'rgba(209, 250, 229, 0.65)';
+    ctx.fillRect(px + 7, py + 3, 18, 4);
+    // Frame ribs & glass glint
+    ctx.fillStyle = '#047857';
+    ctx.fillRect(px + 4, py + 6, 2, 15);
+    ctx.fillRect(px + 15, py + 4, 2, 17);
+    ctx.fillRect(px + 26, py + 6, 2, 15);
+    ctx.fillStyle = '#ecfdf5';
+    ctx.fillRect(px + 8, py + 8, 4, 2);
+    ctx.fillRect(px + 19, py + 11, 3, 2);
+    // Tiny sprouting greenery inside
+    ctx.fillStyle = '#16a34a';
+    ctx.fillRect(px + 9, py + 16, 4, 4);
+    ctx.fillRect(px + 19, py + 16, 4, 4);
+    return;
+  }
+
+  if (s.type === 'owl_box') {
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    ctx.fillRect(px + 9, py + 25, 14, 4);
+    // Wooden post
+    ctx.fillStyle = '#5c3a21';
+    ctx.fillRect(px + 14, py + 16, 4, 12);
+    // Owl nesting house
+    ctx.fillStyle = '#8c5a35';
+    ctx.fillRect(px + 8, py + 6, 16, 12);
+    ctx.fillStyle = '#52341d';
+    ctx.fillRect(px + 6, py + 4, 20, 4);
+    // Hollow entrance
+    ctx.fillStyle = '#1c120c';
+    ctx.fillRect(px + 12, py + 10, 8, 6);
+    if (timePhase === 'Night') {
+      // Glowing nocturnal owl eyes!
+      const blink = Math.sin(elapsedSec * 2 + tile.x) > -0.85;
+      if (blink) {
+        ctx.fillStyle = '#fde047';
+        ctx.fillRect(px + 13, py + 12, 2, 2);
+        ctx.fillRect(px + 17, py + 12, 2, 2);
+      }
+    }
+    return;
+  }
+
+  if (s.type === 'butter_churn') {
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    ctx.fillRect(px + 7, py + 25, 18, 4);
+    // Plunger stick
+    const pump = Math.round(Math.sin(elapsedSec * 4 + tile.x) * 1.5);
+    ctx.fillStyle = '#d9be8c';
+    ctx.fillRect(px + 15, py + 3 + pump, 3, 10);
+    ctx.fillRect(px + 12, py + 2 + pump, 9, 3);
+    // Wooden churn barrel
+    ctx.fillStyle = '#8c5a35';
+    ctx.fillRect(px + 8, py + 12, 16, 15);
+    ctx.fillStyle = '#64748b';
+    ctx.fillRect(px + 7, py + 15, 18, 2);
+    ctx.fillRect(px + 7, py + 22, 18, 2);
+    ctx.fillStyle = '#fef08a';
+    ctx.fillRect(px + 11, py + 11, 10, 2);
+    return;
+  }
+
+  if (s.type === 'tea_kettle') {
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    ctx.fillRect(px + 6, py + 25, 20, 4);
+    // Hearth base & copper kettle
+    ctx.fillStyle = '#475569';
+    ctx.fillRect(px + 6, py + 21, 20, 6);
+    ctx.fillStyle = '#c2592c';
+    ctx.fillRect(px + 8, py + 12, 15, 10);
+    ctx.fillStyle = '#ea8c55';
+    ctx.fillRect(px + 10, py + 10, 11, 4);
+    // Spout & lid knob
+    ctx.fillStyle = '#c2592c';
+    ctx.fillRect(px + 23, py + 13, 4, 4);
+    ctx.fillStyle = '#fde047';
+    ctx.fillRect(px + 14, py + 8, 3, 2);
+    // Rising herbal steam wisps
+    const steamY = Math.floor((elapsedSec * 8 + tile.x * 3) % 6);
+    ctx.fillStyle = 'rgba(240, 253, 244, 0.8)';
+    ctx.fillRect(px + 24, py + 9 - steamY, 2, 2);
+    ctx.fillRect(px + 15, py + 5 - Math.floor(steamY * 0.7), 2, 2);
+    return;
+  }
 }
 
 function drawDailyNatureTreasure(
@@ -1393,12 +1725,25 @@ function drawFarmerEntity(
   colorIndex = 0,
   label?: string,
   voice?: VoicePeerState,
-  emote?: string
+  emote?: string,
+  swiftActive = false
 ): void {
   const palette = PLAYER_PALETTE[colorIndex % PLAYER_PALETTE.length] ?? PLAYER_PALETTE[0];
   const cx = Math.round(p.x * TILE_SIZE);
   const cy = Math.round(p.y * TILE_SIZE);
   const bob = Math.round(Math.abs(Math.sin(p.walkCycle)) * -2);
+
+  if (swiftActive) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(250, 204, 21, 0.28)';
+    ctx.beginPath();
+    ctx.arc(cx, cy - 2, 13 + Math.sin(elapsedSec * 9) * 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fde047';
+    ctx.fillRect(cx - 11, cy - 12 + Math.round(Math.sin(elapsedSec * 10) * 3), 2, 2);
+    ctx.fillRect(cx + 10, cy - 6 + Math.round(Math.cos(elapsedSec * 10) * 3), 2, 2);
+    ctx.restore();
+  }
 
   // Shadow
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
@@ -1597,7 +1942,7 @@ function drawLivestock(
     ctx.fillRect(hx, cy - 6 + hop, 6, 6);
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(hx + (e.facingX >= 0 ? 3 : 1), cy - 4 + hop, 1, 1);
-  } else {
+  } else if (e.kind === 'dog') {
     // Loyal Guard Dog
     const wag = Math.round(Math.sin(elapsedSec * 14) * 2);
     ctx.fillStyle = '#925828';
@@ -1615,6 +1960,32 @@ function drawLivestock(
     ctx.fillRect(cx - 2, cy - 3 + hop, 5, 2);
     ctx.fillStyle = '#26180f';
     ctx.fillRect(hx + (e.facingX >= 0 ? 4 : 0), cy - 6 + hop, 2, 2);
+  } else if (e.kind === 'cat') {
+    // Cozy Orange Tabby Barn Cat
+    const tailSway = Math.round(Math.sin(elapsedSec * 6) * 2);
+    ctx.fillStyle = '#ea580c';
+    ctx.fillRect(cx - 4, cy + 3, 2, 3);
+    ctx.fillRect(cx + 2, cy + 3, 2, 3);
+    // Body + tabby stripes
+    ctx.fillStyle = '#f97316';
+    ctx.fillRect(cx - 5, cy - 3 + hop, 10, 7);
+    ctx.fillStyle = '#c2410c';
+    ctx.fillRect(cx - 3, cy - 3 + hop, 2, 3);
+    ctx.fillRect(cx + 1, cy - 3 + hop, 2, 3);
+    // Curved swaying tail
+    ctx.fillStyle = '#f97316';
+    ctx.fillRect(e.facingX >= 0 ? cx - 8 : cx + 5, cy - 6 + hop + tailSway, 3, 4);
+    // Head & pointed ears
+    const hx = e.facingX >= 0 ? cx + 2 : cx - 8;
+    ctx.fillStyle = '#fb923c';
+    ctx.fillRect(hx, cy - 8 + hop, 6, 6);
+    ctx.fillRect(hx, cy - 10 + hop, 2, 2);
+    ctx.fillRect(hx + 4, cy - 10 + hop, 2, 2);
+    // Green collar & eyes
+    ctx.fillStyle = '#22c55e';
+    ctx.fillRect(cx - 1, cy - 3 + hop, 4, 2);
+    ctx.fillStyle = '#26180f';
+    ctx.fillRect(hx + (e.facingX >= 0 ? 3 : 1), cy - 6 + hop, 2, 2);
   }
 }
 
@@ -1751,10 +2122,11 @@ function drawLightingOverlay(
     lCtx.fill();
   };
 
-  // Farmhouse porch light
-  punchLight(FARMHOUSE_POS.x + 2, FARMHOUSE_POS.y + 2.5, 4.0);
-  // Shop stall lantern
-  punchLight(SHOP_STALL_POS.x + 2.5, SHOP_STALL_POS.y + 1.5, 3.2);
+  // Homestead porch & shop lights
+  if ((state.activeRealm ?? 'homestead') === 'homestead') {
+    punchLight(FARMHOUSE_POS.x + 2, FARMHOUSE_POS.y + 2.5, 4.0);
+    punchLight(SHOP_STALL_POS.x + 2.5, SHOP_STALL_POS.y + 1.5, 3.2);
+  }
   // Player pocket lanterns
   if (!isTitleBackdrop) {
     const pulse = 3.4 + Math.sin(elapsedSec * 3) * 0.12;
@@ -1763,9 +2135,11 @@ function drawLightingOverlay(
       punchLight(rp.x, rp.y, pulse);
     }
   }
-  // Placed Stone Lanterns, Smart Soil Sensors, NASA Weather Stations & Wishing Fountains
+  // Placed Stone Lanterns, Smart Soil Sensors, NASA Weather Stations, Wishing Fountains & Portals
   for (const tile of state.tiles) {
-    if (tile.structure?.type === 'lantern') {
+    if (tile.terrain === 'portal') {
+      punchLight(tile.x + 0.5, tile.y + 0.5, 4.4);
+    } else if (tile.structure?.type === 'lantern') {
       punchLight(tile.x + 0.5, tile.y + 0.5, 4.2);
     } else if (tile.structure?.type === 'sensor' || tile.structure?.type === 'nasa_station') {
       punchLight(tile.x + 0.5, tile.y + 0.5, 2.1);
@@ -1825,6 +2199,19 @@ function drawLivingAmbience(
       ctx.moveTo(sx, sy);
       ctx.lineTo(sx - 28, sy - 12);
       ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+
+  if ((state.activeRealm ?? 'homestead') === 'sky_sanctuary') {
+    // Twinkling celestial starlight motes floating above the clouds
+    for (let i = 0; i < 20; i++) {
+      const sx = ((i * 149 + elapsedSec * 14) % (w + 40)) - 20;
+      const sy = ((i * 83 + Math.sin(elapsedSec * 1.1 + i) * 20) % (h + 40)) - 20;
+      ctx.globalAlpha = 0.4 + Math.max(0, Math.sin(elapsedSec * 3 + i * 1.3)) * 0.6;
+      ctx.fillStyle = i % 2 === 0 ? '#a5b4fc' : '#fde047';
+      ctx.fillRect(Math.round(sx), Math.round(sy), 3, 3);
     }
     ctx.restore();
     return;

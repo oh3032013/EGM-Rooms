@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { PackageCheck, TrendingUp, X } from 'lucide-react';
 import {
+  CAT_PRICE,
   CHICKEN_PRICE,
   COW_PRICE,
   CROPS,
   DOG_PRICE,
   ITEMS,
+  MAX_CATS,
   MAX_CHICKENS,
   MAX_COWS,
   MAX_DOGS,
@@ -15,7 +17,7 @@ import {
 } from '../game/constants';
 import { getItemLabel, translateSeason, UI_TEXT, type Language } from '../game/i18n';
 import type { CropType, DailyOrder, ItemId, Season, ToolType, ToolUpgrades } from '../game/types';
-import { ChickenIcon, CoinIcon, CowIcon, DogIcon, ItemIcon, SheepIcon } from './PixelIcons';
+import { CatIcon, ChickenIcon, CoinIcon, CowIcon, DogIcon, ItemIcon, SheepIcon } from './PixelIcons';
 
 interface ShopModalProps {
   lang: Language;
@@ -27,6 +29,7 @@ interface ShopModalProps {
   cowsCount?: number;
   sheepCount?: number;
   hasDog?: boolean;
+  hasCat?: boolean;
   marketSurgeCrop?: CropType;
   dailyOrder?: DailyOrder;
   onFulfillOrder?: () => void;
@@ -37,6 +40,7 @@ interface ShopModalProps {
   onBuyCow?: () => void;
   onBuySheep?: () => void;
   onBuyDog?: () => void;
+  onBuyCat?: () => void;
   initialTab?: 'seeds' | 'sell' | 'upgrades';
   onClose: () => void;
 }
@@ -51,6 +55,7 @@ export function ShopModal({
   cowsCount = 0,
   sheepCount = 0,
   hasDog = false,
+  hasCat = false,
   marketSurgeCrop,
   dailyOrder,
   onFulfillOrder,
@@ -61,6 +66,7 @@ export function ShopModal({
   onBuyCow,
   onBuySheep,
   onBuyDog,
+  onBuyCat,
   initialTab = 'seeds',
   onClose,
 }: ShopModalProps) {
@@ -330,10 +336,16 @@ export function ShopModal({
                 {t.toolUpgrades}
               </div>
               {toolRows.map((row) => {
-                const isMax = row.level >= 3;
-                const cost = row.level === 1 ? 120 : 260;
+                const isMax = row.level >= 4;
+                const cost = row.level === 1 ? 120 : row.level === 2 ? 260 : 450;
                 const tierLabel =
-                  row.level === 1 ? t.tierIron : row.level === 2 ? t.tierCopper : t.tierMaster;
+                  row.level === 1
+                    ? t.tierIron
+                    : row.level === 2
+                    ? t.tierCopper
+                    : row.level === 3
+                    ? t.tierMaster
+                    : t.tierTitanium;
                 return (
                   <div
                     key={row.tool}
@@ -342,8 +354,11 @@ export function ShopModal({
                     <div className="flex items-center gap-3">
                       <ItemIcon id={row.tool} className="w-9 h-9 shrink-0" />
                       <div>
-                        <div className="font-semibold text-sm text-[#2c1e14]">
-                          {row.name} · {tierLabel}
+                        <div className="font-semibold text-sm text-[#2c1e14] flex items-center gap-2">
+                          <span>{row.name} · {tierLabel}</span>
+                          <span className="text-[10px] font-mono-tabular px-1.5 py-0.5 rounded bg-[#ebd8b5] text-[#5c4028]">
+                            Lv.{row.level}/4
+                          </span>
                         </div>
                         <div className="text-xs text-[#694d36]">{row.benefit}</div>
                       </div>
@@ -457,6 +472,31 @@ export function ShopModal({
                     className="wood-button-primary px-3.5 py-1.5 rounded text-xs font-semibold disabled:opacity-45 cursor-pointer whitespace-nowrap shrink-0"
                   >
                     {hasDog ? t.coopFull : `${t.adoptChicken} (${DOG_PRICE}g)`}
+                  </button>
+                </div>
+              )}
+
+              {onBuyCat && (
+                <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 sm:gap-4 p-3 rounded-lg bg-[#fef6dc] border border-[#cfa859]">
+                  <div className="flex items-center gap-3">
+                    <CatIcon className="w-9 h-9 shrink-0" />
+                    <div>
+                      <div className="font-semibold text-sm text-[#2c1e14] flex items-center gap-2">
+                        <span>{t.catName}</span>
+                        <span className="text-xs font-mono-tabular text-[#6b4f35]">
+                          ({hasCat ? 1 : 0}/{MAX_CATS})
+                        </span>
+                      </div>
+                      <div className="text-xs text-[#694d36]">{t.catDesc}</div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={hasCat || gold < CAT_PRICE}
+                    onClick={onBuyCat}
+                    className="wood-button-primary px-3.5 py-1.5 rounded text-xs font-semibold disabled:opacity-45 cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    {hasCat ? t.coopFull : `${t.adoptChicken} (${CAT_PRICE}g)`}
                   </button>
                 </div>
               )}

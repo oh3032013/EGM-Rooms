@@ -2,7 +2,7 @@ export type GamePhase = 'title' | 'playing' | 'paused' | 'gameover';
 
 export type Season = 'Spring' | 'Summer' | 'Autumn' | 'Winter';
 
-export type WeatherType = 'Clear' | 'Drought' | 'Rainstorm' | 'Heatwave' | 'Frost';
+export type WeatherType = 'Clear' | 'Drought' | 'Rainstorm' | 'Heatwave';
 
 export type TimePhase = 'Day' | 'Sunset' | 'Night';
 
@@ -17,7 +17,7 @@ export type CropType =
   | 'watermelon'
   | 'lavender'
   | 'sunflower'
-  | 'blueberry'
+  | 'potato'
   | 'chili';
 
 export type ToolType = 'hoe' | 'watering_can' | 'axe';
@@ -40,12 +40,10 @@ export type PlaceableType =
   | 'jam_maker'
   | 'windmill'
   | 'wishing_fountain'
-  | 'bakery_oven'
-  | 'seed_maker'
-  | 'solar_panel'
-  | 'campfire'
-  | 'greenhouse_dome'
-  | 'birdhouse';
+  | 'greenhouse'
+  | 'owl_box'
+  | 'butter_churn'
+  | 'tea_kettle';
 
 export type ResourceType = 'wood' | 'stone';
 
@@ -57,15 +55,17 @@ export type ItemId =
   | PlaceableType
   | CropType
   | 'egg'
-  | 'duck_egg'
   | 'honey'
   | 'milk'
   | 'wool'
   | 'cheese'
   | 'strawberry_jam'
-  | 'farmer_pie'
+  | 'butter'
+  | 'herbal_tea'
   | 'fish'
+  | 'golden_koi'
   | 'fertilizer'
+  | 'bio_mulch'
   | ResourceType;
 
 export interface ItemDef {
@@ -96,6 +96,8 @@ export interface CropDef {
   accentColor: string;
 }
 
+export type RealmId = 'homestead' | 'whispering_woods' | 'crystal_oasis' | 'sky_sanctuary';
+
 export type TileTerrain =
   | 'grass'
   | 'dirt_path'
@@ -104,7 +106,8 @@ export type TileTerrain =
   | 'shop_stall'
   | 'shipping_bin'
   | 'well'
-  | 'forest_edge';
+  | 'forest_edge'
+  | 'portal';
 
 export type ObstacleType = 'weed' | 'rock' | 'stump';
 
@@ -132,6 +135,7 @@ export interface FarmTile {
   watered: boolean;
   droughtDriedToday: boolean;
   beanRotationBonus?: boolean;
+  mulchedDays?: number;
   obstacle: ObstacleType | null;
   crop: CropInstance | null;
   structure: StructureInstance | null;
@@ -143,12 +147,12 @@ export interface InventorySlot {
 }
 
 export interface ToolUpgrades {
-  hoeLevel: number; // 1 = Iron, 2 = Copper, 3 = Master, 4 = Eco-Emerald
-  canLevel: number; // 1 = Wood (12), 2 = Copper (20), 3 = Iron (30), 4 = Eco-Emerald (40)
-  axeLevel: number; // 1 = Rusty, 2 = Copper, 3 = Iron, 4 = Eco-Emerald
+  hoeLevel: number; // 1 = Rusty, 2 = Copper, 3 = Iron, 4 = Titanium
+  canLevel: number; // 1 = Wood (12), 2 = Copper (20), 3 = Iron (30), 4 = Titanium (40)
+  axeLevel: number; // 1 = Rusty, 2 = Copper, 3 = Iron, 4 = Titanium
 }
 
-export type WildlifeKind = 'rabbit' | 'boar' | 'fox';
+export type WildlifeKind = 'rabbit' | 'boar';
 
 export type WildlifeState = 'approaching' | 'nibbling' | 'windup' | 'charging' | 'fleeing' | 'ko';
 
@@ -181,7 +185,7 @@ export interface FarmChicken {
   moveTimer: number;
 }
 
-export type LivestockKind = 'cow' | 'sheep' | 'dog' | 'cat' | 'duck';
+export type LivestockKind = 'cow' | 'sheep' | 'dog' | 'cat';
 
 export interface LivestockEntity {
   id: number;
@@ -268,22 +272,19 @@ export interface DaySummary {
   cropsWithered: number;
   cropsFlooded: number;
   cropsHeatDamaged?: number;
-  cropsFrosted?: number;
   wildlifeDamage: number;
   eggsCollected: number;
-  duckEggsCollected?: number;
   honeyCollected?: number;
   milkCollected?: number;
   woolCollected?: number;
   cheeseMade?: number;
   jamMade?: number;
-  piesBaked?: number;
+  butterMade?: number;
+  teaMade?: number;
   windmillGold?: number;
-  solarGold?: number;
-  catGiftGold?: number;
-  catGiftFish?: number;
-  birdhouseSeeds?: number;
-  harvestFestival?: boolean;
+  morningBonusGold?: number;
+  owlRepelled?: number;
+  catGift?: string;
   rainbowActive?: boolean;
   sprinklerWatered: number;
   dripWatered?: number;
@@ -309,14 +310,17 @@ export interface FarmStats {
   sprinklersPlaced: number;
   sensorsPlaced: number;
   eggsCollected: number;
-  duckEggsCollected?: number;
   honeyCollected?: number;
   milkCollected?: number;
   woolCollected?: number;
   fishCaught?: number;
+  koiCaught?: number;
   artisanProduced?: number;
-  piesBaked?: number;
-  seedsMilled?: number;
+  cheeseMade?: number;
+  jamMade?: number;
+  butterMade?: number;
+  teaBrewed?: number;
+  owlSaves?: number;
   wishesMade?: number;
   ordersCompleted?: number;
   treasuresFound?: number;
@@ -325,6 +329,7 @@ export interface FarmStats {
   rainwaterCollectedLiters: number;
   waterSavedLiters: number;
   heatwavesSurvivedWithShade: number;
+  realmsVisited?: number;
 }
 
 export type MissionId =
@@ -348,12 +353,12 @@ export type MissionId =
   | 'artisan_maker'
   | 'dairy_rancher'
   | 'veteran_farmer'
-  | 'sunflower_berry'
-  | 'bake_pie'
-  | 'seed_miller'
-  | 'clean_energy'
-  | 'pond_companions'
-  | 'emerald_tools';
+  | 'greenhouse_pioneer'
+  | 'cat_lover'
+  | 'tea_brewer'
+  | 'titanium_smith'
+  | 'portal_awakener'
+  | 'realm_voyager';
 
 export type BadgeId =
   | 'time_captain'
@@ -361,9 +366,9 @@ export type BadgeId =
   | 'soil_friend'
   | 'angler_pro'
   | 'artisan_chef'
-  | 'artisan_baker'
-  | 'eco_engineer'
-  | 'wildlife_ranger';
+  | 'eco_architect'
+  | 'farm_tycoon'
+  | 'world_explorer';
 
 export interface MissionDef {
   id: MissionId;
@@ -372,6 +377,15 @@ export interface MissionDef {
   rewardGold: number;
   rewardItem?: { id: ItemId; qty: number };
   rewardStamina?: number;
+}
+
+export interface RealmCache {
+  tiles: FarmTile[];
+  width: number;
+  height: number;
+  dailyTreasure: NatureTreasure | null;
+  returnX: number;
+  returnY: number;
 }
 
 export interface GameWorldState {
@@ -385,6 +399,9 @@ export interface GameWorldState {
   width: number;
   height: number;
   tiles: FarmTile[];
+  activeRealm?: RealmId;
+  unlockedRealms?: RealmId[];
+  realmCaches?: Partial<Record<RealmId, RealmCache>>;
   player: PlayerState;
   hotbar: (ItemId | null)[]; // 9 slots
   inventory: Partial<Record<ItemId, number>>;
@@ -395,9 +412,9 @@ export interface GameWorldState {
   sheep?: LivestockEntity[];
   dog?: LivestockEntity | null;
   cat?: LivestockEntity | null;
-  ducks?: LivestockEntity[];
   xp?: number;
   level?: number;
+  swiftUntilMinutes?: number;
   marketSurgeCrop?: CropType;
   rainbowActive?: boolean;
   wishedToday?: boolean;
@@ -417,7 +434,7 @@ export interface GameWorldState {
 }
 
 export interface CraftRecipe {
-  id: PlaceableType | 'fertilizer';
+  id: PlaceableType | 'fertilizer' | 'bio_mulch';
   name: string;
   description: string;
   ingredients: Partial<Record<ResourceType | 'gold', number>>;

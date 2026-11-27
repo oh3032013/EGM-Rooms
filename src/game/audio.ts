@@ -29,11 +29,15 @@ class CozyAudioEngine {
   private nocturnalStep = 0;
   private stepIndex = 0;
   private isPlayingState = false;
+  private rainAmbienceActive = false;
+  private rainSource: AudioBufferSourceNode | null = null;
+  private rainGain: GainNode | null = null;
   private visibilityListenerAttached = false;
   private readonly handleVisibilityChange = () => {
     if (!this.ctx) return;
     if (document.visibilityState === 'hidden') {
       this.clearNocturnalTimer();
+      this.stopRainLoop();
       if (this.ctx.state === 'running') {
         void this.ctx.suspend().catch(() => {});
       }
@@ -43,6 +47,9 @@ class CozyAudioEngine {
       }
       if (this.nightPhaseActive) {
         this.scheduleNextNocturnalCue(1500);
+      }
+      if (this.rainAmbienceActive) {
+        this.startRainLoop();
       }
     }
   };
@@ -163,17 +170,91 @@ class CozyAudioEngine {
   public pauseAmbientMusic(): void {
     this.isPlayingState = false;
     this.clearNocturnalTimer();
+    this.stopRainLoop();
   }
 
   public stopAmbientMusic(): void {
     this.isPlayingState = false;
     this.nightPhaseActive = false;
     this.nocturnalWildlifeCount = 0;
+    this.rainAmbienceActive = false;
     this.clearNocturnalTimer();
+    this.stopRainLoop();
     if (this.musicTimer !== null) {
       clearInterval(this.musicTimer);
       this.musicTimer = null;
     }
+  }
+
+  public setRainAmbience(active: boolean): void {
+    if (this.rainAmbienceActive === active) {
+      if (active && this.isPlayingState && !this.rainSource) {
+        this.startRainLoop();
+      }
+      return;
+    }
+    this.rainAmbienceActive = active;
+    if (!active) {
+      this.stopRainLoop();
+    } else if (this.isPlayingState) {
+      this.startRainLoop();
+    }
+  }
+
+  private startRainLoop(): void {
+    if (this.rainSource || !this.ctx || !this.ambientGain || this.muted) return;
+    if (this.ctx.state !== 'running') return;
+    try {
+      const length = Math.floor(this.ctx.sampleRate * 2);
+      const buffer = this.ctx.createBuffer(1, length, this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      let lastOut = 0;
+      for (let i = 0; i < length; i++) {
+        const white = Math.random() * 2 - 1;
+        lastOut = (lastOut + 0.04 * white) / 1.04;
+        data[i] = lastOut * 2.2;
+      }
+      const src = this.ctx.createBufferSource();
+      src.buffer = buffer;
+      src.loop = true;
+
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = 1100;
+      filter.Q.value = 0.7;
+
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0.001, this.ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.065, this.ctx.currentTime + 0.4);
+
+      src.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.ambientGain);
+      src.start();
+      this.rainSource = src;
+      this.rainGain = gain;
+    } catch {
+      // Ignore WebAudio loop edge errors in minimal mocks
+    }
+  }
+
+  private stopRainLoop(): void {
+    if (this.rainGain && this.ctx) {
+      try {
+        this.rainGain.gain.setTargetAtTime(0.0001, this.ctx.currentTime, 0.08);
+      } catch {
+        // Ignore
+      }
+    }
+    if (this.rainSource) {
+      try {
+        this.rainSource.stop();
+      } catch {
+        // Ignore
+      }
+      this.rainSource = null;
+    }
+    this.rainGain = null;
   }
 
   public setNightAmbience(active: boolean, wildlifeCount = 0): void {
@@ -320,10 +401,10 @@ class CozyAudioEngine {
       | 'wish'
       | 'bark'
       | 'pet'
-      | 'bake'
-      | 'cat'
-      | 'quack'
-      | 'frost',
+      | 'purr'
+      | 'brew'
+      | 'golden_catch'
+      | 'portal',
     comboLevel = 2
   ): void {
     this.init();
@@ -370,30 +451,35 @@ class CozyAudioEngine {
       this.tone(320, 210, 0.09, 'sawtooth', 0.16, now + 0.11);
       return;
     }
-    if (kind === 'cat') {
-      this.tone(620 * pitchJitter, 860, 0.09, 'sine', 0.15, now);
-      this.tone(860 * pitchJitter, 540, 0.16, 'sine', 0.14, now + 0.08);
-      return;
-    }
-    if (kind === 'quack') {
-      this.tone(370 * pitchJitter, 290, 0.09, 'sawtooth', 0.12, now);
-      this.tone(350 * pitchJitter, 260, 0.11, 'sawtooth', 0.12, now + 0.1);
-      return;
-    }
-    if (kind === 'bake') {
-      this.tone(392, 523.25, 0.1, 'triangle', 0.17, now);
-      this.tone(587.33, 783.99, 0.15, 'sine', 0.19, now + 0.08);
-      this.noiseBurst(0.08, 1300, 0.07, now);
-      return;
-    }
-    if (kind === 'frost') {
-      this.tone(1174.66, 1567.98, 0.18, 'sine', 0.13, now);
-      this.tone(1396.91, 1760, 0.22, 'triangle', 0.11, now + 0.09);
-      return;
-    }
     if (kind === 'pet') {
       this.tone(587.33 * pitchJitter, 783.99, 0.09, 'sine', 0.17, now);
       this.tone(783.99 * pitchJitter, 1046.5, 0.14, 'triangle', 0.16, now + 0.08);
+      return;
+    }
+    if (kind === 'purr') {
+      this.tone(180, 210, 0.14, 'triangle', 0.12, now);
+      this.tone(210, 240, 0.14, 'triangle', 0.12, now + 0.12);
+      this.tone(660, 880, 0.11, 'sine', 0.12, now + 0.18);
+      return;
+    }
+    if (kind === 'brew') {
+      this.tone(440, 587.33, 0.11, 'sine', 0.16, now);
+      this.tone(587.33, 880, 0.13, 'triangle', 0.18, now + 0.08);
+      this.tone(880, 1174.66, 0.2, 'sine', 0.18, now + 0.18);
+      return;
+    }
+    if (kind === 'golden_catch') {
+      this.noiseBurst(0.14, 1900, 0.18, now);
+      this.tone(587.33, 880, 0.11, 'triangle', 0.2, now + 0.04);
+      this.tone(880, 1174.66, 0.14, 'sine', 0.22, now + 0.12);
+      this.tone(1174.66, 1567.98, 0.26, 'sine', 0.24, now + 0.21);
+      return;
+    }
+    if (kind === 'portal') {
+      this.noiseBurst(0.22, 1100, 0.14, now);
+      this.tone(392.0, 587.33, 0.14, 'sine', 0.18, now);
+      this.tone(587.33, 783.99, 0.16, 'triangle', 0.2, now + 0.08);
+      this.tone(783.99, 1174.66, 0.28, 'sine', 0.22, now + 0.17);
       return;
     }
     if (kind === 'combo') {
@@ -454,6 +540,9 @@ class CozyAudioEngine {
       this.tone(493.88, 493.88, 0.15, 'triangle', 0.18, now + 0.11);
       this.tone(587.33, 587.33, 0.15, 'triangle', 0.18, now + 0.22);
       this.tone(783.99, 783.99, 0.32, 'sine', 0.22, now + 0.33);
+      // Dawn birdsong chirp accents
+      this.tone(1318.5, 1760.0, 0.08, 'sine', 0.1, now + 0.45);
+      this.tone(1567.98, 2093.0, 0.09, 'sine', 0.1, now + 0.56);
     }
   }
 

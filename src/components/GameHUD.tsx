@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { AudioLines, BookOpen, Check, Compass, Copy, Eye, Flame, Gamepad2, Hammer, Headphones, Link2, LogOut, Maximize2, MessageSquare, Mic, MicOff, Minimize2, Moon, PackageCheck, Pause, PhoneOff, Satellite, Send, ShoppingBag, Trophy, Users, Volume2, VolumeX, X, Zap } from 'lucide-react';
-import { ITEMS } from '../game/constants';
+import { AudioLines, BookOpen, Check, Compass, Copy, Eye, Flame, Gamepad2, Hammer, Headphones, Link2, LogOut, Map as MapIcon, Maximize2, MessageSquare, Mic, MicOff, Minimize2, Moon, PackageCheck, Pause, PhoneOff, Satellite, Send, ShoppingBag, Sparkles, Trophy, Users, Utensils, Volume2, VolumeX, X, Zap } from 'lucide-react';
+import { CROPS, ITEMS, REALM_DEFS } from '../game/constants';
 import {
   formatMorningSummaryText,
   formatTimeLocalized,
   getItemLabel,
   getNearPromptLabel,
+  getRealmLabel,
   translateSeason,
   translateWeather,
   UI_TEXT,
@@ -19,7 +20,7 @@ import {
   type RemotePlayerState,
   type VoicePeerState,
 } from '../game/multiplayer';
-import type { DaySummary, ItemId, Season, TimePhase, WeatherType } from '../game/types';
+import type { DaySummary, GameWorldState, ItemId, RealmId, Season, TimePhase, WeatherType } from '../game/types';
 import { BoltIcon, CoinIcon, HeartIcon, ItemIcon, TimeIcon, WeatherIcon } from './PixelIcons';
 
 export interface RoomHudState {
@@ -56,9 +57,16 @@ export interface HudSnapshot {
   hotbar: (ItemId | null)[];
   selectedHotbarIndex: number;
   inventory: Partial<Record<ItemId, number>>;
-  nearPrompt: { action: 'sleep' | 'shop' | 'well' | 'bin'; label: string } | null;
+  nearPrompt: { action: 'sleep' | 'shop' | 'well' | 'bin' | 'portal'; label: string } | null;
   lowStamina: boolean;
   nightWarning: boolean;
+  swiftActive?: boolean;
+  streakBonusGold?: number;
+  tomorrowWeather?: WeatherType;
+  hasNasaStation?: boolean;
+  hasEdibleFood?: boolean;
+  activeRealm?: RealmId;
+  unlockedRealmsCount?: number;
 }
 
 interface GameHUDProps {
@@ -80,6 +88,7 @@ interface GameHUDProps {
   onOpenCraft: () => void;
   onOpenNasa: () => void;
   onOpenAlmanac: () => void;
+  onOpenPortals?: () => void;
   onSleepNow: () => void;
   onToggleSprint?: () => void;
   onToggleMute: () => void;
@@ -91,6 +100,10 @@ interface GameHUDProps {
   onBlindStatus: () => void;
   onPause: () => void;
   onDismissSummary: () => void;
+  miniMapOpen?: boolean;
+  onToggleMiniMap?: () => void;
+  onQuickEat?: () => void;
+  farmWorld?: GameWorldState;
   roomHud?: RoomHudState | null;
   chatOpen?: boolean;
   unreadChatCount?: number;
@@ -134,6 +147,7 @@ export function GameHUD({
   onOpenCraft,
   onOpenNasa,
   onOpenAlmanac,
+  onOpenPortals,
   onSleepNow,
   onToggleSprint,
   onToggleMute,
@@ -145,6 +159,10 @@ export function GameHUD({
   onBlindStatus,
   onPause,
   onDismissSummary,
+  miniMapOpen = false,
+  onToggleMiniMap,
+  onQuickEat,
+  farmWorld,
   roomHud = null,
   chatOpen = false,
   unreadChatCount = 0,
@@ -165,6 +183,7 @@ export function GameHUD({
   const [copiedLink, setCopiedLink] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const chatInputRef = useRef<HTMLInputElement | null>(null);
+  const miniMapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const copiedCodeTimerRef = useRef<number | null>(null);
   const copiedLinkTimerRef = useRef<number | null>(null);
   const activeItemId = hud.hotbar[hud.selectedHotbarIndex];
@@ -173,6 +192,91 @@ export function GameHUD({
   const healthPct = Math.max(0, Math.min(100, (hud.health / hud.maxHealth) * 100));
   const staminaPct = Math.max(0, Math.min(100, (hud.stamina / hud.maxStamina) * 100));
   const promptText = hud.nearPrompt ? getNearPromptLabel(hud.nearPrompt.action, lang) : null;
+
+  useEffect(() => {
+    if (!miniMapOpen || !farmWorld) return;
+    const drawMiniMap = () => {
+      const canvas = miniMapCanvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const scale = 6;
+      if (canvas.width !== farmWorld.width * scale) canvas.width = farmWorld.width * scale;
+      if (canvas.height !== farmWorld.height * scale) canvas.height = farmWorld.height * scale;
+
+      const realmGrassCol =
+        farmWorld.activeRealm === 'whispering_woods'
+          ? '#265b44'
+          : farmWorld.activeRealm === 'crystal_oasis'
+          ? '#d4b475'
+          : farmWorld.activeRealm === 'sky_sanctuary'
+          ? '#3b4f7a'
+          : '#4b7a38';
+      const realmEdgeCol =
+        farmWorld.activeRealm === 'whispering_woods'
+          ? '#153829'
+          : farmWorld.activeRealm === 'crystal_oasis'
+          ? '#8b6e42'
+          : farmWorld.activeRealm === 'sky_sanctuary'
+          ? '#212d4a'
+          : '#2d4d25';
+      for (let y = 0; y < farmWorld.height; y++) {
+        for (let x = 0; x < farmWorld.width; x++) {
+          const tile = farmWorld.tiles[y * farmWorld.width + x];
+          let col = realmGrassCol;
+          if (tile.terrain === 'water') col = farmWorld.activeRealm === 'crystal_oasis' ? '#24a5b5' : '#2b82b8';
+          else if (tile.terrain === 'dirt_path') col = farmWorld.activeRealm === 'sky_sanctuary' ? '#7b87a8' : '#a8906e';
+          else if (tile.terrain === 'forest_edge') col = realmEdgeCol;
+          else if (tile.terrain === 'portal') col = '#c084fc';
+          else if (tile.tilled) col = tile.watered ? '#52351d' : '#7a5332';
+          else if (tile.terrain === 'farmhouse') col = '#c26a3c';
+          else if (tile.terrain === 'shop_stall') col = '#d99b26';
+          else if (tile.terrain === 'well') col = '#38bdf8';
+          else if (tile.terrain === 'shipping_bin') col = '#854d0e';
+          ctx.fillStyle = col;
+          ctx.fillRect(x * scale, y * scale, scale, scale);
+
+          if (tile.crop) {
+            const ripe = tile.crop.growthDays >= CROPS[tile.crop.type].daysToGrow;
+            ctx.fillStyle = tile.crop.withered ? '#6b7280' : ripe ? '#fde047' : '#4ade80';
+            ctx.fillRect(x * scale + 1, y * scale + 1, scale - 2, scale - 2);
+          } else if (tile.structure) {
+            ctx.fillStyle =
+              tile.structure.type === 'greenhouse'
+                ? '#7dd3fc'
+                : tile.structure.type === 'owl_box'
+                ? '#a78bfa'
+                : '#cbd5e1';
+            ctx.fillRect(x * scale + 1, y * scale + 1, scale - 2, scale - 2);
+          }
+        }
+      }
+
+      // Friendly livestock & pets
+      const drawDot = (wx: number, wy: number, fill: string) => {
+        ctx.fillStyle = fill;
+        ctx.fillRect(Math.round(wx * scale) - 1, Math.round(wy * scale) - 1, 3, 3);
+      };
+      for (const c of farmWorld.chickens ?? []) drawDot(c.x, c.y, '#fef08a');
+      for (const cow of farmWorld.cows ?? []) drawDot(cow.x, cow.y, '#f8fafc');
+      for (const sh of farmWorld.sheep ?? []) drawDot(sh.x, sh.y, '#e2e8f0');
+      if (farmWorld.dog) drawDot(farmWorld.dog.x, farmWorld.dog.y, '#fb923c');
+      if (farmWorld.cat) drawDot(farmWorld.cat.x, farmWorld.cat.y, '#f59e0b');
+      for (const w of farmWorld.wildlife ?? []) {
+        if (w.state !== 'ko') drawDot(w.x, w.y, '#ef4444');
+      }
+
+      // Player marker
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(Math.round(farmWorld.player.x * scale) - 2, Math.round(farmWorld.player.y * scale) - 2, 5, 5);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(Math.round(farmWorld.player.x * scale) - 1, Math.round(farmWorld.player.y * scale) - 1, 3, 3);
+    };
+
+    drawMiniMap();
+    const id = window.setInterval(drawMiniMap, 250);
+    return () => window.clearInterval(id);
+  }, [miniMapOpen, farmWorld]);
 
   useEffect(() => {
     if (chatOpen) {
@@ -302,13 +406,38 @@ export function GameHUD({
                 </button>
               </div>
             )}
-            {harvestCombo >= 2 && (
-              <div
-                data-testid="hud-combo-badge"
-                className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#78350f] border border-[#f59e0b] text-[10px] sm:text-xs font-bold text-[#fde047]"
-              >
-                <Flame className="w-3 h-3 text-[#fb923c]" />
-                <span>x{harvestCombo}</span>
+            {(harvestCombo >= 2 || hud.swiftActive || (hud.day >= 2 && (hud.streakBonusGold ?? 0) > 0)) && (
+              <div className="mt-1 flex flex-wrap items-center gap-1" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+                {harvestCombo >= 2 && (
+                  <div
+                    data-testid="hud-combo-badge"
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#78350f] border border-[#f59e0b] text-[10px] font-bold text-[#fde047]"
+                  >
+                    <Flame className="w-3 h-3 text-[#fb923c]" />
+                    <span>x{harvestCombo}</span>
+                  </div>
+                )}
+                {hud.swiftActive && (
+                  <div
+                    data-testid="hud-swift-badge"
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#14532d] border border-[#4ade80] text-[10px] font-bold text-[#bbf7d0]"
+                  >
+                    <Sparkles className="w-3 h-3 text-[#fde047]" />
+                    <span>{t.swiftBuffBadge}</span>
+                  </div>
+                )}
+                {hud.day >= 2 && (hud.streakBonusGold ?? 0) > 0 && (
+                  <div
+                    data-testid="hud-streak-badge"
+                    className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#3b2818] border border-[#a16207] text-[10px] font-mono-tabular font-semibold text-[#f7d87c]"
+                  >
+                    <span>
+                      {t.streakBadge
+                        .replace('{n}', String(hud.day))
+                        .replace('{g}', String(hud.streakBonusGold ?? 0))}
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -317,6 +446,15 @@ export function GameHUD({
           <div className="flex flex-col items-end gap-1.5 sm:gap-2 min-w-0">
             <div className="wood-panel rounded-lg px-2 sm:px-3.5 [@media(max-height:540px)]:px-2.5 py-1.5 sm:py-2 [@media(max-height:540px)]:py-1.5 pointer-events-auto flex flex-col sm:flex-row items-end sm:items-center gap-1.5 sm:gap-2.5 max-w-full">
               <div className="text-right shrink-0" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+                <div className="flex items-center justify-end gap-1.5 text-[10px] font-semibold text-[#e2d0b4] leading-none mb-0.5 whitespace-nowrap">
+                  <span
+                    className="w-1.5 h-1.5 rounded-full shrink-0"
+                    style={{ backgroundColor: REALM_DEFS[hud.activeRealm ?? 'homestead'].accentColor }}
+                  />
+                  <span className="truncate max-w-[120px] sm:max-w-[160px]" data-testid="hud-realm">
+                    {getRealmLabel(hud.activeRealm ?? 'homestead', lang).name}
+                  </span>
+                </div>
                 <div className="font-display font-bold text-xs sm:text-base [@media(max-height:540px)]:text-sm text-[#fdf3dc] leading-tight whitespace-nowrap" data-testid="hud-day">
                   {translateSeason(hud.season, lang)} · {t.dayWord} {hud.dayOfSeason}
                 </div>
@@ -330,6 +468,14 @@ export function GameHUD({
                     <WeatherIcon weather={hud.weather} className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
                     <span>{translateWeather(hud.weather, lang)}</span>
                   </span>
+                  {hud.hasNasaStation && hud.tomorrowWeather && (
+                    <>
+                      <span aria-hidden="true" className="hidden md:inline">·</span>
+                      <span className="hidden md:inline text-[#9ee0ff] font-semibold">
+                        {t.tomorrowLabel}: {translateWeather(hud.tomorrowWeather, lang)}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -408,6 +554,27 @@ export function GameHUD({
                   <BookOpen className="w-3.5 h-3.5 text-[#fde047]" />
                   <span className="hidden sm:inline">{t.almanacBtn}</span>
                 </button>
+                {onOpenPortals && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.currentTarget.blur();
+                      onOpenPortals();
+                    }}
+                    aria-label={t.portalModalTitle}
+                    title={`${t.portalsBtn} (X)`}
+                    data-testid="hud-portals-btn"
+                    className="wood-button p-1 sm:px-2.5 sm:py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Compass className="w-3.5 h-3.5 text-[#c084fc]" />
+                    <span className="hidden sm:inline">{t.portalsBtn}</span>
+                    {(hud.unlockedRealmsCount ?? 1) > 1 && (
+                      <span className="hidden md:inline font-mono-tabular text-[10px] text-[#e9d5ff]">
+                        {hud.unlockedRealmsCount}/4
+                      </span>
+                    )}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={(e) => {
@@ -420,6 +587,40 @@ export function GameHUD({
                 >
                   <Moon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 </button>
+                {onQuickEat && (
+                  <button
+                    type="button"
+                    disabled={!hud.hasEdibleFood}
+                    onClick={(e) => {
+                      e.currentTarget.blur();
+                      onQuickEat();
+                    }}
+                    aria-label={t.quickEatBtn}
+                    title={t.quickEatBtn}
+                    className={`p-1 sm:p-1.5 rounded cursor-pointer shrink-0 disabled:opacity-40 ${
+                      hud.lowStamina && hud.hasEdibleFood ? 'wood-button-primary ring-1 ring-[#4ade80]' : 'wood-button'
+                    }`}
+                  >
+                    <Utensils className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#bbf7d0]" />
+                  </button>
+                )}
+                {onToggleMiniMap && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.currentTarget.blur();
+                      onToggleMiniMap();
+                    }}
+                    aria-pressed={miniMapOpen}
+                    aria-label={t.miniMapBtn}
+                    title={t.miniMapBtn}
+                    className={`p-1 sm:p-1.5 rounded cursor-pointer shrink-0 ${
+                      miniMapOpen ? 'wood-button-primary ring-1 ring-[#7dd3fc]' : 'wood-button'
+                    }`}
+                  >
+                    <MapIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#7dd3fc]" />
+                  </button>
+                )}
                 {onToggleSprint && (
                   <button
                     type="button"
@@ -699,6 +900,35 @@ export function GameHUD({
             className="self-center wood-panel rounded-md px-3 py-1 text-xs font-bold text-[#fde047]"
           >
             {t.reconnectingToast}
+          </div>
+        )}
+
+        {miniMapOpen && farmWorld && (
+          <div
+            dir={lang === 'ar' ? 'rtl' : 'ltr'}
+            data-testid="farm-minimap"
+            className="self-start pointer-events-auto wood-panel rounded-lg p-2 flex flex-col gap-1.5 shadow-lg"
+          >
+            <div className="flex items-center justify-between gap-3 text-[11px] font-bold text-[#fde047]">
+              <span className="inline-flex items-center gap-1">
+                <MapIcon className="w-3.5 h-3.5 text-[#7dd3fc]" />
+                {t.miniMapTitle}
+              </span>
+              {onToggleMiniMap && (
+                <button
+                  type="button"
+                  onClick={onToggleMiniMap}
+                  aria-label={t.cancel}
+                  className="text-[#fdf3dc]/70 hover:text-white cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            <canvas
+              ref={miniMapCanvasRef}
+              className="rounded border border-[#6b482e] pixel-canvas block w-[144px] h-[108px] sm:w-[168px] sm:h-[126px]"
+            />
           </div>
         )}
 

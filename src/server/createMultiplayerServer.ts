@@ -10,6 +10,7 @@ import {
   GAME_MINUTES_PER_REAL_SECOND,
   ITEMS,
   NIGHT_START_MINUTES,
+  REALM_DEFS,
   TILE_SIZE,
   WELL_POS,
 } from '../game/constants.ts';
@@ -30,11 +31,11 @@ import {
   buyFarmChicken,
   buyFluffySheep,
   buyGuardDog,
-  buyPondDuck,
   buyShopItem,
   claimMissionReward,
   craftItem,
   createInitialFarmState,
+  eatBestFood,
   eatCrop,
   fulfillDailyOrder,
   getSeason,
@@ -42,15 +43,16 @@ import {
   performTileAction,
   sellCropItem,
   spawnNightWildlife,
-  stepCampfireAura,
   stepChickens,
   stepLivestockAndDog,
   stepWildlife,
+  travelToRealm,
   triggerMiddayDrought,
   triggerMiddayHeatwave,
+  unlockRealm,
   upgradeTool,
 } from '../game/rules.ts';
-import type { GameWorldState, ItemId, ToolType } from '../game/types.ts';
+import type { GameWorldState, ItemId, RealmId, ToolType } from '../game/types.ts';
 import {
   APP_VERSION,
   parsePatchManifest,
@@ -406,10 +408,17 @@ export function createMultiplayerServer(
   function performSleepForRoom(room: ServerRoom): void {
     const summary = advanceDay(room.world);
     room.sleepVotes.clear();
+    const activeRealm = room.world.activeRealm ?? 'homestead';
+    const realmDef = REALM_DEFS[activeRealm];
     let idx = 0;
     for (const p of room.players.values()) {
-      p.x = FARMHOUSE_DOOR.x + 0.3 + (idx % 4) * 0.45;
-      p.y = FARMHOUSE_DOOR.y + 0.65;
+      if (activeRealm === 'homestead') {
+        p.x = FARMHOUSE_DOOR.x + 0.3 + (idx % 4) * 0.45;
+        p.y = FARMHOUSE_DOOR.y + 0.65;
+      } else {
+        p.x = realmDef.spawnX + (idx % 2) * 0.45;
+        p.y = realmDef.spawnY + Math.floor(idx / 2) * 0.45;
+      }
       p.facingX = 0;
       p.facingY = 1;
       p.stamina = p.maxStamina;
@@ -642,13 +651,23 @@ export function createMultiplayerServer(
         player = existing;
       } else {
         const offset = connectedList.length;
+        const activeRealm = room.world.activeRealm ?? 'homestead';
+        const realmDef = REALM_DEFS[activeRealm];
+        const spawnX =
+          activeRealm === 'homestead'
+            ? FARMHOUSE_DOOR.x + 0.3 + (offset % 3) * 0.55
+            : realmDef.spawnX + (offset % 2) * 0.4;
+        const spawnY =
+          activeRealm === 'homestead'
+            ? FARMHOUSE_DOOR.y + 0.75
+            : realmDef.spawnY + Math.floor(offset / 2) * 0.4;
         player = {
           id: clientId,
           clientId,
           name: playerName,
           colorIndex: assignNextColorIndex(room),
-          x: FARMHOUSE_DOOR.x + 0.3 + (offset % 3) * 0.55,
-          y: FARMHOUSE_DOOR.y + 0.75,
+          x: spawnX,
+          y: spawnY,
           facingX: 0,
           facingY: 1,
           walkCycle: 0,
@@ -982,7 +1001,28 @@ export function createMultiplayerServer(
       extractPlayerFromWorld(room, player);
       if (res.ok) {
         syncWorldToRoom(room);
-        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'harvest' } });
+        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: res.swiftApplied ? 'brew' : 'harvest' } });
+      } else {
+        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
+      }
+      return;
+    }
+
+    if (msg.type === 'action:quick_eat') {
+      const res = eatBestFood(room.world);
+      extractPlayerFromWorld(room, player);
+      if (res.ok) {
+        syncWorldToRoom(room);
+        sendToClient(ws, {
+          type: 'fx:event',
+          fx: {
+            kind: 'toast',
+            actorId: player.id,
+            wx: player.x * TILE_SIZE,
+            wy: (player.y - 1) * TILE_SIZE,
+            sfx: res.swiftApplied ? 'brew' : 'harvest',
+          },
+        });
       } else {
         sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
       }
@@ -1056,8 +1096,6 @@ export function createMultiplayerServer(
           ? buyFluffySheep(room.world)
           : msg.kind === 'cat'
           ? buyFarmCat(room.world)
-          : msg.kind === 'duck'
-          ? buyPondDuck(room.world)
           : buyGuardDog(room.world);
       extractPlayerFromWorld(room, player);
       if (res.ok) {
@@ -1066,15 +1104,63 @@ export function createMultiplayerServer(
           type: 'fx:event',
           fx: {
             kind: 'toast',
-            sfx:
-              msg.kind === 'dog'
-                ? 'bark'
-                : msg.kind === 'cat'
-                ? 'cat'
-                : msg.kind === 'duck'
-                ? 'quack'
-                : 'harvest',
+            sfx: msg.kind === 'dog' ? 'bark' : msg.kind === 'cat' ? 'purr' : 'harvest',
           },
+        });
+      } else {
+        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
+      }
+      return;
+    }
+
+    if (msg.type === 'action:unlock_realm') {
+      const targetId = msg.realmId as RealmId;
+      if (!REALM_DEFS[targetId]) return;
+      const res = unlockRealm(room.world, targetId);
+      extractPlayerFromWorld(room, player);
+      if (res.ok) {
+        syncWorldToRoom(room);
+        broadcastFx(room, {
+          kind: 'toast',
+          actorId: player.id,
+          wx: player.x * TILE_SIZE,
+          wy: (player.y - 1) * TILE_SIZE,
+          sfx: 'portal',
+          color: REALM_DEFS[targetId].accentColor,
+          count: 18,
+          leveledUpTo: res.leveledUpTo,
+        });
+      } else {
+        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
+      }
+      return;
+    }
+
+    if (msg.type === 'action:travel_realm') {
+      const targetId = msg.realmId as RealmId;
+      if (!REALM_DEFS[targetId]) return;
+      const res = travelToRealm(room.world, targetId);
+      if (res.ok) {
+        const def = REALM_DEFS[targetId];
+        let idx = 0;
+        for (const p of room.players.values()) {
+          p.x = def.spawnX + (idx % 2) * 0.45;
+          p.y = def.spawnY + Math.floor(idx / 2) * 0.45;
+          p.facingX = 1;
+          p.facingY = 0;
+          idx++;
+        }
+        room.dirtyActiveEntities = false;
+        room.dirtyPassiveEntities = false;
+        syncWorldToRoom(room, Array.from(room.players.keys()));
+        broadcastFx(room, {
+          kind: 'toast',
+          actorId: player.id,
+          wx: def.spawnX * TILE_SIZE,
+          wy: (def.spawnY - 0.5) * TILE_SIZE,
+          sfx: 'portal',
+          color: def.accentColor,
+          count: 20,
         });
       } else {
         sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
@@ -1215,25 +1301,14 @@ export function createMultiplayerServer(
         });
       });
 
-      // Warm campfire stamina & HP healing aura for each connected player
-      for (const p of activePlayers) {
-        if (p.stamina < p.maxStamina || p.health < p.maxHealth) {
-          applyPlayerIntoWorld(room, p);
-          stepCampfireAura(world, dt);
-          p.stamina = world.player.stamina;
-          p.health = world.player.health;
-        }
-      }
-
       if (world.wildlife.length > 0) {
         room.dirtyActiveEntities = true;
       } else if (
         world.chickens.some((c) => c.vx !== 0 || c.vy !== 0) ||
         (world.cows ?? []).some((c) => c.vx !== 0 || c.vy !== 0) ||
         (world.sheep ?? []).some((s) => s.vx !== 0 || s.vy !== 0) ||
-        (world.ducks ?? []).some((d) => d.vx !== 0 || d.vy !== 0) ||
-        Boolean(world.cat && (world.cat.vx !== 0 || world.cat.vy !== 0)) ||
-        Boolean(world.dog && (world.dog.vx !== 0 || world.dog.vy !== 0))
+        Boolean(world.dog && (world.dog.vx !== 0 || world.dog.vy !== 0)) ||
+        Boolean(world.cat && (world.cat.vx !== 0 || world.cat.vy !== 0))
       ) {
         room.dirtyPassiveEntities = true;
       }
@@ -1274,7 +1349,6 @@ export function createMultiplayerServer(
           sheep: world.sheep ?? [],
           dog: world.dog ?? null,
           cat: world.cat ?? null,
-          ducks: world.ducks ?? [],
         });
       }
     }

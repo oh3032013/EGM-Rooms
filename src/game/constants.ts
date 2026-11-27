@@ -7,6 +7,7 @@ import type {
   ItemId,
   MissionDef,
   PlaceableType,
+  RealmId,
   Season,
 } from './types.ts';
 
@@ -28,6 +29,7 @@ export const SPRINKLER_RADIUS = 1.6; // tiles (3x3 square around sprinkler)
 export const SENSOR_RADIUS = 3.5; // tiles (drought shield + harvest seed boost)
 export const COMPOST_RADIUS = 2.2; // tiles (+40% bonus growth overnight)
 export const SHADE_NET_HALF_EXTENT = 1; // 3x3 square centered on shade net
+export const GREENHOUSE_HALF_EXTENT = 1; // 3x3 enclosed glass dome
 export const RAIN_TANK_MAX_CHARGES = 5; // 5 free waterings per storm
 export const LITERS_PER_WATERING = 10; // 50 liters per full rain tank
 export const DRIP_WATER_SAVED_PER_TILE = 5; // half-water drip irrigation saves 5L/tile
@@ -41,16 +43,9 @@ export const SHEEP_PRICE = 200;
 export const MAX_SHEEP = 2;
 export const DOG_PRICE = 180;
 export const MAX_DOGS = 1;
-export const CAT_PRICE = 260;
+export const CAT_PRICE = 160;
 export const MAX_CATS = 1;
-export const DUCK_PRICE = 170;
-export const MAX_DUCKS = 2;
 export const WINDMILL_DAILY_GOLD = 18;
-export const SOLAR_PANEL_DAILY_GOLD = 20;
-export const HARVEST_FESTIVAL_BONUS = 1.4;
-export const CAMPFIRE_WARM_RADIUS = 2.2;
-export const CAMPFIRE_HEAL_RADIUS = 2.6;
-export const BIRDHOUSE_RADIUS = 3.0;
 export const WISHING_FOUNTAIN_COST = 10;
 export const FISHING_COOLDOWN_MS = 6000;
 
@@ -59,6 +54,83 @@ export const FARMHOUSE_DOOR = { x: 6, y: 7 };
 export const SHOP_STALL_POS = { x: 21, y: 4, w: 3, h: 2 };
 export const WELL_POS = { x: 11, y: 5 };
 export const SHIPPING_BIN_POS = { x: 10, y: 7 };
+export const HOMESTEAD_PORTAL_POS = { x: 2, y: 6 };
+
+export interface RealmDef {
+  id: RealmId;
+  width: number;
+  height: number;
+  portalX: number;
+  portalY: number;
+  spawnX: number;
+  spawnY: number;
+  unlockGold: number;
+  unlockWood: number;
+  unlockStone: number;
+  accentColor: string;
+}
+
+export const REALM_ORDER: RealmId[] = [
+  'homestead',
+  'whispering_woods',
+  'crystal_oasis',
+  'sky_sanctuary',
+];
+
+export const REALM_DEFS: Record<RealmId, RealmDef> = {
+  homestead: {
+    id: 'homestead',
+    width: GRID_WIDTH,
+    height: GRID_HEIGHT,
+    portalX: HOMESTEAD_PORTAL_POS.x,
+    portalY: HOMESTEAD_PORTAL_POS.y,
+    spawnX: 3.3,
+    spawnY: 7.2,
+    unlockGold: 0,
+    unlockWood: 0,
+    unlockStone: 0,
+    accentColor: '#4ade80',
+  },
+  whispering_woods: {
+    id: 'whispering_woods',
+    width: 24,
+    height: 18,
+    portalX: 3,
+    portalY: 9,
+    spawnX: 4.4,
+    spawnY: 9.4,
+    unlockGold: 80,
+    unlockWood: 0,
+    unlockStone: 0,
+    accentColor: '#34d399',
+  },
+  crystal_oasis: {
+    id: 'crystal_oasis',
+    width: 24,
+    height: 18,
+    portalX: 3,
+    portalY: 9,
+    spawnX: 4.4,
+    spawnY: 9.4,
+    unlockGold: 160,
+    unlockWood: 0,
+    unlockStone: 10,
+    accentColor: '#38bdf8',
+  },
+  sky_sanctuary: {
+    id: 'sky_sanctuary',
+    width: 24,
+    height: 18,
+    portalX: 3,
+    portalY: 9,
+    spawnX: 4.4,
+    spawnY: 9.4,
+    unlockGold: 300,
+    unlockWood: 15,
+    unlockStone: 15,
+    accentColor: '#c084fc',
+  },
+};
 
 export const CROPS: Record<CropType, CropDef> = {
   wheat: {
@@ -180,42 +252,42 @@ export const CROPS: Record<CropType, CropDef> = {
   },
   sunflower: {
     id: 'sunflower',
-    name: 'Golden Sunflower',
+    name: 'Sunlit Sunflower',
     seedId: 'sunflower_seed',
     daysToGrow: 3,
-    seedPrice: 34,
-    sellPrice: 88,
-    favoriteSeasons: ['Spring', 'Summer', 'Autumn'],
-    edibleStamina: 18,
-    edibleHealth: 5,
-    color: '#facc15',
-    accentColor: '#78350f',
-  },
-  blueberry: {
-    id: 'blueberry',
-    name: 'Wild Blueberry',
-    seedId: 'blueberry_seed',
-    daysToGrow: 4,
-    seedPrice: 55,
+    seedPrice: 24,
     sellPrice: 72,
-    favoriteSeasons: ['Spring', 'Summer', 'Autumn'],
-    edibleStamina: 24,
+    favoriteSeasons: ['Spring', 'Summer'],
+    edibleStamina: 20,
     edibleHealth: 8,
-    color: '#2563eb',
-    accentColor: '#93c5fd',
+    color: '#facc15',
+    accentColor: '#713f12',
+  },
+  potato: {
+    id: 'potato',
+    name: 'Golden Potato',
+    seedId: 'potato_seed',
+    daysToGrow: 3,
+    seedPrice: 20,
+    sellPrice: 56,
+    favoriteSeasons: ['Spring', 'Autumn', 'Winter'],
+    edibleStamina: 22,
+    edibleHealth: 10,
+    color: '#d97706',
+    accentColor: '#fef08a',
   },
   chili: {
     id: 'chili',
-    name: 'Volcanic Chili',
+    name: 'Frost-Proof Chili',
     seedId: 'chili_seed',
-    daysToGrow: 3,
-    seedPrice: 38,
-    sellPrice: 104,
+    daysToGrow: 4,
+    seedPrice: 34,
+    sellPrice: 98,
     favoriteSeasons: ['Summer', 'Autumn'],
-    edibleStamina: 22,
-    edibleHealth: 12,
+    edibleStamina: 28,
+    edibleHealth: 18,
     color: '#dc2626',
-    accentColor: '#f97316',
+    accentColor: '#22c55e',
   },
 };
 
@@ -326,27 +398,27 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     id: 'sunflower_seed',
     name: 'Sunflower Seeds',
     category: 'seed',
-    description: 'Bright radiant blooms (3d). Boosts nearby beehives for +1 extra morning honey!',
-    roleClue: '3d Growth · +Honey near Hive',
-    buyPrice: 34,
+    description: 'Radiant golden blooms (3d). Boosts nearby beehives & yields more bonus seeds!',
+    roleClue: '3d Growth · +Honey +Seeds',
+    buyPrice: 24,
     cropType: 'sunflower',
   },
-  blueberry_seed: {
-    id: 'blueberry_seed',
-    name: 'Blueberry Seeds',
+  potato_seed: {
+    id: 'potato_seed',
+    name: 'Potato Seedlings',
     category: 'seed',
-    description: 'Perennial bush (4d). Regrows berries every 2 days after first harvest without replanting!',
-    roleClue: '4d · Regrows Forever (2d)',
-    buyPrice: 55,
-    cropType: 'blueberry',
+    description: 'Hearty tuber (3d). Yields +1 bonus potato on moist or bio-mulched soil!',
+    roleClue: '3d Growth · +1 Harvest Bonus',
+    buyPrice: 20,
+    cropType: 'potato',
   },
   chili_seed: {
     id: 'chili_seed',
-    name: 'Volcanic Chili Seeds',
+    name: 'Chili Seeds',
     category: 'seed',
-    description: 'Fiery summer peppers (3d). Naturally immune to Heatwave withering!',
-    roleClue: '3d Growth · Heat Immune',
-    buyPrice: 38,
+    description: 'Fiery hardy peppers (4d). Naturally immune to storm flooding & frost!',
+    roleClue: '4d Growth · Flood-Proof',
+    buyPrice: 34,
     cropType: 'chili',
   },
   fertilizer: {
@@ -356,6 +428,14 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     description: 'Sprinkle on any planted unripe crop to speed growth by +1 full day immediately.',
     roleClue: '+1 Growth Day Instantly',
     buyPrice: 20,
+  },
+  bio_mulch: {
+    id: 'bio_mulch',
+    name: 'Rich Bio-Mulch',
+    category: 'consumable',
+    description: 'Blankets tilled soil in moisture for 2 mornings & shields from drought evaporation!',
+    roleClue: '2-Day Moisture & Drought Shield',
+    buyPrice: 28,
   },
   fence: {
     id: 'fence',
@@ -510,59 +590,41 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     buyPrice: 140,
     placeableType: 'wishing_fountain',
   },
-  bakery_oven: {
-    id: 'bakery_oven',
-    name: 'Rustic Bakery Oven',
+  greenhouse: {
+    id: 'greenhouse',
+    name: 'Glass Greenhouse',
     category: 'placeable',
-    description: 'Bakes 1 Wheat + 1 Egg into a gourmet Farmer Pie (195g) overnight or on click!',
-    roleClue: 'Wheat + Egg → Pie (195g)',
-    buyPrice: 185,
-    placeableType: 'bakery_oven',
+    description: 'Protects a 3x3 plot to grow in Winter & stay safe from Drought, Heatwave, & Flood!',
+    roleClue: 'All-Season 3x3 Dome',
+    buyPrice: 220,
+    placeableType: 'greenhouse',
   },
-  seed_maker: {
-    id: 'seed_maker',
-    name: 'Smart Seed Maker',
+  owl_box: {
+    id: 'owl_box',
+    name: 'Bio-Pest Owl Box',
     category: 'placeable',
-    description: 'Click to turn 1 harvested crop into 2 matching seeds for free replanting!',
-    roleClue: '1 Crop → 2 Seeds',
-    buyPrice: 140,
-    placeableType: 'seed_maker',
+    description: 'Wooden roost for barn owls that intercept 1 nocturnal wildlife crop raid per night.',
+    roleClue: 'Blocks 1 Night Raid',
+    buyPrice: 125,
+    placeableType: 'owl_box',
   },
-  solar_panel: {
-    id: 'solar_panel',
-    name: 'Clean Solar Panel',
+  butter_churn: {
+    id: 'butter_churn',
+    name: 'Artisan Butter Churn',
     category: 'placeable',
-    description: 'Generates +20g clean eco-power village credit every morning!',
-    roleClue: '+20g Clean Energy Daily',
-    buyPrice: 190,
-    placeableType: 'solar_panel',
+    description: 'Turns 1 Fresh Milk into Golden Farm Butter (190g) overnight or when clicked.',
+    roleClue: 'Milk → Butter (190g)',
+    buyPrice: 120,
+    placeableType: 'butter_churn',
   },
-  campfire: {
-    id: 'campfire',
-    name: 'Cozy Hearth Campfire',
+  tea_kettle: {
+    id: 'tea_kettle',
+    name: 'Herbal Tea Kettle',
     category: 'placeable',
-    description: 'Shields nearby crops from Frost & restores Stamina and Health while resting near it.',
-    roleClue: 'Frost Shield + Stamina Regen',
-    buyPrice: 55,
-    placeableType: 'campfire',
-  },
-  greenhouse_dome: {
-    id: 'greenhouse_dome',
-    name: 'Mini Greenhouse Dome',
-    category: 'placeable',
-    description: 'Glass 3x3 dome shielding crops from Heatwave, Storm flood & Frost with +35% growth boost!',
-    roleClue: 'All-Weather 3x3 + Growth',
-    buyPrice: 240,
-    placeableType: 'greenhouse_dome',
-  },
-  birdhouse: {
-    id: 'birdhouse',
-    name: 'Songbird Nest Box',
-    category: 'placeable',
-    description: 'Repels pests within 3 tiles and songbirds bring a random bonus seed (25%/day)!',
-    roleClue: 'Pest Ward + Daily Seed Chance',
-    buyPrice: 75,
-    placeableType: 'birdhouse',
+    description: 'Brews Lavender or Honey into Soothing Herbal Tea (210g) that grants Swift Brew speed!',
+    roleClue: 'Brew Tea · +25% Speed Buff',
+    buyPrice: 130,
+    placeableType: 'tea_kettle',
   },
   egg: {
     id: 'egg',
@@ -573,16 +635,6 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     sellPrice: 38,
     edibleStamina: 30,
     edibleHealth: 10,
-  },
-  duck_egg: {
-    id: 'duck_egg',
-    name: 'Golden Duck Egg',
-    category: 'crop',
-    description: 'Rich gourmet duck egg laid each morning by Pond Ducks. Restores +40 Stamina!',
-    roleClue: 'Sell 58g · +40 Stam',
-    sellPrice: 58,
-    edibleStamina: 40,
-    edibleHealth: 15,
   },
   honey: {
     id: 'honey',
@@ -632,16 +684,6 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     edibleStamina: 45,
     edibleHealth: 25,
   },
-  farmer_pie: {
-    id: 'farmer_pie',
-    name: 'Farmer Golden Pie',
-    category: 'crop',
-    description: 'Warm crust pie baked from Wheat & Egg. Restores +85 Stam & +45 HP or sells for 195g!',
-    roleClue: 'Sell 195g · +85 Stam',
-    sellPrice: 195,
-    edibleStamina: 85,
-    edibleHealth: 45,
-  },
   fish: {
     id: 'fish',
     name: 'Fresh Pond Fish',
@@ -651,6 +693,36 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     sellPrice: 52,
     edibleStamina: 28,
     edibleHealth: 12,
+  },
+  golden_koi: {
+    id: 'golden_koi',
+    name: 'Golden Koi',
+    category: 'crop',
+    description: 'Rare shimmering pond prize! Sells for 140g or restores +40 Stam & +20 HP.',
+    roleClue: 'Sell 140g · +40 Stam',
+    sellPrice: 140,
+    edibleStamina: 40,
+    edibleHealth: 20,
+  },
+  butter: {
+    id: 'butter',
+    name: 'Golden Farm Butter',
+    category: 'crop',
+    description: 'Rich churned butter. High value (190g) & restores +60 Stam and +25 HP!',
+    roleClue: 'Sell 190g · +60 Stam',
+    sellPrice: 190,
+    edibleStamina: 60,
+    edibleHealth: 25,
+  },
+  herbal_tea: {
+    id: 'herbal_tea',
+    name: 'Soothing Herbal Tea',
+    category: 'crop',
+    description: 'Aromatic tea (+75 Stam, +30 HP) that grants Swift Brew (+25% speed & -1 tool Stam)!',
+    roleClue: 'Sell 210g · Swift Brew Buff',
+    sellPrice: 210,
+    edibleStamina: 75,
+    edibleHealth: 30,
   },
   wheat: {
     id: 'wheat',
@@ -753,35 +825,35 @@ export const ITEMS: Record<ItemId, ItemDef> = {
   },
   sunflower: {
     id: 'sunflower',
-    name: 'Golden Sunflower',
+    name: 'Sunlit Sunflower',
     category: 'crop',
-    description: 'Radiant sunflower head brimming with golden petals and seeds.',
-    roleClue: 'Sell 88g · +18 Stam',
-    sellPrice: 88,
-    edibleStamina: 18,
-    edibleHealth: 5,
+    description: 'Bright golden flower that delights bees & yields extra seeds.',
+    roleClue: 'Sell 72g · +20 Stam',
+    sellPrice: 72,
+    edibleStamina: 20,
+    edibleHealth: 8,
     cropType: 'sunflower',
   },
-  blueberry: {
-    id: 'blueberry',
-    name: 'Wild Blueberry',
+  potato: {
+    id: 'potato',
+    name: 'Golden Potato',
     category: 'crop',
-    description: 'Juicy perennial berries loaded with antioxidants.',
-    roleClue: 'Sell 72g · +24 Stam',
-    sellPrice: 72,
-    edibleStamina: 24,
-    edibleHealth: 8,
-    cropType: 'blueberry',
+    description: 'Hearty golden tuber. Bonus harvest on watered/mulched soil.',
+    roleClue: 'Sell 56g · +22 Stam',
+    sellPrice: 56,
+    edibleStamina: 22,
+    edibleHealth: 10,
+    cropType: 'potato',
   },
   chili: {
     id: 'chili',
-    name: 'Volcanic Chili',
+    name: 'Frost-Proof Chili',
     category: 'crop',
-    description: 'Fiery red pepper prized in spice markets and heat-resistant.',
-    roleClue: 'Sell 104g · +22 Stam',
-    sellPrice: 104,
-    edibleStamina: 22,
-    edibleHealth: 12,
+    description: 'Spicy red pepper immune to rainstorm floods.',
+    roleClue: 'Sell 98g · +28 Stam',
+    sellPrice: 98,
+    edibleStamina: 28,
+    edibleHealth: 18,
     cropType: 'chili',
   },
   wood: {
@@ -881,38 +953,38 @@ export const CRAFT_RECIPES: CraftRecipe[] = [
     outputCount: 1,
   },
   {
-    id: 'bakery_oven',
-    name: 'Rustic Bakery Oven',
-    description: 'Bakes 1 Wheat + 1 Egg into a hearty 195g Farmer Golden Pie.',
-    ingredients: { wood: 4, stone: 6, gold: 25 },
+    id: 'bio_mulch',
+    name: 'Rich Bio-Mulch (x2)',
+    description: 'Keeps tilled soil watered for 2 days and shields against drought.',
+    ingredients: { wood: 3, gold: 14 },
+    outputCount: 2,
+  },
+  {
+    id: 'owl_box',
+    name: 'Bio-Pest Owl Box',
+    description: 'Attracts helpful owls that stop 1 wildlife crop raid each night.',
+    ingredients: { wood: 6, stone: 1, gold: 20 },
     outputCount: 1,
   },
   {
-    id: 'seed_maker',
-    name: 'Smart Seed Maker',
-    description: 'Milling station that turns 1 harvested crop into 2 matching seeds.',
-    ingredients: { wood: 5, stone: 3, gold: 20 },
+    id: 'butter_churn',
+    name: 'Artisan Butter Churn',
+    description: 'Churns Fresh Milk into Golden Farm Butter (190g).',
+    ingredients: { wood: 5, stone: 2, gold: 30 },
     outputCount: 1,
   },
   {
-    id: 'solar_panel',
-    name: 'Clean Solar Panel',
-    description: 'Clean rooftop-grade collector earning +20g daily passive eco income.',
-    ingredients: { wood: 3, stone: 5, gold: 45 },
+    id: 'tea_kettle',
+    name: 'Herbal Tea Kettle',
+    description: 'Brews Lavender or Honey into Herbal Tea (+Swift Brew buff).',
+    ingredients: { stone: 4, wood: 3, gold: 35 },
     outputCount: 1,
   },
   {
-    id: 'campfire',
-    name: 'Cozy Hearth Campfire',
-    description: 'Protects crops from Frost and warms nearby farmers to restore Stamina & Health.',
-    ingredients: { wood: 4, stone: 3 },
-    outputCount: 1,
-  },
-  {
-    id: 'birdhouse',
-    name: 'Songbird Nest Box',
-    description: 'Repels pests in a 3-tile ward and brings occasional bonus seeds.',
-    ingredients: { wood: 4, gold: 10 },
+    id: 'greenhouse',
+    name: 'Glass Greenhouse',
+    description: 'All-season 3x3 glass dome protecting crops from winter, heat & flood.',
+    ingredients: { wood: 8, stone: 8, gold: 80 },
     outputCount: 1,
   },
 ];
@@ -935,46 +1007,43 @@ export const PLACEABLE_MAX_HP: Record<PlaceableType, number> = {
   jam_maker: 5,
   windmill: 6,
   wishing_fountain: 6,
-  bakery_oven: 6,
-  seed_maker: 5,
-  solar_panel: 5,
-  campfire: 5,
-  greenhouse_dome: 6,
-  birdhouse: 4,
+  greenhouse: 6,
+  owl_box: 4,
+  butter_churn: 5,
+  tea_kettle: 5,
 };
 
 export const SHOP_CATALOG: { id: ItemId; tab: 'seeds' | 'decor' }[] = [
   { id: 'wheat_seed', tab: 'seeds' },
   { id: 'bean_seed', tab: 'seeds' },
   { id: 'carrot_seed', tab: 'seeds' },
+  { id: 'potato_seed', tab: 'seeds' },
   { id: 'corn_seed', tab: 'seeds' },
+  { id: 'sunflower_seed', tab: 'seeds' },
   { id: 'tomato_seed', tab: 'seeds' },
   { id: 'lavender_seed', tab: 'seeds' },
-  { id: 'sunflower_seed', tab: 'seeds' },
-  { id: 'strawberry_seed', tab: 'seeds' },
   { id: 'chili_seed', tab: 'seeds' },
-  { id: 'blueberry_seed', tab: 'seeds' },
+  { id: 'strawberry_seed', tab: 'seeds' },
   { id: 'watermelon_seed', tab: 'seeds' },
   { id: 'pumpkin_seed', tab: 'seeds' },
   { id: 'fertilizer', tab: 'seeds' },
+  { id: 'bio_mulch', tab: 'seeds' },
   { id: 'nasa_station', tab: 'decor' },
-  { id: 'greenhouse_dome', tab: 'decor' },
-  { id: 'solar_panel', tab: 'decor' },
+  { id: 'greenhouse', tab: 'decor' },
+  { id: 'owl_box', tab: 'decor' },
   { id: 'rain_tank', tab: 'decor' },
   { id: 'shade_net', tab: 'decor' },
   { id: 'drip_sprinkler', tab: 'decor' },
   { id: 'beehive', tab: 'decor' },
-  { id: 'bakery_oven', tab: 'decor' },
-  { id: 'seed_maker', tab: 'decor' },
   { id: 'cheese_press', tab: 'decor' },
+  { id: 'butter_churn', tab: 'decor' },
   { id: 'jam_maker', tab: 'decor' },
+  { id: 'tea_kettle', tab: 'decor' },
   { id: 'windmill', tab: 'decor' },
   { id: 'wishing_fountain', tab: 'decor' },
   { id: 'sprinkler', tab: 'decor' },
   { id: 'sensor', tab: 'decor' },
   { id: 'compost', tab: 'decor' },
-  { id: 'campfire', tab: 'decor' },
-  { id: 'birdhouse', tab: 'decor' },
   { id: 'fence', tab: 'decor' },
   { id: 'scarecrow', tab: 'decor' },
   { id: 'lantern', tab: 'decor' },
@@ -1114,48 +1183,49 @@ export const MISSIONS: MissionDef[] = [
     rewardGold: 150,
     rewardStamina: 25,
   },
-  // Homestead Expansion Missions (21–26)
+  // Homestead Mastery Expansions (21–24)
   {
-    id: 'sunflower_berry',
-    category: 'extended',
-    target: 2,
-    rewardGold: 125,
-    rewardItem: { id: 'chili_seed', qty: 2 },
-  },
-  {
-    id: 'bake_pie',
+    id: 'greenhouse_pioneer',
     category: 'extended',
     target: 1,
     rewardGold: 160,
-    rewardStamina: 30,
+    rewardItem: { id: 'bio_mulch', qty: 3 },
   },
   {
-    id: 'seed_miller',
+    id: 'cat_lover',
+    category: 'extended',
+    target: 1,
+    rewardGold: 120,
+    rewardItem: { id: 'sunflower_seed', qty: 3 },
+  },
+  {
+    id: 'tea_brewer',
     category: 'extended',
     target: 2,
-    rewardGold: 115,
-    rewardItem: { id: 'blueberry_seed', qty: 2 },
+    rewardGold: 155,
+    rewardItem: { id: 'chili_seed', qty: 2 },
   },
   {
-    id: 'clean_energy',
+    id: 'titanium_smith',
     category: 'extended',
     target: 1,
-    rewardGold: 145,
-    rewardItem: { id: 'sunflower_seed', qty: 2 },
-  },
-  {
-    id: 'pond_companions',
-    category: 'extended',
-    target: 1,
-    rewardGold: 180,
-    rewardItem: { id: 'fertilizer', qty: 2 },
-  },
-  {
-    id: 'emerald_tools',
-    category: 'extended',
-    target: 4,
     rewardGold: 220,
     rewardStamina: 30,
+  },
+  {
+    id: 'portal_awakener',
+    category: 'extended',
+    target: 2,
+    rewardGold: 140,
+    rewardItem: { id: 'bio_mulch', qty: 2 },
+    rewardStamina: 20,
+  },
+  {
+    id: 'realm_voyager',
+    category: 'extended',
+    target: 4,
+    rewardGold: 320,
+    rewardStamina: 40,
   },
 ];
 
@@ -1165,9 +1235,9 @@ export const BADGE_IDS: BadgeId[] = [
   'soil_friend',
   'angler_pro',
   'artisan_chef',
-  'artisan_baker',
-  'eco_engineer',
-  'wildlife_ranger',
+  'eco_architect',
+  'farm_tycoon',
+  'world_explorer',
 ];
 
 export const MESSAGES_FROM_2040: { quoteAr: string; quoteEn: string }[] = [

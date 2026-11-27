@@ -19,12 +19,16 @@ const ARTISAN_ITEMS: ItemId[] = [
   'wool',
   'cheese',
   'strawberry_jam',
+  'butter',
+  'herbal_tea',
   'fish',
+  'golden_koi',
   'fertilizer',
+  'bio_mulch',
 ];
 
 export function AlmanacModal({ world, lang, onClose }: AlmanacModalProps) {
-  const [tab, setTab] = useState<'crops' | 'artisan'>('crops');
+  const [tab, setTab] = useState<'crops' | 'artisan' | 'stats'>('crops');
   const t = UI_TEXT[lang];
   const level = world.level ?? 1;
   const xp = world.xp ?? 0;
@@ -133,6 +137,17 @@ export function AlmanacModal({ world, lang, onClose }: AlmanacModalProps) {
             }`}
           >
             {t.almanacArtisanTab} ({ARTISAN_ITEMS.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('stats')}
+            className={`px-3.5 py-1.5 rounded-md text-sm font-semibold cursor-pointer whitespace-nowrap ${
+              tab === 'stats'
+                ? 'bg-[#3d7a47] text-white'
+                : 'bg-[#e5d2af] text-[#4a3322] hover:bg-[#dbc39a]'
+            }`}
+          >
+            {t.almanacStatsTab}
           </button>
         </div>
 
@@ -255,6 +270,36 @@ export function AlmanacModal({ world, lang, onClose }: AlmanacModalProps) {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {tab === 'stats' && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+              {[
+                { label: t.daysStat, val: `${world.day}`, icon: 'wheat' as ItemId },
+                { label: t.harvestedStat, val: `${world.stats.cropsHarvested}`, icon: 'carrot' as ItemId },
+                { label: t.gold, val: `${world.stats.totalGoldEarned}g`, icon: 'sunflower' as ItemId },
+                { label: getItemLabel('fish', lang).name, val: `${world.stats.fishCaught ?? 0}`, icon: 'fish' as ItemId },
+                { label: getItemLabel('golden_koi', lang).name, val: `${world.stats.koiCaught ?? 0}`, icon: 'golden_koi' as ItemId },
+                { label: getItemLabel('cheese', lang).name, val: `${world.stats.cheeseMade ?? 0}`, icon: 'cheese' as ItemId },
+                { label: getItemLabel('strawberry_jam', lang).name, val: `${world.stats.jamMade ?? 0}`, icon: 'strawberry_jam' as ItemId },
+                { label: getItemLabel('butter', lang).name, val: `${world.stats.butterMade ?? 0}`, icon: 'butter' as ItemId },
+                { label: getItemLabel('herbal_tea', lang).name, val: `${world.stats.teaBrewed ?? 0}`, icon: 'herbal_tea' as ItemId },
+                { label: getItemLabel('owl_box', lang).name, val: `${world.stats.owlSaves ?? 0}`, icon: 'owl_box' as ItemId },
+                { label: t.waterSavedLabel, val: `${Math.round(world.stats.waterSavedLiters)}${t.litersUnit}`, icon: 'drip_sprinkler' as ItemId },
+                { label: t.missions, val: `${world.claimedMissions.length}/24`, icon: 'greenhouse' as ItemId },
+              ].map((stat) => (
+                <div
+                  key={stat.label}
+                  className="p-2.5 rounded-lg bg-[#fbf2e1] border border-[#d6be96] flex items-center gap-2.5 min-w-0"
+                >
+                  <ItemIcon id={stat.icon} className="w-7 h-7 shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-[11px] text-[#694d36] truncate">{stat.label}</div>
+                    <div className="font-mono-tabular font-bold text-sm text-[#2c1e14] truncate">{stat.val}</div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>

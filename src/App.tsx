@@ -9,6 +9,7 @@ import { MissionsModal } from './components/MissionsModal';
 import { NasaObservatoryModal } from './components/NasaObservatoryModal';
 import { NetDebugPanel } from './components/NetDebugPanel';
 import { OfflineBanner } from './components/PWAInstallButton';
+import { PortalModal } from './components/PortalModal';
 import { RoomsModal } from './components/RoomsModal';
 import { ShopModal } from './components/ShopModal';
 import { StatusModal } from './components/StatusModal';
@@ -42,6 +43,8 @@ import {
   GAME_MINUTES_PER_REAL_SECOND,
   ITEMS,
   NIGHT_START_MINUTES,
+  REALM_DEFS,
+  REALM_ORDER,
   SHIPPING_BIN_POS,
   SHOP_STALL_POS,
   TILE_SIZE,
@@ -54,12 +57,13 @@ import {
   getInitialLanguage,
   getItemLabel,
   getLanguageSwitchMessage,
+  getRealmLabel,
   saveLanguagePreference,
   translateWeather,
   UI_TEXT,
   type Language,
 } from './game/i18n';
-import { EcoGrowScene3D, type CameraState, type LocalPlayerRenderMeta } from './game/three/EcoGrowScene3D';
+import { renderGameWorld, type CameraState, type LocalPlayerRenderMeta } from './game/pixelArt';
 import {
   getOrCreateClientId,
   resolveHttpApiBase,
@@ -79,6 +83,7 @@ import { VoiceChatManager } from './game/voiceChat';
 import {
   advanceDay,
   buyDairyCow,
+  buyFarmCat,
   buyFarmChicken,
   buyFluffySheep,
   buyGuardDog,
@@ -87,7 +92,9 @@ import {
   computeFarmRestorationPercent,
   craftItem,
   createInitialFarmState,
+  eatBestFood,
   eatCrop,
+  ensureHomesteadPortal,
   formatTimeClock,
   fulfillDailyOrder,
   generateDailyOrder,
@@ -97,10 +104,13 @@ import {
   getSeason,
   getTile,
   getTimePhase,
+  hasNasaStation,
   isNearFarmhouse,
+  isNearPortal,
   isNearShippingBin,
   isNearShopStall,
   isNearWell,
+  isSwiftBuffActive,
   isTileWalkable,
   performTileAction,
   rollDailyNatureTreasure,
@@ -110,8 +120,10 @@ import {
   stepChickens,
   stepLivestockAndDog,
   stepWildlife,
+  travelToRealm,
   triggerMiddayDrought,
   triggerMiddayHeatwave,
+  unlockRealm,
   upgradeTool,
   type ActionFeedback,
 } from './game/rules';
@@ -125,6 +137,7 @@ import type {
   MissionId,
   Particle,
   PlaceableType,
+  RealmId,
   ToolType,
 } from './game/types';
 
@@ -157,6 +170,8 @@ function buildHudSnapshot(world: GameWorldState): HudSnapshot {
     nearPrompt = { action: 'well', label: '[E] Refill Watering Can' };
   } else if (isNearShippingBin(world)) {
     nearPrompt = { action: 'bin', label: '[E] Sell Harvested Crops' };
+  } else if (isNearPortal(world)) {
+    nearPrompt = { action: 'portal', label: '[E] Open World Portals' };
   }
 
   return {
@@ -184,6 +199,16 @@ function buildHudSnapshot(world: GameWorldState): HudSnapshot {
     nearPrompt,
     lowStamina: world.player.stamina <= 15,
     nightWarning: world.timeMinutes >= NIGHT_START_MINUTES && world.wildlife.length > 0,
+    swiftActive: isSwiftBuffActive(world),
+    streakBonusGold: world.day >= 3 ? Math.min(50, Math.max(10, (world.day - 2) * 10)) : 0,
+    tomorrowWeather: world.forecastWeather,
+    hasNasaStation: hasNasaStation(world),
+    hasEdibleFood: Object.entries(world.inventory).some(
+      ([id, count]) =>
+        (count ?? 0) > 0 && Boolean(ITEMS[id as ItemId]?.edibleStamina || ITEMS[id as ItemId]?.edibleHealth)
+    ),
+    activeRealm: world.activeRealm ?? 'homestead',
+    unlockedRealmsCount: world.unlockedRealms?.length ?? 1,
   };
 }
 
@@ -278,6 +303,11 @@ function loadSavedWorld(): GameWorldState | null {
     if (!Array.isArray(parsed.cows)) parsed.cows = [];
     if (!Array.isArray(parsed.sheep)) parsed.sheep = [];
     if (parsed.dog === undefined) parsed.dog = null;
+    if (parsed.cat === undefined) parsed.cat = null;
+    parsed.swiftUntilMinutes =
+      typeof parsed.swiftUntilMinutes === 'number' && Number.isFinite(parsed.swiftUntilMinutes)
+        ? parsed.swiftUntilMinutes
+        : 0;
     if (!Array.isArray(parsed.discoveredItems)) {
       parsed.discoveredItems = ['wheat_seed', 'carrot_seed'];
     }
@@ -334,7 +364,13 @@ function loadSavedWorld(): GameWorldState | null {
       milkCollected: parsed.stats?.milkCollected ?? 0,
       woolCollected: parsed.stats?.woolCollected ?? 0,
       fishCaught: parsed.stats?.fishCaught ?? 0,
+      koiCaught: parsed.stats?.koiCaught ?? 0,
       artisanProduced: parsed.stats?.artisanProduced ?? 0,
+      cheeseMade: parsed.stats?.cheeseMade ?? 0,
+      jamMade: parsed.stats?.jamMade ?? 0,
+      butterMade: parsed.stats?.butterMade ?? 0,
+      teaBrewed: parsed.stats?.teaBrewed ?? 0,
+      owlSaves: parsed.stats?.owlSaves ?? 0,
       wishesMade: parsed.stats?.wishesMade ?? 0,
       ordersCompleted: parsed.stats?.ordersCompleted ?? 0,
       treasuresFound: parsed.stats?.treasuresFound ?? 0,
@@ -343,7 +379,20 @@ function loadSavedWorld(): GameWorldState | null {
       rainwaterCollectedLiters: parsed.stats?.rainwaterCollectedLiters ?? 0,
       waterSavedLiters: parsed.stats?.waterSavedLiters ?? 0,
       heatwavesSurvivedWithShade: parsed.stats?.heatwavesSurvivedWithShade ?? 0,
+      realmsVisited: parsed.stats?.realmsVisited ?? 1,
     };
+    parsed.activeRealm =
+      parsed.activeRealm && REALM_ORDER.includes(parsed.activeRealm)
+        ? parsed.activeRealm
+        : 'homestead';
+    const rawUnlocked: RealmId[] = Array.isArray(parsed.unlockedRealms)
+      ? parsed.unlockedRealms.filter((id): id is RealmId => REALM_ORDER.includes(id))
+      : ['homestead'];
+    if (!rawUnlocked.includes('homestead')) rawUnlocked.unshift('homestead');
+    parsed.unlockedRealms = Array.from(new Set(rawUnlocked));
+    parsed.realmCaches =
+      parsed.realmCaches && typeof parsed.realmCaches === 'object' ? parsed.realmCaches : {};
+    ensureHomesteadPortal(parsed);
     parsed.rotationYieldProgress = parsed.rotationYieldProgress ?? 0;
     parsed.forecastWeather = parsed.forecastWeather ?? parsed.weather;
     parsed.dailyOrder =
@@ -373,7 +422,7 @@ export default function App() {
 
   const [phase, setPhase] = useState<GamePhase>(autostart && !initialInviteCode ? 'playing' : 'title');
   const [hasSavedFarm, setHasSavedFarm] = useState<boolean>(() => Boolean(loadSavedWorld()));
-  const [activeModal, setActiveModal] = useState<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac'>('none');
+  const [activeModal, setActiveModal] = useState<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac' | 'portals'>('none');
   const [shopInitialTab, setShopInitialTab] = useState<'seeds' | 'sell' | 'upgrades'>('seeds');
   const [futureDispatch, setFutureDispatch] = useState<FutureDispatch | null>(null);
   const [muted, setMuted] = useState<boolean>(false);
@@ -413,6 +462,7 @@ export default function App() {
   const [roomHud, setRoomHud] = useState<RoomHudState | null>(null);
   const [chatOpen, setChatOpen] = useState<boolean>(false);
   const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
+  const [miniMapOpen, setMiniMapOpen] = useState<boolean>(false);
   const [showNetDebug, setShowNetDebug] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return new URLSearchParams(window.location.search).get('netdebug') === '1';
@@ -446,7 +496,7 @@ export default function App() {
   const [versionCooldownSec, setVersionCooldownSec] = useState<number>(0);
 
   const phaseRef = useRef<GamePhase>(phase);
-  const modalRef = useRef<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac'>(activeModal);
+  const modalRef = useRef<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac' | 'portals'>(activeModal);
   const futureOpenRef = useRef<boolean>(false);
   const langRef = useRef<Language>(lang);
   const blindModeRef = useRef<boolean>(blindMode);
@@ -489,8 +539,7 @@ export default function App() {
   const updateRequired = versionStatus === 'update_required' && Boolean(versionManifest);
   versionRequiredRef.current = updateRequired;
 
-  const scene3dRef = useRef<EcoGrowScene3D | null>(null);
-  const orbitDragRef = useRef<{ active: boolean; lastX: number } | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const keysPressedRef = useRef<Set<string>>(new Set());
   const joystickRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -1020,6 +1069,7 @@ export default function App() {
 
       if (fx.kind === 'toast') {
         if (fx.sfx) audioEngine.playSfx(fx.sfx as Parameters<typeof audioEngine.playSfx>[0], fx.sfxArg);
+        if (fx.color && fx.count) spawnParticleBurst(wx, wy, fx.color, fx.count, 44);
         if (fx.text) addFloatingText(wx, wy, fx.text, fx.textColor ?? '#ffe473');
         if (fx.leveledUpTo) {
           audioEngine.playSfx('levelup');
@@ -1109,9 +1159,15 @@ export default function App() {
           spawnParticleBurst(wx, wy, '#ff9866', 10, 56);
           if (resMsg) addFloatingText(wx, wy - 8, resMsg, '#ffb694');
         } else if (fx.actionKind === 'fish') {
-          audioEngine.playSfx('fish');
-          spawnParticleBurst(wx, wy, '#38bdf8', 14, 48);
-          if (resMsg) addFloatingText(wx, wy - 10, resMsg, '#7dd3fc');
+          const isGoldenCatch = Boolean(
+            fx.actionMessage &&
+              (fx.actionMessage.includes('Koi') ||
+                fx.actionMessage.includes('Chest') ||
+                fx.actionMessage.includes('Pearl'))
+          );
+          audioEngine.playSfx(isGoldenCatch ? 'golden_catch' : 'fish');
+          spawnParticleBurst(wx, wy, isGoldenCatch ? '#fde047' : '#38bdf8', 14, 48);
+          if (resMsg) addFloatingText(wx, wy - 10, resMsg, isGoldenCatch ? '#fde047' : '#7dd3fc');
         } else if (fx.actionKind === 'wish') {
           audioEngine.playSfx('wish');
           spawnParticleBurst(wx, wy, '#fde047', 16, 52);
@@ -1121,11 +1177,20 @@ export default function App() {
           spawnParticleBurst(wx, wy, '#4ade80', 10, 36);
           if (resMsg) addFloatingText(wx, wy - 8, resMsg, '#86efac');
         } else if (fx.actionKind === 'artisan') {
-          audioEngine.playSfx('harvest');
+          const isBrew = Boolean(
+            fx.actionMessage && (fx.actionMessage.includes('Butter') || fx.actionMessage.includes('Tea'))
+          );
+          audioEngine.playSfx(isBrew ? 'brew' : 'harvest');
           spawnParticleBurst(wx, wy, '#fbbf24', 12, 40);
           if (resMsg) addFloatingText(wx, wy - 10, resMsg, '#fde68a');
         } else if (fx.actionKind === 'pet') {
-          audioEngine.playSfx(fx.actionMessage?.includes('Dog') ? 'bark' : 'pet');
+          audioEngine.playSfx(
+            fx.actionMessage?.includes('Dog')
+              ? 'bark'
+              : fx.actionMessage?.includes('Cat')
+              ? 'purr'
+              : 'pet'
+          );
           spawnParticleBurst(wx, wy - 6, '#f472b6', 10, 34);
           if (resMsg) addFloatingText(wx, wy - 12, resMsg, '#f9a8d4');
           syncHud();
@@ -1305,9 +1370,12 @@ export default function App() {
       ) => {
         const me = players.find((p) => p.id === myId);
         const prev = worldRef.current.player;
+        const realmChanged =
+          (serverWorld.activeRealm ?? 'homestead') !== (worldRef.current.activeRealm ?? 'homestead');
         const shouldTeleport =
           !preserveLocalPosition ||
           serverWorld.day !== worldRef.current.day ||
+          realmChanged ||
           Boolean(teleportIds?.includes(myId));
         if (me) {
           serverWorld.player.x = shouldTeleport ? me.x : prev.x;
@@ -1329,6 +1397,30 @@ export default function App() {
           };
         }
         worldRef.current = serverWorld;
+        if (shouldTeleport) {
+          cameraRef.current.x = serverWorld.player.x * TILE_SIZE;
+          cameraRef.current.y = serverWorld.player.y * TILE_SIZE;
+        }
+        if (realmChanged) {
+          const targetRealm = serverWorld.activeRealm ?? 'homestead';
+          const rName = getRealmLabel(targetRealm, langRef.current).name;
+          const arrivalMsg = UI_TEXT[langRef.current].realmArrivalToast.replace('{realm}', rName);
+          addFloatingText(
+            serverWorld.player.x * TILE_SIZE,
+            (serverWorld.player.y - 1.2) * TILE_SIZE,
+            arrivalMsg,
+            REALM_DEFS[targetRealm].accentColor
+          );
+          spawnParticleBurst(
+            serverWorld.player.x * TILE_SIZE,
+            serverWorld.player.y * TILE_SIZE,
+            '#c084fc',
+            18,
+            48
+          );
+          setActiveModal((cur) => (cur === 'portals' ? 'none' : cur));
+          if (blindModeRef.current) announceBlind(arrivalMsg, true);
+        }
         syncRemoteTargets(
           players.filter((p) => p.id !== myId),
           !preserveLocalPosition
@@ -1481,6 +1573,7 @@ export default function App() {
           world.cows = msg.cows;
           world.sheep = msg.sheep;
           world.dog = msg.dog;
+          world.cat = msg.cat ?? null;
           const me = msg.players.find((p) => p.id === myId);
           if (me) {
             world.player.health = me.health;
@@ -1682,11 +1775,20 @@ export default function App() {
       setFutureDispatch(summary.messageFrom2040);
     }
     audioEngine.playSfx('morning');
-    // Place farmer outside farmhouse door refreshed
-    world.player.x = FARMHOUSE_DOOR.x + 0.5;
-    world.player.y = FARMHOUSE_DOOR.y + 0.6;
+    // Place farmer outside farmhouse door (or realm portal spawn) refreshed
+    const activeRealm = world.activeRealm ?? 'homestead';
+    if (activeRealm === 'homestead') {
+      world.player.x = FARMHOUSE_DOOR.x + 0.5;
+      world.player.y = FARMHOUSE_DOOR.y + 0.6;
+    } else {
+      const def = REALM_DEFS[activeRealm];
+      world.player.x = def.spawnX;
+      world.player.y = def.spawnY;
+    }
     world.player.facingX = 0;
     world.player.facingY = 1;
+    cameraRef.current.x = world.player.x * TILE_SIZE;
+    cameraRef.current.y = world.player.y * TILE_SIZE;
     checkNewBadges();
     saveFarm();
     syncHud();
@@ -1969,8 +2071,132 @@ export default function App() {
       if (blindModeRef.current) {
         announceBlind(UI_TEXT[langRef.current].shopTitle, true);
       }
+      return;
+    }
+    if (isNearPortal(world)) {
+      audioEngine.playSfx('click');
+      setActiveModal('portals');
+      if (blindModeRef.current) {
+        announceBlind(UI_TEXT[langRef.current].portalModalTitle, true);
+      }
     }
   }, [addFloatingText, announceBlind, saveFarm, sendWs, spawnParticleBurst, syncHud, triggerSleep]);
+
+  const handleUnlockRealm = useCallback(
+    (id: RealmId) => {
+      if (gameModeRef.current === 'multiplayer') {
+        sendWs({ type: 'action:unlock_realm', realmId: id });
+        return;
+      }
+      const world = worldRef.current;
+      const res = unlockRealm(world, id);
+      if (res.ok) {
+        audioEngine.playSfx('portal');
+        const realmName = getRealmLabel(id, langRef.current).name;
+        spawnParticleBurst(
+          world.player.x * TILE_SIZE,
+          world.player.y * TILE_SIZE,
+          REALM_DEFS[id].accentColor,
+          18,
+          44
+        );
+        addFloatingText(
+          world.player.x * TILE_SIZE,
+          (world.player.y - 1) * TILE_SIZE,
+          `${UI_TEXT[langRef.current].unlockedLabel}: ${realmName}`,
+          REALM_DEFS[id].accentColor
+        );
+        if (res.leveledUpTo) {
+          audioEngine.playSfx('levelup');
+          const lvlMsg = UI_TEXT[langRef.current].levelUpToast.replace('{n}', String(res.leveledUpTo));
+          addFloatingText(world.player.x * TILE_SIZE, (world.player.y - 1.6) * TILE_SIZE, lvlMsg, '#fde047');
+        }
+        checkNewBadges();
+        saveFarm();
+        syncHud();
+        if (blindModeRef.current) {
+          announceBlind(`${UI_TEXT[langRef.current].unlockedLabel}: ${realmName}`, true);
+        }
+      } else {
+        audioEngine.playSfx('error');
+        addFloatingText(
+          world.player.x * TILE_SIZE,
+          (world.player.y - 1) * TILE_SIZE,
+          res.message,
+          '#ff9b85'
+        );
+      }
+    },
+    [addFloatingText, announceBlind, checkNewBadges, saveFarm, sendWs, spawnParticleBurst, syncHud]
+  );
+
+  const handleTravelRealm = useCallback(
+    (id: RealmId) => {
+      if (gameModeRef.current === 'multiplayer') {
+        sendWs({ type: 'action:travel_realm', realmId: id });
+        return;
+      }
+      const world = worldRef.current;
+      const res = travelToRealm(world, id);
+      if (res.ok) {
+        audioEngine.playSfx('portal');
+        cameraRef.current.x = world.player.x * TILE_SIZE;
+        cameraRef.current.y = world.player.y * TILE_SIZE;
+        const realmName = getRealmLabel(id, langRef.current).name;
+        const arrivalMsg = UI_TEXT[langRef.current].realmArrivalToast.replace('{realm}', realmName);
+        spawnParticleBurst(
+          world.player.x * TILE_SIZE,
+          world.player.y * TILE_SIZE,
+          '#c084fc',
+          20,
+          48
+        );
+        addFloatingText(
+          world.player.x * TILE_SIZE,
+          (world.player.y - 1.2) * TILE_SIZE,
+          arrivalMsg,
+          REALM_DEFS[id].accentColor
+        );
+        setActiveModal('none');
+        checkNewBadges();
+        saveFarm();
+        syncHud();
+        if (blindModeRef.current) {
+          announceBlind(arrivalMsg, true);
+        }
+      } else {
+        audioEngine.playSfx('error');
+      }
+    },
+    [addFloatingText, announceBlind, checkNewBadges, saveFarm, sendWs, spawnParticleBurst, syncHud]
+  );
+
+  const handleQuickEat = useCallback(() => {
+    const world = worldRef.current;
+    if (gameModeRef.current === 'multiplayer') {
+      sendWs({ type: 'action:quick_eat' });
+      return;
+    }
+    const res = eatBestFood(world);
+    audioEngine.playSfx(res.ok ? (res.swiftApplied ? 'brew' : 'harvest') : 'error');
+    const wx = world.player.x * TILE_SIZE;
+    const wy = (world.player.y - 1) * TILE_SIZE;
+    if (res.ok && res.itemId) {
+      const itemLabel = getItemLabel(res.itemId, langRef.current).name;
+      const text = res.swiftApplied
+        ? `${itemLabel} · ${UI_TEXT[langRef.current].swiftBuffBadge}`
+        : `+${ITEMS[res.itemId]?.edibleStamina ?? 0}⚡ ${itemLabel}`;
+      addFloatingText(wx, wy, text, res.swiftApplied ? '#86efac' : '#fde68a');
+      spawnParticleBurst(wx, wy, res.swiftApplied ? '#4ade80' : '#fbbf24', 10, 34);
+      if (blindModeRef.current) announceBlind(text, true);
+      saveFarm();
+      syncHud();
+    } else {
+      const errMsg = formatFeedbackMessage({ performed: false, kind: 'error', message: res.message }, langRef.current);
+      addFloatingText(wx, wy, errMsg || res.message, '#ff9b85');
+      if (blindModeRef.current) announceBlind(errMsg || res.message, true);
+    }
+  }, [addFloatingText, announceBlind, saveFarm, sendWs, spawnParticleBurst, syncHud]);
 
   const handleTileClickAction = useCallback(
     (tx: number, ty: number) => {
@@ -1999,6 +2225,16 @@ export default function App() {
         audioEngine.playSfx('click');
         setShopInitialTab('seeds');
         setActiveModal('shop');
+        return;
+      }
+
+      // Clicking directly on Ancient Portal while near opens World Portals modal
+      if (getTile(world, tx, ty)?.terrain === 'portal' && isNearPortal(world)) {
+        audioEngine.playSfx('click');
+        setActiveModal('portals');
+        if (blindModeRef.current) {
+          announceBlind(UI_TEXT[langRef.current].portalModalTitle, true);
+        }
         return;
       }
 
@@ -2102,7 +2338,7 @@ export default function App() {
             announceBlind(feedbackText, true);
           }
         } else if (res.kind === 'fish') {
-          audioEngine.playSfx('fish');
+          audioEngine.playSfx(res.goldenPearl ? 'golden_catch' : 'fish');
           spawnParticleBurst(wx, wy, res.goldenPearl ? '#fde047' : '#38bdf8', 14, 48);
           if (feedbackText) addFloatingText(wx, wy - 10, feedbackText, res.goldenPearl ? '#fde047' : '#7dd3fc');
           if (blindModeRef.current && feedbackText) {
@@ -2123,14 +2359,17 @@ export default function App() {
             announceBlind(feedbackText, true);
           }
         } else if (res.kind === 'artisan') {
-          audioEngine.playSfx('harvest');
+          const isBrew = res.wishOutcome === 'butter' || res.wishOutcome === 'herbal_tea';
+          audioEngine.playSfx(isBrew ? 'brew' : 'harvest');
           spawnParticleBurst(wx, wy, '#fbbf24', 12, 40);
           if (feedbackText) addFloatingText(wx, wy - 10, feedbackText, '#fde68a');
           if (blindModeRef.current && feedbackText) {
             announceBlind(feedbackText, true);
           }
         } else if (res.kind === 'pet') {
-          audioEngine.playSfx(res.wishOutcome === 'dog' ? 'bark' : 'pet');
+          audioEngine.playSfx(
+            res.wishOutcome === 'dog' ? 'bark' : res.wishOutcome === 'cat' ? 'purr' : 'pet'
+          );
           spawnParticleBurst(wx, wy - 6, '#f472b6', 10, 34);
           if (feedbackText) addFloatingText(wx, wy - 12, feedbackText, '#f9a8d4');
           if (blindModeRef.current && feedbackText) {
@@ -2340,6 +2579,19 @@ export default function App() {
         return;
       }
 
+      if (key === 'x') {
+        e.preventDefault();
+        audioEngine.playSfx('click');
+        setActiveModal((prev) => {
+          const next = prev === 'portals' ? 'none' : 'portals';
+          if (blindModeRef.current && next === 'portals') {
+            announceBlind(UI_TEXT[langRef.current].portalModalTitle, true);
+          }
+          return next;
+        });
+        return;
+      }
+
       if (modalRef.current !== 'none' || futureOpenRef.current) return;
 
       if (key === 'f') {
@@ -2369,6 +2621,19 @@ export default function App() {
       if (key === 'k') {
         e.preventDefault();
         triggerEmote('❤️');
+        return;
+      }
+
+      if (key === 'q') {
+        e.preventDefault();
+        handleQuickEat();
+        return;
+      }
+
+      if (key === 'z') {
+        e.preventDefault();
+        audioEngine.playSfx('click');
+        setMiniMapOpen((prev) => !prev);
         return;
       }
 
@@ -2442,6 +2707,7 @@ export default function App() {
     handleBlindStatus,
     handleInteract,
     handleJoinOrToggleVoiceMic,
+    handleQuickEat,
     handleTileClickAction,
     hasSavedFarm,
     saveFarm,
@@ -2475,17 +2741,16 @@ export default function App() {
     };
   }, [disconnectMultiplayer, saveFarm]);
 
-  // Decoupled 3D WebGL Scene Setup + Live ResizeObserver + 60Hz Game Loop
+  // Decoupled Canvas Setup + Live ResizeObserver + 60Hz Game Loop
   useEffect(() => {
+    const canvas = canvasRef.current;
     const container = containerRef.current;
-    if (!container) return;
-
-    const scene3d = new EcoGrowScene3D(container);
-    scene3dRef.current = scene3d;
+    if (!canvas || !container) return;
 
     const resize = () => {
       const rect = container.getBoundingClientRect();
-      scene3d.resize(rect.width, rect.height);
+      canvas.width = Math.max(1, Math.floor(rect.width));
+      canvas.height = Math.max(1, Math.floor(rect.height));
       // Scale zoom cleanly across portrait, landscape phone, tablet, and desktop viewports
       const widthZoom = rect.width < 640 ? 1.55 : rect.width < 1100 ? 1.85 : 2.15;
       const heightZoom = rect.height / (9.5 * TILE_SIZE);
@@ -2497,7 +2762,7 @@ export default function App() {
     const ro = new ResizeObserver(resize);
     ro.observe(container);
 
-    let cancelFrame: (() => void) | null = null;
+    let rafId = 0;
     let lastTime = performance.now();
     let hudTimer = 0;
     let smokeTimer = 0;
@@ -2512,9 +2777,9 @@ export default function App() {
       const currentPhase = phaseRef.current;
       const modalOpen = modalRef.current !== 'none' || futureOpenRef.current;
 
-      // Ambient chimney smoke particles
+      // Ambient chimney smoke particles (Homestead only)
       smokeTimer += dt;
-      if (smokeTimer >= 0.45) {
+      if (smokeTimer >= 0.45 && (world.activeRealm ?? 'homestead') === 'homestead') {
         smokeTimer = 0;
         spawnParticleBurst(
           (FARMHOUSE_POS.x + FARMHOUSE_POS.w - 0.65) * TILE_SIZE,
@@ -2579,15 +2844,13 @@ export default function App() {
         }
 
         // 2. Player WASD / Arrow / Touch Thumbstick movement
-        const keys = modalOpen ? null : keysPressedRef.current;
+        const keys = modalOpen ? new Set<string>() : keysPressedRef.current;
         let mx = modalOpen ? 0 : joystickRef.current.x;
         let my = modalOpen ? 0 : joystickRef.current.y;
-        if (keys) {
-          if (keys.has('w') || keys.has('arrowup')) my -= 1;
-          if (keys.has('s') || keys.has('arrowdown')) my += 1;
-          if (keys.has('a') || keys.has('arrowleft')) mx -= 1;
-          if (keys.has('d') || keys.has('arrowright')) mx += 1;
-        }
+        if (keys.has('w') || keys.has('arrowup')) my -= 1;
+        if (keys.has('s') || keys.has('arrowdown')) my += 1;
+        if (keys.has('a') || keys.has('arrowleft')) mx -= 1;
+        if (keys.has('d') || keys.has('arrowright')) mx += 1;
 
         if (mx !== 0 || my !== 0) {
           const len = Math.hypot(mx, my);
@@ -2595,17 +2858,9 @@ export default function App() {
             mx /= len;
             my /= len;
           }
-          const yaw = scene3d.cameraYaw;
-          if (yaw !== 0) {
-            const cos = Math.cos(yaw);
-            const sin = Math.sin(yaw);
-            const rx = mx * cos + my * sin;
-            const ry = -mx * sin + my * cos;
-            mx = rx;
-            my = ry;
-          }
-          const sprinting = sprintActiveRef.current || Boolean(keys?.has('shift'));
-          const speed = sprinting ? 4.5 * 1.45 : 4.5; // tiles/sec
+          const sprinting = sprintActiveRef.current || keys.has('shift');
+          const swiftMult = isSwiftBuffActive(world) ? 1.25 : 1;
+          const speed = (sprinting ? 4.5 * 1.45 : 4.5) * swiftMult; // tiles/sec
           const nx = world.player.x + mx * speed * dt;
           const ny = world.player.y + my * speed * dt;
 
@@ -2632,6 +2887,15 @@ export default function App() {
               1,
               14,
               -10
+            );
+          } else if (swiftMult > 1 && (canMoveX || canMoveY) && Math.random() < dt * 8) {
+            spawnParticleBurst(
+              world.player.x * TILE_SIZE,
+              (world.player.y + 0.2) * TILE_SIZE,
+              '#fde047',
+              1,
+              12,
+              -8
             );
           }
 
@@ -2814,8 +3078,10 @@ export default function App() {
           }
         }
         audioEngine.setNightAmbience(isNightPhase, activeWildlifeCount);
+        audioEngine.setRainAmbience(world.weather === 'Rainstorm' && world.activeRealm !== 'sky_sanctuary');
       } else {
         audioEngine.setNightAmbience(false, 0);
+        audioEngine.setRainAmbience(false);
       }
 
       // Update camera shake
@@ -2850,41 +3116,48 @@ export default function App() {
         if (ft.life <= 0) floatingTextsRef.current.splice(i, 1);
       }
 
-      // Render 3D world (throttle slightly during pause/modals in solo mode)
+      // Render world (throttle slightly during pause/modals in solo mode)
       const shouldDraw =
         (currentPhase === 'playing' && (!modalOpen || gameModeRef.current === 'multiplayer')) ||
         Math.floor(elapsedRef.current * 4) !== Math.floor((elapsedRef.current - dt) * 4);
       if (shouldDraw) {
-        const nowMs = Date.now();
-        let activeEmotesMap: Record<string, string> | undefined;
-        let localEmote: string | undefined;
-        const myEmoteId = gameModeRef.current === 'multiplayer' ? getOrCreateClientId() : '__local__';
-        for (const [id, entry] of Object.entries(activeEmotesRef.current)) {
-          if (entry.expiresAt <= nowMs) {
-            delete activeEmotesRef.current[id];
-            continue;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          const rect = container.getBoundingClientRect();
+          const nowMs = Date.now();
+          let activeEmotesMap: Record<string, string> | undefined;
+          let localEmote: string | undefined;
+          const myEmoteId = gameModeRef.current === 'multiplayer' ? getOrCreateClientId() : '__local__';
+          for (const [id, entry] of Object.entries(activeEmotesRef.current)) {
+            if (entry.expiresAt <= nowMs) {
+              delete activeEmotesRef.current[id];
+              continue;
+            }
+            if (id === myEmoteId) {
+              localEmote = entry.text;
+            } else {
+              if (!activeEmotesMap) activeEmotesMap = {};
+              activeEmotesMap[id] = entry.text;
+            }
           }
-          if (id === myEmoteId) {
-            localEmote = entry.text;
-          } else {
-            if (!activeEmotesMap) activeEmotesMap = {};
-            activeEmotesMap[id] = entry.text;
-          }
+          renderGameWorld(
+            ctx,
+            rect.width,
+            rect.height,
+            world,
+            cameraRef.current,
+            particlesRef.current,
+            floatingTextsRef.current,
+            hoverTileRef.current,
+            elapsedRef.current,
+            currentPhase === 'title',
+            gameModeRef.current === 'multiplayer' ? remotePlayersRef.current : [],
+            gameModeRef.current === 'multiplayer' ? localPlayerMetaRef.current : undefined,
+            gameModeRef.current === 'multiplayer' ? voiceStatesRef.current : undefined,
+            activeEmotesMap,
+            localEmote
+          );
         }
-        scene3d.render(
-          world,
-          cameraRef.current,
-          particlesRef.current,
-          floatingTextsRef.current,
-          hoverTileRef.current,
-          elapsedRef.current,
-          currentPhase === 'title',
-          gameModeRef.current === 'multiplayer' ? remotePlayersRef.current : [],
-          gameModeRef.current === 'multiplayer' ? localPlayerMetaRef.current : undefined,
-          gameModeRef.current === 'multiplayer' ? voiceStatesRef.current : undefined,
-          activeEmotesMap,
-          localEmote
-        );
       }
 
       // Sync HUD only on discrete changes while playing without a modal open
@@ -2907,6 +3180,8 @@ export default function App() {
             ? 'well'
             : isNearShippingBin(world)
             ? 'bin'
+            : isNearPortal(world)
+            ? 'portal'
             : null;
           if (
             prev.timeClock === nextClock &&
@@ -2916,6 +3191,8 @@ export default function App() {
             prev.stamina === world.player.stamina &&
             prev.waterLevel === world.player.waterLevel &&
             prev.nightWarning === nextNightWarn &&
+            (prev.activeRealm ?? 'homestead') === (world.activeRealm ?? 'homestead') &&
+            (prev.unlockedRealmsCount ?? 1) === (world.unlockedRealms?.length ?? 1) &&
             (prev.nearPrompt?.action ?? null) === nextPromptAction
           ) {
             return prev;
@@ -2924,69 +3201,55 @@ export default function App() {
         });
       }
 
-      cancelFrame = scene3d.scheduleNextFrame(tick);
+      rafId = requestAnimationFrame(tick);
     };
 
-    cancelFrame = scene3d.scheduleNextFrame(tick);
+    rafId = requestAnimationFrame(tick);
     return () => {
-      cancelFrame?.();
+      cancelAnimationFrame(rafId);
       ro.disconnect();
-      scene3d.dispose();
-      scene3dRef.current = null;
     };
   }, [addFloatingText, announceBlind, saveFarm, sendWs, spawnParticleBurst, syncHud, triggerSleep]);
 
   const screenToTile = (clientX: number, clientY: number): { x: number; y: number } | null => {
-    return scene3dRef.current?.screenToTile(clientX, clientY, worldRef.current) ?? null;
+    const container = containerRef.current;
+    if (!container) return null;
+    const rect = container.getBoundingClientRect();
+    const cam = cameraRef.current;
+    const sx = clientX - rect.left;
+    const sy = clientY - rect.top;
+    const wx = (sx - rect.width / 2) / cam.zoom + cam.x;
+    const wy = (sy - rect.height / 2) / cam.zoom + cam.y;
+    const tx = Math.floor(wx / TILE_SIZE);
+    const ty = Math.floor(wy / TILE_SIZE);
+    const tile = getTile(worldRef.current, tx, ty);
+    return tile ? { x: tx, y: ty } : null;
   };
 
   return (
     <main className="relative w-full h-full overflow-hidden bg-[#1b1612]">
-      {/* Isolated 3D WebGL Canvas Mount */}
-      <div
-        ref={containerRef}
-        className="absolute inset-0 w-full h-full touch-none cursor-crosshair"
-        onContextMenu={(e) => e.preventDefault()}
-        onWheel={(e) => {
-          const s3d = scene3dRef.current;
-          if (!s3d || phase !== 'playing' || activeModal !== 'none') return;
-          s3d.userZoomMultiplier = Math.max(
-            0.65,
-            Math.min(1.7, s3d.userZoomMultiplier + e.deltaY * 0.0008)
-          );
-        }}
-        onPointerMove={(e) => {
-          if (orbitDragRef.current?.active && scene3dRef.current) {
-            const dx = e.clientX - orbitDragRef.current.lastX;
-            orbitDragRef.current.lastX = e.clientX;
-            scene3dRef.current.cameraYaw = Math.max(
-              -0.65,
-              Math.min(0.65, scene3dRef.current.cameraYaw - dx * 0.006)
-            );
-            return;
-          }
-          if (phase !== 'playing' || activeModal !== 'none') return;
-          hoverTileRef.current = screenToTile(e.clientX, e.clientY);
-        }}
-        onPointerUp={() => {
-          orbitDragRef.current = null;
-        }}
-        onPointerLeave={() => {
-          orbitDragRef.current = null;
-          hoverTileRef.current = null;
-        }}
-        onPointerDown={(e) => {
-          if (phase !== 'playing' || activeModal !== 'none') return;
-          if (e.button === 2) {
-            orbitDragRef.current = { active: true, lastX: e.clientX };
-            return;
-          }
-          const tileCoords = screenToTile(e.clientX, e.clientY);
-          if (tileCoords) {
-            handleTileClickAction(tileCoords.x, tileCoords.y);
-          }
-        }}
-      />
+      {/* Isolated Canvas Mount */}
+      <div ref={containerRef} className="absolute inset-0 w-full h-full">
+        <canvas
+          ref={canvasRef}
+          data-testid="farm-canvas"
+          className="block w-full h-full pixel-canvas cursor-crosshair"
+          onPointerMove={(e) => {
+            if (phase !== 'playing' || activeModal !== 'none') return;
+            hoverTileRef.current = screenToTile(e.clientX, e.clientY);
+          }}
+          onPointerLeave={() => {
+            hoverTileRef.current = null;
+          }}
+          onPointerDown={(e) => {
+            if (phase !== 'playing' || activeModal !== 'none') return;
+            const tileCoords = screenToTile(e.clientX, e.clientY);
+            if (tileCoords) {
+              handleTileClickAction(tileCoords.x, tileCoords.y);
+            }
+          }}
+        />
+      </div>
 
       <OfflineBanner lang={lang} />
 
@@ -3072,6 +3335,13 @@ export default function App() {
           )}
           harvestCombo={worldRef.current.harvestCombo ?? 0}
           sprintActive={sprintActive}
+          miniMapOpen={miniMapOpen}
+          onToggleMiniMap={() => {
+            audioEngine.playSfx('click');
+            setMiniMapOpen((p) => !p);
+          }}
+          onQuickEat={handleQuickEat}
+          farmWorld={worldRef.current}
           roomHud={gameMode === 'multiplayer' ? roomHud : null}
           chatOpen={chatOpen}
           unreadChatCount={unreadChatCount}
@@ -3139,6 +3409,16 @@ export default function App() {
               const next = prev === 'almanac' ? 'none' : 'almanac';
               if (blindModeRef.current && next === 'almanac') {
                 announceBlind(UI_TEXT[langRef.current].almanacTitle, true);
+              }
+              return next;
+            });
+          }}
+          onOpenPortals={() => {
+            audioEngine.playSfx('click');
+            setActiveModal((prev) => {
+              const next = prev === 'portals' ? 'none' : 'portals';
+              if (blindModeRef.current && next === 'portals') {
+                announceBlind(UI_TEXT[langRef.current].portalModalTitle, true);
               }
               return next;
             });
@@ -3233,6 +3513,7 @@ export default function App() {
           cowsCount={worldRef.current.cows?.length ?? 0}
           sheepCount={worldRef.current.sheep?.length ?? 0}
           hasDog={Boolean(worldRef.current.dog)}
+          hasCat={Boolean(worldRef.current.cat)}
           marketSurgeCrop={worldRef.current.marketSurgeCrop}
           dailyOrder={worldRef.current.dailyOrder}
           onFulfillOrder={() => {
@@ -3333,6 +3614,16 @@ export default function App() {
             if (res.ok) saveFarm();
             syncHud();
           }}
+          onBuyCat={() => {
+            if (gameModeRef.current === 'multiplayer') {
+              sendWs({ type: 'action:buy_animal', kind: 'cat' });
+              return;
+            }
+            const res = buyFarmCat(worldRef.current);
+            audioEngine.playSfx(res.ok ? 'purr' : 'error');
+            if (res.ok) saveFarm();
+            syncHud();
+          }}
           onClose={() => {
             audioEngine.playSfx('click');
             setActiveModal('none');
@@ -3346,7 +3637,7 @@ export default function App() {
           gold={hud.gold}
           inventory={hud.inventory}
           hotbar={hud.hotbar}
-          onCraft={(id: PlaceableType | 'fertilizer') => {
+          onCraft={(id: PlaceableType | 'fertilizer' | 'bio_mulch') => {
             if (gameModeRef.current === 'multiplayer') {
               sendWs({ type: 'action:craft', id });
               return;
@@ -3362,7 +3653,7 @@ export default function App() {
               return;
             }
             const res = eatCrop(worldRef.current, id);
-            audioEngine.playSfx(res.ok ? 'harvest' : 'error');
+            audioEngine.playSfx(res.ok ? (res.swiftApplied ? 'brew' : 'harvest') : 'error');
             if (res.ok) saveFarm();
             syncHud();
           }}
@@ -3402,6 +3693,19 @@ export default function App() {
         <AlmanacModal
           world={worldRef.current}
           lang={lang}
+          onClose={() => {
+            audioEngine.playSfx('click');
+            setActiveModal('none');
+          }}
+        />
+      )}
+
+      {phase === 'playing' && activeModal === 'portals' && (
+        <PortalModal
+          world={worldRef.current}
+          lang={lang}
+          onUnlockRealm={handleUnlockRealm}
+          onTravelRealm={handleTravelRealm}
           onClose={() => {
             audioEngine.playSfx('click');
             setActiveModal('none');

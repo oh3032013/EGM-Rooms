@@ -1,7 +1,6 @@
 import { DE_LOCALE, IT_LOCALE } from './locales/lang_de_it';
 import { ES_LOCALE, FR_LOCALE } from './locales/lang_fr_es';
 import { KO_LOCALE, ZH_LOCALE } from './locales/lang_ko_zh';
-import { applyPatchV20, PATCH_V20 } from './locales/patch_v20';
 import { PT_LOCALE, TR_LOCALE } from './locales/lang_pt_tr';
 import { JA_LOCALE, RU_LOCALE } from './locales/lang_ru_ja';
 import type { ExtraLanguage, LanguageOption, LocalePack } from './locales/types';
@@ -9,16 +8,16 @@ import type { ExtraLanguage, LanguageOption, LocalePack } from './locales/types'
 export type { ExtraLanguage, LanguageOption, LocalePack, UiTextMap } from './locales/types';
 
 export const EXTRA_LOCALES: Record<ExtraLanguage, LocalePack> = {
-  fr: applyPatchV20(FR_LOCALE, PATCH_V20.fr),
-  es: applyPatchV20(ES_LOCALE, PATCH_V20.es),
-  de: applyPatchV20(DE_LOCALE, PATCH_V20.de),
-  it: applyPatchV20(IT_LOCALE, PATCH_V20.it),
-  pt: applyPatchV20(PT_LOCALE, PATCH_V20.pt),
-  tr: applyPatchV20(TR_LOCALE, PATCH_V20.tr),
-  ru: applyPatchV20(RU_LOCALE, PATCH_V20.ru),
-  ja: applyPatchV20(JA_LOCALE, PATCH_V20.ja),
-  ko: applyPatchV20(KO_LOCALE, PATCH_V20.ko),
-  zh: applyPatchV20(ZH_LOCALE, PATCH_V20.zh),
+  fr: FR_LOCALE,
+  es: ES_LOCALE,
+  de: DE_LOCALE,
+  it: IT_LOCALE,
+  pt: PT_LOCALE,
+  tr: TR_LOCALE,
+  ru: RU_LOCALE,
+  ja: JA_LOCALE,
+  ko: KO_LOCALE,
+  zh: ZH_LOCALE,
 };
 
 export const LANGUAGE_OPTIONS: LanguageOption[] = [

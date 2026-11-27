@@ -19,12 +19,13 @@ import {
 } from './i18n';
 import {
   computeFarmRestorationPercent,
+  findPortalTile,
   getClaimableMissionsCount,
   getDayOfSeason,
   getSeason,
   getTile,
-  isHarvestFestivalDay,
   isNearFarmhouse,
+  isNearPortal,
   isNearShippingBin,
   isNearShopStall,
   isNearWell,
@@ -164,64 +165,55 @@ export function describeTileForBlind(
         ? lang === 'ar'
           ? 'خنزير بري متسلل! استخدم الفأس للدفاع'
           : 'Wild boar nearby! Use axe to repel'
-        : nearbyBeast.kind === 'fox'
-        ? lang === 'ar'
-          ? 'ثعلب ليلي متسلل! استخدم الفأس لإبعاده'
-          : 'Sly fox nearby! Use axe to repel'
         : lang === 'ar'
         ? 'أرنب بري متسلل! استخدم الفأس لإبعاده'
         : 'Wild rabbit nearby! Use axe to repel';
     return { text: name, cue: 'danger' };
   }
 
-  // Check if farmyard animals or guard dog are nearby
-  const nearbyCow = world.cows?.find(
-    (c) => Math.hypot(c.x - (tx + 0.5), c.y - (ty + 0.5)) <= 1.2
-  );
-  if (nearbyCow) {
-    return {
-      text: lang === 'ar' ? 'بقرة حلوب ترعى أمامك' : 'Dairy cow grazing nearby',
-      cue: 'clear',
-    };
-  }
-  const nearbySheep = world.sheep?.find(
-    (c) => Math.hypot(c.x - (tx + 0.5), c.y - (ty + 0.5)) <= 1.2
-  );
-  if (nearbySheep) {
-    return {
-      text: lang === 'ar' ? 'خروف المزرعة يتجول أمامك' : 'Fluffy sheep nearby',
-      cue: 'clear',
-    };
-  }
-  if (world.dog && Math.hypot(world.dog.x - (tx + 0.5), world.dog.y - (ty + 0.5)) <= 1.2) {
-    return {
-      text: lang === 'ar' ? 'كلب الحراسة يحمي المزرعة أمامك' : 'Loyal guard dog patrolling nearby',
-      cue: 'clear',
-    };
-  }
-  if (world.cat && Math.hypot(world.cat.x - (tx + 0.5), world.cat.y - (ty + 0.5)) <= 1.2) {
-    return {
-      text: lang === 'ar' ? 'قطة المزرعة الأليفة تتجول أمامك' : 'Barn tabby cat purring nearby',
-      cue: 'clear',
-    };
-  }
-  const nearbyDuck = world.ducks?.find(
-    (d) => Math.hypot(d.x - (tx + 0.5), d.y - (ty + 0.5)) <= 1.2
-  );
-  if (nearbyDuck) {
-    return {
-      text: lang === 'ar' ? 'بطة البركة تسبح أمامك' : 'Pond duck nearby',
-      cue: 'clear',
-    };
-  }
-  const nearbyChicken = world.chickens?.find(
-    (c) => Math.hypot(c.x - (tx + 0.5), c.y - (ty + 0.5)) <= 1.2
-  );
-  if (nearbyChicken) {
-    return {
-      text: lang === 'ar' ? 'دجاجة المزرعة تتجول أمامك' : 'Farmyard chicken nearby',
-      cue: 'clear',
-    };
+  const inHomestead = (world.activeRealm ?? 'homestead') === 'homestead';
+
+  // Check if farmyard animals or guard dog are nearby (only in Homestead)
+  if (inHomestead) {
+    const nearbyCow = world.cows?.find(
+      (c) => Math.hypot(c.x - (tx + 0.5), c.y - (ty + 0.5)) <= 1.2
+    );
+    if (nearbyCow) {
+      return {
+        text: lang === 'ar' ? 'بقرة حلوب ترعى أمامك' : 'Dairy cow grazing nearby',
+        cue: 'clear',
+      };
+    }
+    const nearbySheep = world.sheep?.find(
+      (c) => Math.hypot(c.x - (tx + 0.5), c.y - (ty + 0.5)) <= 1.2
+    );
+    if (nearbySheep) {
+      return {
+        text: lang === 'ar' ? 'خروف المزرعة يتجول أمامك' : 'Fluffy sheep nearby',
+        cue: 'clear',
+      };
+    }
+    if (world.dog && Math.hypot(world.dog.x - (tx + 0.5), world.dog.y - (ty + 0.5)) <= 1.2) {
+      return {
+        text: lang === 'ar' ? 'كلب الحراسة يحمي المزرعة أمامك' : 'Loyal guard dog patrolling nearby',
+        cue: 'clear',
+      };
+    }
+    if (world.cat && Math.hypot(world.cat.x - (tx + 0.5), world.cat.y - (ty + 0.5)) <= 1.2) {
+      return {
+        text: lang === 'ar' ? 'قط المزرعة اللطيف أمامك' : 'Cozy farm cat nearby',
+        cue: 'clear',
+      };
+    }
+    const nearbyChicken = world.chickens?.find(
+      (c) => Math.hypot(c.x - (tx + 0.5), c.y - (ty + 0.5)) <= 1.2
+    );
+    if (nearbyChicken) {
+      return {
+        text: lang === 'ar' ? 'دجاجة المزرعة تتجول أمامك' : 'Farmyard chicken nearby',
+        cue: 'clear',
+      };
+    }
   }
 
   if (tile.terrain === 'forest_edge') {
@@ -266,6 +258,15 @@ export function describeTileForBlind(
         lang === 'ar'
           ? 'صندوق الشحن — اضغط تفاعل لبيع المحاصيل'
           : 'Shipping bin — press E to sell crops',
+      cue: 'building',
+    };
+  }
+  if (tile.terrain === 'portal') {
+    return {
+      text:
+        lang === 'ar'
+          ? 'بوابة العوالم القديمة — اضغط تفاعل للسفر بين العوالم'
+          : 'Ancient World Portal — press E to travel between realms',
       cue: 'building',
     };
   }
@@ -398,10 +399,6 @@ export function getSmartGuidance(
         ? lang === 'ar'
           ? 'خنزير بري'
           : 'wild boar'
-        : best.kind === 'fox'
-        ? lang === 'ar'
-          ? 'ثعلب ليلي'
-          : 'sly fox'
         : lang === 'ar'
         ? 'أرنب بري'
         : 'wild rabbit';
@@ -415,8 +412,36 @@ export function getSmartGuidance(
     };
   }
 
-  // 2. Urgent: low stamina -> Farmhouse door
+  const inHomestead = (world.activeRealm ?? 'homestead') === 'homestead';
+  const portalTile = findPortalTile(world);
+
+  // 2. Urgent: low stamina -> Farmhouse door (or Portal if in another realm)
   if (world.player.stamina <= 15) {
+    if (!inHomestead && portalTile) {
+      const dx = portalTile.x + 0.5 - px;
+      const dy = portalTile.y + 0.5 - py;
+      const dist = Math.hypot(dx, dy);
+      if (isNearPortal(world)) {
+        return {
+          targetType: 'portal',
+          distance: dist,
+          text:
+            lang === 'ar'
+              ? 'أنت عند البوابة القديمة. اضغط تفاعل للعودة إلى المزرعة والنوم.'
+              : 'At Ancient Portal. Press E to return to Homestead and rest.',
+        };
+      }
+      const dir = formatDirectionSteps(dx, dy, lang);
+      return {
+        targetType: 'portal',
+        distance: dist,
+        text:
+          lang === 'ar'
+            ? `طاقتك منخفضة! اتجه إلى بوابة العودة: ${dir}.`
+            : `Low stamina! Head to Ancient Portal: ${dir}.`,
+      };
+    }
+
     const dx = FARMHOUSE_DOOR.x + 0.5 - px;
     const dy = FARMHOUSE_DOOR.y + 0.5 - py;
     const dist = Math.hypot(dx, dy);
@@ -441,8 +466,8 @@ export function getSmartGuidance(
     };
   }
 
-  // 3. Empty watering can -> Well
-  if (world.player.waterLevel <= 0) {
+  // 3. Empty watering can -> Well (in Homestead) or return Portal
+  if (world.player.waterLevel <= 0 && inHomestead) {
     const dx = WELL_POS.x + 0.5 - px;
     const dy = WELL_POS.y + 0.5 - py;
     const dist = Math.hypot(dx, dy);
@@ -509,7 +534,33 @@ export function getSmartGuidance(
     };
   }
 
-  // 6. Default: Village Shop or Farmhouse depending on proximity
+  // 6. Default: Portal when away, or Village Shop / Farmhouse when in Homestead
+  if (isNearPortal(world)) {
+    return {
+      targetType: 'portal',
+      distance: 1,
+      text:
+        lang === 'ar'
+          ? 'أنت عند بوابة العوالم، اضغط تفاعل للسفر بين العوالم.'
+          : 'At Ancient World Portal. Press E to travel between realms.',
+    };
+  }
+
+  if (!inHomestead && portalTile) {
+    const pDx = portalTile.x + 0.5 - px;
+    const pDy = portalTile.y + 0.5 - py;
+    const pDist = Math.hypot(pDx, pDy);
+    const pDir = formatDirectionSteps(pDx, pDy, lang);
+    return {
+      targetType: 'portal',
+      distance: pDist,
+      text:
+        lang === 'ar'
+          ? `أنت تستكشف عالماً جديداً. بوابة العودة: ${pDir}.`
+          : `Exploring realm. Ancient Portal: ${pDir}.`,
+    };
+  }
+
   if (isNearShopStall(world)) {
     return {
       targetType: 'shop',
@@ -564,11 +615,24 @@ export function buildStatusAnnouncement(world: GameWorldState, lang: Language): 
   const claimable = getClaimableMissionsCount(world);
   const facing = getFacingTileCoords(world);
   const frontDesc = describeTileForBlind(world, facing.tx, facing.ty, lang).text;
+  const realmId = world.activeRealm ?? 'homestead';
+  const realmEn: Record<string, string> = {
+    homestead: 'Homestead Valley',
+    whispering_woods: 'Whispering Woods',
+    crystal_oasis: 'Crystal Oasis',
+    sky_sanctuary: 'Sky Sanctuary',
+  };
+  const realmAr: Record<string, string> = {
+    homestead: 'وادي المزرعة',
+    whispering_woods: 'الغابة الهامسة',
+    crystal_oasis: 'واحة الكريستال',
+    sky_sanctuary: 'ملاذ السماء',
+  };
+  const realmName = lang === 'ar' ? realmAr[realmId] ?? realmId : realmEn[realmId] ?? realmId;
 
   if (lang === 'ar') {
     const missionNote = claimable > 0 ? ` لديك ${claimable} مكافأة تحدٍ جاهزة.` : '';
-    const festivalNote = isHarvestFestivalDay(world.day) ? ' اليوم مهرجان الحصاد +40%!' : '';
-    return `${season} اليوم ${day}، الساعة ${clock}، الطقس ${weather}.${festivalNote} الصحة ${Math.round(
+    return `العالم: ${realmName}. ${season} اليوم ${day}، الساعة ${clock}، الطقس ${weather}. الصحة ${Math.round(
       world.player.health
     )}، الطاقة ${Math.round(world.player.stamina)}، الماء ${world.player.waterLevel} من ${
       world.player.maxWaterLevel
@@ -576,8 +640,7 @@ export function buildStatusAnnouncement(world: GameWorldState, lang: Language): 
   }
 
   const missionNote = claimable > 0 ? ` ${claimable} mission reward ready.` : '';
-  const festivalNote = isHarvestFestivalDay(world.day) ? ' Harvest Festival +40% sell bonus!' : '';
-  return `${season} Day ${day}, ${clock}, ${weather}.${festivalNote} Health ${Math.round(
+  return `Realm: ${realmName}. ${season} Day ${day}, ${clock}, ${weather}. Health ${Math.round(
     world.player.health
   )}, Stamina ${Math.round(world.player.stamina)}, Water ${world.player.waterLevel} of ${
     world.player.maxWaterLevel

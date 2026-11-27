@@ -7,6 +7,7 @@ import type {
   LivestockEntity,
   MissionId,
   PlaceableType,
+  RealmId,
   Season,
   ToolType,
   WeatherType,
@@ -161,12 +162,15 @@ export type ClientToServerMessage =
   | { type: 'action:shop_buy'; itemId: ItemId; qty: number }
   | { type: 'action:shop_sell'; itemId: ItemId; qty: number }
   | { type: 'action:upgrade_tool'; tool: ToolType }
-  | { type: 'action:craft'; id: PlaceableType | 'fertilizer' }
+  | { type: 'action:craft'; id: PlaceableType | 'fertilizer' | 'bio_mulch' }
   | { type: 'action:eat'; id: ItemId }
+  | { type: 'action:quick_eat' }
   | { type: 'action:assign_hotbar'; id: ItemId; slotIdx: number }
   | { type: 'action:mission_claim'; id: MissionId }
   | { type: 'action:order_fulfill' }
-  | { type: 'action:buy_animal'; kind: 'chicken' | 'cow' | 'sheep' | 'dog' | 'cat' | 'duck' }
+  | { type: 'action:buy_animal'; kind: 'chicken' | 'cow' | 'sheep' | 'dog' | 'cat' }
+  | { type: 'action:unlock_realm'; realmId: RealmId }
+  | { type: 'action:travel_realm'; realmId: RealmId }
   | { type: 'action:sleep_vote'; ready: boolean }
   | { type: 'action:chat'; text: string }
   | { type: 'voice:state'; enabled: boolean; muted: boolean; speaking?: boolean }
@@ -210,7 +214,6 @@ export type ServerToClientMessage =
       sheep: LivestockEntity[];
       dog: LivestockEntity | null;
       cat?: LivestockEntity | null;
-      ducks?: LivestockEntity[];
     }
   | { type: 'fx:event'; fx: FxPayload }
   | { type: 'chat:message'; message: ChatMessage }
