@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { registerSW } from 'virtual:pwa-register';
 import { AlmanacModal } from './components/AlmanacModal';
+import { CoopHubModal } from './components/CoopHubModal';
 import { CraftModal } from './components/CraftModal';
+import { FestivalModal } from './components/FestivalModal';
 import { ForceUpdateModal } from './components/ForceUpdateModal';
 import { FunHubModal, type FunHubTabId } from './components/FunHubModal';
 import { FutureMessageModal } from './components/FutureMessageModal';
@@ -67,10 +69,12 @@ import {
   BADGE_TEXT,
   formatFeedbackMessage,
   formatMorningSummaryText,
+  getFestivalLabel,
   getInitialLanguage,
   getItemLabel,
   getLanguageSwitchMessage,
   getRealmLabel,
+  getRelicLabel,
   saveLanguagePreference,
   translateSeason,
   translateWeather,
@@ -85,12 +89,15 @@ import {
   saveMultiplayerServerUrl,
   type ChatMessage,
   type ClientToServerMessage,
+  type CoopChallengeKind,
+  type CoopChallengeState,
   type CoopEmote,
   type FxPayload,
   type GameMode,
   type RemotePlayerState,
   type RoomSummary,
   type ServerToClientMessage,
+  type TradeOffer,
   type VoicePeerState,
 } from './game/multiplayer';
 import { VoiceChatManager } from './game/voiceChat';
@@ -105,7 +112,9 @@ import {
   buyShopItem,
   catchNearbyFirefly,
   claimMissionReward,
+  computeEcoScore,
   computeFarmRestorationPercent,
+  cookRecipe,
   craftItem,
   createInitialFarmState,
   eatBestFood,
@@ -120,9 +129,13 @@ import {
   getSeason,
   getTile,
   getTimePhase,
+  hasClaimedCurrentFestival,
   hasNasaStation,
   interactWithStrangeZone,
   interactWithVillageElder,
+  isDoubleXpActive,
+  isEcoBlessingActive,
+  isFestivalDay,
   isNearFarmhouse,
   isNearMysteryChest,
   isNearPortal,
@@ -134,6 +147,7 @@ import {
   isSwiftBuffActive,
   isTileWalkable,
   openMysteryChest,
+  participateInFestival,
   performTileAction,
   renameFarmPet,
   rollDailyNatureTreasure,
@@ -156,6 +170,7 @@ import {
 } from './game/rules';
 import { REALM_STORIES, resolveStoryLang } from './game/story';
 import type {
+  CookedDishId,
   DaySummary,
   FarmerStyle,
   FloatingText,
@@ -167,6 +182,7 @@ import type {
   Particle,
   PlaceableType,
   RealmId,
+  RelicId,
   TileTerrain,
   ToolType,
 } from './game/types';
@@ -245,6 +261,11 @@ function buildHudSnapshot(world: GameWorldState): HudSnapshot {
     ),
     activeRealm: world.activeRealm ?? 'homestead',
     unlockedRealmsCount: world.unlockedRealms?.length ?? 1,
+    ecoScore: computeEcoScore(world).total,
+    doubleXpActive: isDoubleXpActive(world),
+    ecoBlessingActive: isEcoBlessingActive(world),
+    isFestivalDay: isFestivalDay(world),
+    festivalClaimed: hasClaimedCurrentFestival(world),
   };
 }
 
@@ -467,7 +488,30 @@ function loadSavedWorld(): GameWorldState | null {
       quizzesSolved: parsed.stats?.quizzesSolved ?? 0,
       wheelSpins: parsed.stats?.wheelSpins ?? 0,
       rushCompleted: parsed.stats?.rushCompleted ?? 0,
+      dishesCooked: parsed.stats?.dishesCooked ?? 0,
+      fruitsHarvested: parsed.stats?.fruitsHarvested ?? 0,
+      pestsCured: parsed.stats?.pestsCured ?? 0,
+      festivalsAttended: parsed.stats?.festivalsAttended ?? 0,
+      relicsFound: parsed.stats?.relicsFound ?? 0,
+      ecoDividendsEarned: parsed.stats?.ecoDividendsEarned ?? 0,
+      coopTradesCompleted: parsed.stats?.coopTradesCompleted ?? 0,
+      coopChallengesCompleted: parsed.stats?.coopChallengesCompleted ?? 0,
     };
+    parsed.doubleXpUntilMinutes =
+      typeof parsed.doubleXpUntilMinutes === 'number' && Number.isFinite(parsed.doubleXpUntilMinutes)
+        ? parsed.doubleXpUntilMinutes
+        : 0;
+    parsed.ecoBlessingUntilMinutes =
+      typeof parsed.ecoBlessingUntilMinutes === 'number' && Number.isFinite(parsed.ecoBlessingUntilMinutes)
+        ? parsed.ecoBlessingUntilMinutes
+        : 0;
+    parsed.collectedRelics = Array.isArray(parsed.collectedRelics)
+      ? parsed.collectedRelics.filter((r): r is RelicId => typeof r === 'string')
+      : [];
+    parsed.festivalClaimedSeasons = Array.isArray(parsed.festivalClaimedSeasons)
+      ? parsed.festivalClaimedSeasons.filter((k): k is string => typeof k === 'string')
+      : [];
+    parsed.lastMeteorStarsEarned = parsed.lastMeteorStarsEarned ?? 0;
     parsed.activeRealm =
       parsed.activeRealm && REALM_ORDER.includes(parsed.activeRealm)
         ? parsed.activeRealm
@@ -556,7 +600,8 @@ export default function App() {
 
   const [phase, setPhase] = useState<GamePhase>(autostart && !initialInviteCode ? 'playing' : 'title');
   const [hasSavedFarm, setHasSavedFarm] = useState<boolean>(() => Boolean(loadSavedWorld()));
-  const [activeModal, setActiveModal] = useState<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac' | 'portals' | 'story' | 'fun'>('none');
+  const [activeModal, setActiveModal] = useState<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac' | 'portals' | 'story' | 'fun' | 'festival' | 'coop_hub'>('none');
+  const [craftInitialTab, setCraftInitialTab] = useState<'craft' | 'satchel' | 'kitchen'>('craft');
   const [funInitialTab, setFunInitialTab] = useState<FunHubTabId>('spin');
   const [farmerStyle, setFarmerStyle] = useState<FarmerStyle>(() =>
     normalizeFarmerStyle(worldRef.current.playerStyle ?? loadSavedFarmerStyle())
@@ -611,6 +656,8 @@ export default function App() {
   const [chatOpen, setChatOpen] = useState<boolean>(false);
   const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
   const [miniMapOpen, setMiniMapOpen] = useState<boolean>(false);
+  const [coopChallenge, setCoopChallenge] = useState<CoopChallengeState | null>(null);
+  const [tradeOffers, setTradeOffers] = useState<TradeOffer[]>([]);
   const [showNetDebug, setShowNetDebug] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return new URLSearchParams(window.location.search).get('netdebug') === '1';
@@ -644,7 +691,7 @@ export default function App() {
   const [versionCooldownSec, setVersionCooldownSec] = useState<number>(0);
 
   const phaseRef = useRef<GamePhase>(phase);
-  const modalRef = useRef<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac' | 'portals' | 'story' | 'fun'>(activeModal);
+  const modalRef = useRef<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac' | 'portals' | 'story' | 'fun' | 'festival' | 'coop_hub'>(activeModal);
   const farmerStyleRef = useRef<FarmerStyle>(farmerStyle);
   farmerStyleRef.current = farmerStyle;
   const dashActiveUntilRef = useRef<number>(0);
@@ -1217,6 +1264,10 @@ export default function App() {
         if (fx.messageFrom2040) {
           setFutureDispatch(fx.messageFrom2040);
         }
+        if (fx.daySummary.relicUnlocked) {
+          const rLbl = getRelicLabel(fx.daySummary.relicUnlocked, langRef.current);
+          triggerCelebration(`✦ ${rLbl.name}`, rLbl.buff, 'purple', true);
+        }
         audioEngine.playSfx('morning');
         checkNewBadges();
         syncHud();
@@ -1271,6 +1322,10 @@ export default function App() {
         if (fx.sfx) audioEngine.playSfx(fx.sfx as Parameters<typeof audioEngine.playSfx>[0], fx.sfxArg);
         if (fx.color && fx.count) spawnParticleBurst(wx, wy, fx.color, fx.count, 44);
         if (fx.text) addFloatingText(wx, wy, fx.text, fx.textColor ?? '#ffe473');
+        if (fx.relicUnlocked) {
+          const rLbl = getRelicLabel(fx.relicUnlocked, langRef.current);
+          triggerCelebration(`✦ ${rLbl.name}`, rLbl.buff, 'purple', true);
+        }
         if (fx.storyKind && fx.storyRealm) {
           const sLang = resolveStoryLang(langRef.current);
           const st = REALM_STORIES[fx.storyRealm];
@@ -1389,6 +1444,12 @@ export default function App() {
           spawnParticleBurst(wx, wy, '#4ade80', 10, 36);
           if (resMsg) addFloatingText(wx, wy - 8, resMsg, '#86efac');
         } else if (fx.actionKind === 'artisan') {
+          if (fx.actorId === getOrCreateClientId() && fx.actionMessage === 'Opened Homestead Kitchen!') {
+            audioEngine.playSfx('click');
+            setCraftInitialTab('kitchen');
+            setActiveModal('craft');
+            return;
+          }
           const isBrew = Boolean(
             fx.actionMessage && (fx.actionMessage.includes('Butter') || fx.actionMessage.includes('Tea'))
           );
@@ -1420,7 +1481,7 @@ export default function App() {
         }
       }
     },
-    [addFloatingText, checkNewBadges, spawnParticleBurst, syncHud]
+    [addFloatingText, checkNewBadges, spawnParticleBurst, syncHud, triggerCelebration]
   );
 
   const disconnectMultiplayer = useCallback(
@@ -1474,6 +1535,8 @@ export default function App() {
       localPlayerMetaRef.current = undefined;
       activeEmotesRef.current = {};
       setRoomHud(null);
+      setCoopChallenge(null);
+      setTradeOffers([]);
       setChatOpen(false);
       setUnreadChatCount(0);
       gameModeRef.current = 'singleplayer';
@@ -1760,6 +1823,8 @@ export default function App() {
             voiceStates: initialVoiceStates,
             reconnecting: false,
           });
+          setCoopChallenge(msg.coopChallenge ?? null);
+          setTradeOffers(Array.isArray(msg.tradeOffers) ? msg.tradeOffers : []);
           setPhase('playing');
           audioEngine.playSfx('click');
           audioEngine.startAmbientMusic();
@@ -1769,6 +1834,12 @@ export default function App() {
         if (msg.type === 'world:sync') {
           const myId = getOrCreateClientId();
           applySyncedWorld(msg.world, msg.players, myId, true, msg.teleportIds);
+          if (msg.coopChallenge !== undefined) {
+            setCoopChallenge(msg.coopChallenge ?? null);
+          }
+          if (Array.isArray(msg.tradeOffers)) {
+            setTradeOffers(msg.tradeOffers);
+          }
           setRoomHud((prev) =>
             prev
               ? {
@@ -1781,6 +1852,12 @@ export default function App() {
               : prev
           );
           checkNewBadges();
+          return;
+        }
+
+        if (msg.type === 'coop:state') {
+          setCoopChallenge(msg.coopChallenge ?? null);
+          setTradeOffers(Array.isArray(msg.tradeOffers) ? msg.tradeOffers : []);
           return;
         }
 
@@ -1999,6 +2076,10 @@ export default function App() {
     setMorningSummary(summary);
     if (summary.messageFrom2040) {
       setFutureDispatch(summary.messageFrom2040);
+    }
+    if (summary.relicUnlocked) {
+      const rLbl = getRelicLabel(summary.relicUnlocked, langRef.current);
+      triggerCelebration(`✦ ${rLbl.name}`, rLbl.buff, 'purple', true);
     }
     audioEngine.playSfx('morning');
     // Place farmer outside farmhouse door (or realm portal spawn) refreshed
@@ -2275,7 +2356,11 @@ export default function App() {
         kind === 'elder' ? st.elderName[sLang] : st.strangeZoneName[sLang],
         kind === 'elder' ? '#fde047' : '#e879f9'
       );
-      if (res.leveledUpTo) {
+      if ('relicUnlocked' in res && res.relicUnlocked) {
+        const rLbl = getRelicLabel(res.relicUnlocked, langRef.current);
+        audioEngine.playSfx('fanfare');
+        triggerCelebration(`✦ ${rLbl.name}`, rLbl.buff, 'purple', true);
+      } else if (res.leveledUpTo) {
         audioEngine.playSfx('levelup');
         const lvlMsg = UI_TEXT[langRef.current].levelUpToast.replace('{n}', String(res.leveledUpTo));
         addFloatingText(wx, wy - 20, lvlMsg, '#fde047');
@@ -2900,19 +2985,25 @@ export default function App() {
             announceBlind(feedbackText, true);
           }
         } else if (res.kind === 'fertilize') {
-          audioEngine.playSfx('plant');
+          audioEngine.playSfx(res.wishOutcome === 'pest_cured' ? 'brew' : 'plant');
           spawnParticleBurst(wx, wy, '#4ade80', 10, 36);
           if (feedbackText) addFloatingText(wx, wy - 8, feedbackText, '#86efac');
           if (blindModeRef.current && feedbackText) {
             announceBlind(feedbackText, true);
           }
         } else if (res.kind === 'artisan') {
-          const isBrew = res.wishOutcome === 'butter' || res.wishOutcome === 'herbal_tea';
-          audioEngine.playSfx(isBrew ? 'brew' : 'harvest');
-          spawnParticleBurst(wx, wy, '#fbbf24', 12, 40);
-          if (feedbackText) addFloatingText(wx, wy - 10, feedbackText, '#fde68a');
-          if (blindModeRef.current && feedbackText) {
-            announceBlind(feedbackText, true);
+          if (res.wishOutcome === 'open_kitchen') {
+            audioEngine.playSfx('click');
+            setCraftInitialTab('kitchen');
+            setActiveModal('craft');
+          } else {
+            const isBrew = res.wishOutcome === 'butter' || res.wishOutcome === 'herbal_tea';
+            audioEngine.playSfx(isBrew ? 'brew' : 'harvest');
+            spawnParticleBurst(wx, wy, '#fbbf24', 12, 40);
+            if (feedbackText) addFloatingText(wx, wy - 10, feedbackText, '#fde68a');
+            if (blindModeRef.current && feedbackText) {
+              announceBlind(feedbackText, true);
+            }
           }
         } else if (res.kind === 'pet') {
           audioEngine.playSfx(
@@ -3108,6 +3199,7 @@ export default function App() {
       if (key === 'c' || key === 'i') {
         e.preventDefault();
         audioEngine.playSfx('click');
+        setCraftInitialTab('craft');
         setActiveModal((prev) => {
           const next = prev === 'craft' ? 'none' : 'craft';
           if (blindModeRef.current && next === 'craft') {
@@ -3877,6 +3969,10 @@ export default function App() {
             : isNearMysteryChest(world)
             ? 'chest'
             : null;
+          const nextDoubleXp = isDoubleXpActive(world);
+          const nextEcoBlessing = isEcoBlessingActive(world);
+          const nextFestivalDay = isFestivalDay(world);
+          const nextFestivalClaimed = hasClaimedCurrentFestival(world);
           if (
             prev.timeClock === nextClock &&
             prev.day === world.day &&
@@ -3885,6 +3981,10 @@ export default function App() {
             prev.stamina === world.player.stamina &&
             prev.waterLevel === world.player.waterLevel &&
             prev.nightWarning === nextNightWarn &&
+            prev.doubleXpActive === nextDoubleXp &&
+            prev.ecoBlessingActive === nextEcoBlessing &&
+            prev.isFestivalDay === nextFestivalDay &&
+            prev.festivalClaimed === nextFestivalClaimed &&
             (prev.activeRealm ?? 'homestead') === (world.activeRealm ?? 'homestead') &&
             (prev.unlockedRealmsCount ?? 1) === (world.unlockedRealms?.length ?? 1) &&
             (prev.nearPrompt?.action ?? null) === nextPromptAction
@@ -4061,6 +4161,24 @@ export default function App() {
           onToggleVoiceDeafen={handleToggleVoiceDeafen}
           onTogglePeerVoiceMute={handleTogglePeerVoiceMute}
           onDismissVoiceNotice={() => setVoiceLocal((prev) => ({ ...prev, notice: null }))}
+          onOpenFestival={() => {
+            audioEngine.playSfx('click');
+            setActiveModal((prev) => (prev === 'festival' ? 'none' : 'festival'));
+          }}
+          onOpenCoopHub={() => {
+            audioEngine.playSfx('click');
+            setActiveModal((prev) => (prev === 'coop_hub' ? 'none' : 'coop_hub'));
+          }}
+          coopChallenge={gameMode === 'multiplayer' ? coopChallenge : null}
+          pendingTradesCount={
+            gameMode === 'multiplayer' && roomHud
+              ? tradeOffers.filter(
+                  (o) =>
+                    o.fromId !== roomHud.playerId &&
+                    (o.toId === 'anyone' || o.toId === roomHud.playerId)
+                ).length
+              : 0
+          }
           onLeaveRoom={() => {
             disconnectMultiplayer(true, true);
             setActiveModal('none');
@@ -4091,6 +4209,7 @@ export default function App() {
           }}
           onOpenCraft={() => {
             audioEngine.playSfx('click');
+            setCraftInitialTab('craft');
             setActiveModal((prev) => (prev === 'craft' ? 'none' : 'craft'));
           }}
           onOpenNasa={() => {
@@ -4364,7 +4483,8 @@ export default function App() {
           gold={hud.gold}
           inventory={hud.inventory}
           hotbar={hud.hotbar}
-          onCraft={(id: PlaceableType | 'fertilizer' | 'bio_mulch') => {
+          initialTab={craftInitialTab}
+          onCraft={(id: PlaceableType | 'fertilizer' | 'bio_mulch' | 'pest_spray') => {
             if (gameModeRef.current === 'multiplayer') {
               sendWs({ type: 'action:craft', id });
               return;
@@ -4372,6 +4492,26 @@ export default function App() {
             const res = craftItem(worldRef.current, id);
             audioEngine.playSfx(res.ok ? 'place' : 'error');
             if (res.ok) saveFarm();
+            syncHud();
+          }}
+          onCook={(recipeId: CookedDishId) => {
+            if (gameModeRef.current === 'multiplayer') {
+              sendWs({ type: 'action:cook', recipeId });
+              return;
+            }
+            const res = cookRecipe(worldRef.current, recipeId);
+            audioEngine.playSfx(res.ok ? 'brew' : 'error');
+            if (res.ok) {
+              const wx = worldRef.current.player.x * TILE_SIZE;
+              const wy = (worldRef.current.player.y - 1) * TILE_SIZE;
+              spawnParticleBurst(wx, wy, '#fbbf24', 14, 42);
+              addFloatingText(wx, wy, `+1 ${getItemLabel(recipeId, langRef.current).name}`, '#fde047');
+              if (res.leveledUpTo) {
+                audioEngine.playSfx('levelup');
+              }
+              checkNewBadges();
+              saveFarm();
+            }
             syncHud();
           }}
           onEatCrop={(id: ItemId) => {
@@ -4525,6 +4665,61 @@ export default function App() {
           }}
           onStartRush={handleStartRush}
           onTakeSnapshot={handleTakeSnapshot}
+          onClose={() => {
+            audioEngine.playSfx('click');
+            setActiveModal('none');
+          }}
+        />
+      )}
+
+      {phase === 'playing' && activeModal === 'festival' && (
+        <FestivalModal
+          world={worldRef.current}
+          lang={lang}
+          onClaimFestival={() => {
+            if (gameModeRef.current === 'multiplayer') {
+              sendWs({ type: 'action:festival_claim' });
+              return;
+            }
+            const res = participateInFestival(worldRef.current);
+            audioEngine.playSfx(res.ok ? 'fanfare' : 'error');
+            if (res.ok) {
+              const fLabel = getFestivalLabel(res.season, langRef.current);
+              triggerCelebration(fLabel.title, `+${res.rewardGold}g`, 'gold', true);
+              saveFarm();
+            }
+            syncHud();
+          }}
+          onClose={() => {
+            audioEngine.playSfx('click');
+            setActiveModal('none');
+          }}
+        />
+      )}
+
+      {phase === 'playing' && activeModal === 'coop_hub' && gameMode === 'multiplayer' && roomHud && (
+        <CoopHubModal
+          lang={lang}
+          world={worldRef.current}
+          roomHud={roomHud}
+          coopChallenge={coopChallenge}
+          tradeOffers={tradeOffers}
+          onStartChallenge={(kind: CoopChallengeKind) => {
+            audioEngine.playSfx('click');
+            sendWs({ type: 'action:coop_challenge_start', kind });
+          }}
+          onSendTrade={(payload) => {
+            audioEngine.playSfx('coin');
+            sendWs({ type: 'action:trade_send', ...payload });
+          }}
+          onAcceptTrade={(tradeId: string) => {
+            audioEngine.playSfx('coin');
+            sendWs({ type: 'action:trade_accept', tradeId });
+          }}
+          onDeclineTrade={(tradeId: string) => {
+            audioEngine.playSfx('click');
+            sendWs({ type: 'action:trade_decline', tradeId });
+          }}
           onClose={() => {
             audioEngine.playSfx('click');
             setActiveModal('none');

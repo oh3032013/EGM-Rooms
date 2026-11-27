@@ -346,6 +346,18 @@ export function describeTileForBlind(
     return { text: label, cue: 'building' };
   }
 
+  if (tile.fruitTree) {
+    const treeName = getItemLabel(tile.fruitTree.kind, lang).name;
+    const msg = tile.fruitTree.hasFruit
+      ? lang === 'ar'
+        ? `${treeName} مثمرة! اضغط استخدام للقطف`
+        : `${treeName} has ripe fruit! Press Use to harvest`
+      : lang === 'ar'
+      ? `${treeName} (${tile.fruitTree.growthDays} يوم)`
+      : `${treeName} (${tile.fruitTree.growthDays}d)`;
+    return { text: msg, cue: tile.fruitTree.hasFruit ? 'crop_ripe' : 'crop_growing' };
+  }
+
   if (tile.crop) {
     const cropName = getCropDisplayName(tile.crop.type, lang);
     if (tile.crop.withered) {
@@ -355,6 +367,15 @@ export function describeTileForBlind(
             ? `${cropName} ذابل — أزله بالمجرفة`
             : `Withered ${cropName} — clear with hoe`,
         cue: 'obstacle',
+      };
+    }
+    if (tile.crop.pestInfested) {
+      return {
+        text:
+          lang === 'ar'
+            ? `${cropName} مصاب بآفات! عالجه ببخاخ النيم`
+            : `${cropName} has pests! Cure with Neem Spray`,
+        cue: 'danger',
       };
     }
     const def = CROPS[tile.crop.type];

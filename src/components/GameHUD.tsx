@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { AudioLines, BookOpen, Camera, Check, Compass, Copy, Eye, Flame, Gamepad2, Hammer, Headphones, Link2, LogOut, Map as MapIcon, Maximize2, MessageSquare, Mic, MicOff, Minimize2, Moon, PackageCheck, Pause, PhoneOff, Satellite, ScrollText, Send, ShoppingBag, Sparkles, Trophy, Users, Utensils, Volume2, VolumeX, Wind, X, Zap } from 'lucide-react';
+import { AudioLines, BookOpen, Camera, Check, Compass, Copy, Eye, Flame, Gamepad2, Hammer, Handshake, Headphones, Leaf, Link2, LogOut, Map as MapIcon, Maximize2, MessageSquare, Mic, MicOff, Minimize2, Moon, PackageCheck, PartyPopper, Pause, PhoneOff, Satellite, ScrollText, Send, ShoppingBag, Sparkles, Timer, Trophy, Users, Utensils, Volume2, VolumeX, Wind, X, Zap } from 'lucide-react';
 import { CROPS, ITEMS, REALM_DEFS } from '../game/constants';
 import {
   formatMorningSummaryText,
   formatTimeLocalized,
+  getFeatureText,
   getItemLabel,
   getNearPromptLabel,
   getRealmLabel,
@@ -16,6 +17,7 @@ import {
   COOP_EMOTES,
   PLAYER_PALETTE,
   type ChatMessage,
+  type CoopChallengeState,
   type CoopEmote,
   type RemotePlayerState,
   type VoicePeerState,
@@ -67,6 +69,11 @@ export interface HudSnapshot {
   hasEdibleFood?: boolean;
   activeRealm?: RealmId;
   unlockedRealmsCount?: number;
+  ecoScore?: number;
+  doubleXpActive?: boolean;
+  ecoBlessingActive?: boolean;
+  isFestivalDay?: boolean;
+  festivalClaimed?: boolean;
 }
 
 export interface CelebrationBannerState {
@@ -142,6 +149,10 @@ interface GameHUDProps {
   onToggleVoiceDeafen?: () => void;
   onTogglePeerVoiceMute?: (peerId: string) => void;
   onDismissVoiceNotice?: () => void;
+  onOpenFestival?: () => void;
+  onOpenCoopHub?: () => void;
+  coopChallenge?: CoopChallengeState | null;
+  pendingTradesCount?: number;
 }
 
 export function GameHUD({
@@ -202,11 +213,17 @@ export function GameHUD({
   onToggleVoiceDeafen,
   onTogglePeerVoiceMute,
   onDismissVoiceNotice,
+  onOpenFestival,
+  onOpenCoopHub,
+  coopChallenge = null,
+  pendingTradesCount = 0,
 }: GameHUDProps) {
   const t = UI_TEXT[lang];
+  const fx = getFeatureText(lang);
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [chatInput, setChatInput] = useState('');
+  const [coopNowMs, setCoopNowMs] = useState<number>(() => Date.now());
   const chatInputRef = useRef<HTMLInputElement | null>(null);
   const miniMapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const copiedCodeTimerRef = useRef<number | null>(null);
@@ -217,6 +234,13 @@ export function GameHUD({
   const healthPct = Math.max(0, Math.min(100, (hud.health / hud.maxHealth) * 100));
   const staminaPct = Math.max(0, Math.min(100, (hud.stamina / hud.maxStamina) * 100));
   const promptText = hud.nearPrompt ? getNearPromptLabel(hud.nearPrompt.action, lang) : null;
+
+  useEffect(() => {
+    if (!coopChallenge || coopChallenge.status !== 'active') return;
+    setCoopNowMs(Date.now());
+    const id = window.setInterval(() => setCoopNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [coopChallenge]);
 
   useEffect(() => {
     if (!miniMapOpen || !farmWorld) return;
@@ -270,7 +294,16 @@ export function GameHUD({
 
           if (tile.crop) {
             const ripe = tile.crop.growthDays >= CROPS[tile.crop.type].daysToGrow;
-            ctx.fillStyle = tile.crop.withered ? '#6b7280' : ripe ? '#fde047' : '#4ade80';
+            ctx.fillStyle = tile.crop.pestInfested
+              ? '#ef4444'
+              : tile.crop.withered
+              ? '#6b7280'
+              : ripe
+              ? '#fde047'
+              : '#4ade80';
+            ctx.fillRect(x * scale + 1, y * scale + 1, scale - 2, scale - 2);
+          } else if (tile.fruitTree) {
+            ctx.fillStyle = tile.fruitTree.hasFruit ? '#f59e0b' : '#15803d';
             ctx.fillRect(x * scale + 1, y * scale + 1, scale - 2, scale - 2);
           } else if (tile.structure) {
             ctx.fillStyle =
@@ -278,6 +311,10 @@ export function GameHUD({
                 ? '#7dd3fc'
                 : tile.structure.type === 'owl_box'
                 ? '#a78bfa'
+                : tile.structure.type === 'ladybug_house'
+                ? '#f87171'
+                : tile.structure.type === 'cooking_stove'
+                ? '#fb923c'
                 : '#cbd5e1';
             ctx.fillRect(x * scale + 1, y * scale + 1, scale - 2, scale - 2);
           }
@@ -393,9 +430,21 @@ export function GameHUD({
                   />
                 </span>
               </div>
-              <div className="text-[10px] sm:text-xs text-[#d6c2a3] font-mono-tabular" data-testid="hud-restoration">
-                {Math.round(hud.restorationPct)}%
-                <span className="hidden sm:inline"> {t.restored}</span>
+              <div className="flex items-center gap-1.5 text-[10px] sm:text-xs text-[#d6c2a3] font-mono-tabular">
+                <button
+                  type="button"
+                  onClick={onOpenNasa}
+                  data-testid="hud-eco-score"
+                  title={fx.ecoGridTitle}
+                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-[#14532d]/85 border border-[#4ade80]/60 text-[#bbf7d0] hover:bg-[#166534] cursor-pointer"
+                >
+                  <Leaf className="w-3 h-3 text-[#4ade80]" />
+                  <span>{hud.ecoScore ?? 0}%</span>
+                </button>
+                <span data-testid="hud-restoration">
+                  {Math.round(hud.restorationPct)}%
+                  <span className="hidden sm:inline"> {t.restored}</span>
+                </span>
               </div>
             </div>
 
@@ -439,7 +488,7 @@ export function GameHUD({
                 </button>
               </div>
             )}
-            {(harvestCombo >= 2 || hud.swiftActive || (hud.day >= 2 && (hud.streakBonusGold ?? 0) > 0)) && (
+            {(harvestCombo >= 2 || hud.swiftActive || hud.doubleXpActive || hud.ecoBlessingActive || (hud.day >= 2 && (hud.streakBonusGold ?? 0) > 0)) && (
               <div className="mt-1 flex flex-wrap items-center gap-1" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
                 {harvestCombo >= 2 && (
                   <div
@@ -461,6 +510,24 @@ export function GameHUD({
                   >
                     <Sparkles className="w-3 h-3 text-[#fde047]" />
                     <span>{t.swiftBuffBadge}</span>
+                  </div>
+                )}
+                {hud.doubleXpActive && (
+                  <div
+                    data-testid="hud-double-xp-badge"
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#4c1d95] border border-[#c084fc] text-[10px] font-bold text-[#e9d5ff]"
+                  >
+                    <Sparkles className="w-3 h-3 text-[#fde047]" />
+                    <span>{fx.doubleXpBuff}</span>
+                  </div>
+                )}
+                {hud.ecoBlessingActive && (
+                  <div
+                    data-testid="hud-eco-blessing-badge"
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#155e75] border border-[#38bdf8] text-[10px] font-bold text-[#bae6fd]"
+                  >
+                    <Zap className="w-3 h-3 text-[#7dd3fc]" />
+                    <span>{fx.ecoStamBuff}</span>
                   </div>
                 )}
                 {hud.day >= 2 && (hud.streakBonusGold ?? 0) > 0 && (
@@ -834,6 +901,23 @@ export function GameHUD({
               </div>
             </div>
 
+            {hud.isFestivalDay && onOpenFestival && (
+              <button
+                type="button"
+                dir={lang === 'ar' ? 'rtl' : 'ltr'}
+                data-testid="hud-festival-btn"
+                onClick={onOpenFestival}
+                className={`rounded-md px-2.5 py-1 text-[11px] sm:text-xs font-bold pointer-events-auto cursor-pointer flex items-center gap-1.5 ${
+                  hud.festivalClaimed
+                    ? 'wood-button text-[#bbf7d0]'
+                    : 'wood-button-primary ring-2 ring-[#fde047] animate-banner-pop'
+                }`}
+              >
+                <PartyPopper className="w-3.5 h-3.5 text-[#fde047]" />
+                <span>{fx.festivalBannerBtn}</span>
+              </button>
+            )}
+
             {dailyOrderReady && (
               <button
                 type="button"
@@ -949,6 +1033,27 @@ export function GameHUD({
                       <span className="hidden sm:inline">{t.voiceJoinBtn}</span>
                     </button>
                   )
+                )}
+                {onOpenCoopHub && (
+                  <button
+                    type="button"
+                    data-testid="hud-coop-hub-btn"
+                    onClick={onOpenCoopHub}
+                    title={fx.coopHubBtn}
+                    className={`relative px-1.5 py-0.5 rounded text-[10px] font-semibold inline-flex items-center gap-1 cursor-pointer ${
+                      coopChallenge?.status === 'active' || pendingTradesCount > 0
+                        ? 'wood-button-primary ring-1 ring-[#fde047]'
+                        : 'wood-button'
+                    }`}
+                  >
+                    <Handshake className="w-3 h-3 text-[#fde047]" />
+                    <span className="hidden sm:inline">{fx.coopHubBtn}</span>
+                    {pendingTradesCount > 0 && (
+                      <span className="px-1 min-w-[14px] h-3.5 rounded-full bg-[#22c55e] text-white text-[9px] font-mono-tabular font-bold flex items-center justify-center">
+                        {pendingTradesCount}
+                      </span>
+                    )}
+                  </button>
                 )}
                 {onToggleChat && (
                   <button
@@ -1256,6 +1361,24 @@ export function GameHUD({
               {rushState.remainingSec}s
             </span>
           </div>
+        )}
+
+        {roomHud && coopChallenge && coopChallenge.status === 'active' && (
+          <button
+            type="button"
+            dir={lang === 'ar' ? 'rtl' : 'ltr'}
+            data-testid="coop-challenge-banner"
+            onClick={onOpenCoopHub}
+            className="self-center pointer-events-auto rounded-xl bg-gradient-to-r from-[#1e3a8a] via-[#1d4ed8] to-[#1e3a8a] border-2 border-[#7dd3fc] px-4 py-1.5 text-xs sm:text-sm font-bold text-[#e0f2fe] flex items-center gap-3 shadow-lg cursor-pointer animate-banner-pop"
+          >
+            <Timer className="w-4 h-4 text-[#fde047] shrink-0" />
+            <span>
+              {fx.activeChallengeTitle}: {coopChallenge.progress}/{coopChallenge.target}
+            </span>
+            <span className="px-2 py-0.5 rounded bg-[#0f172a] text-[#fde047] font-mono-tabular">
+              {Math.max(0, Math.ceil((coopChallenge.expiresAtMs - coopNowMs) / 1000))}s
+            </span>
+          </button>
         )}
 
         {/* Celebration Milestone Banner (non-blocking pop for level-ups, badges, realms, quests) */}

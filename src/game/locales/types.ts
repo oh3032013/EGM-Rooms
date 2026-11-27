@@ -292,7 +292,7 @@ export interface LocalePack {
   nearPrompts: Record<'sleep' | 'shop' | 'well' | 'bin' | 'portal', string>;
   realms: Record<RealmId, { name: string; desc: string; perk: string }>;
   items: Record<ItemId, { name: string; description: string; roleClue: string }>;
-  recipes: Partial<Record<PlaceableType | 'fertilizer' | 'bio_mulch', { name: string; description: string }>>;
+  recipes: Partial<Record<PlaceableType | 'fertilizer' | 'bio_mulch' | 'pest_spray', { name: string; description: string }>>;
   missions: Partial<Record<MissionId, { title: string; desc: string }>>;
   badges: Record<BadgeId, { title: string; desc: string }>;
   morning: {

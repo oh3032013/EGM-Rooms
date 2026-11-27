@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import { X } from 'lucide-react';
-import { CRAFT_RECIPES, ITEMS } from '../game/constants';
-import { getItemLabel, getRecipeLabel, UI_TEXT, type Language } from '../game/i18n';
-import type { ItemId, PlaceableType } from '../game/types';
+import { useEffect, useState } from 'react';
+import { FlameKindling, X } from 'lucide-react';
+import { COOKING_RECIPES, CRAFT_RECIPES, ITEMS } from '../game/constants';
+import { getBuffLabel, getFeatureText, getItemLabel, getRecipeLabel, UI_TEXT, type Language } from '../game/i18n';
+import type { CookedDishId, ItemId, PlaceableType } from '../game/types';
 import { ItemIcon } from './PixelIcons';
 
 interface CraftModalProps {
@@ -10,7 +10,9 @@ interface CraftModalProps {
   gold: number;
   inventory: Partial<Record<ItemId, number>>;
   hotbar: (ItemId | null)[];
-  onCraft: (id: PlaceableType | 'fertilizer' | 'bio_mulch') => void;
+  initialTab?: 'craft' | 'satchel' | 'kitchen';
+  onCraft: (id: PlaceableType | 'fertilizer' | 'bio_mulch' | 'pest_spray') => void;
+  onCook?: (id: CookedDishId) => void;
   onEatCrop: (id: ItemId) => void;
   onAssignHotbar: (id: ItemId, slotIdx: number) => void;
   onClose: () => void;
@@ -21,14 +23,21 @@ export function CraftModal({
   gold,
   inventory,
   hotbar,
+  initialTab = 'craft',
   onCraft,
+  onCook,
   onEatCrop,
   onAssignHotbar,
   onClose,
 }: CraftModalProps) {
-  const [tab, setTab] = useState<'craft' | 'satchel'>('craft');
+  const [tab, setTab] = useState<'craft' | 'satchel' | 'kitchen'>(initialTab);
   const [selectedForSlot, setSelectedForSlot] = useState<ItemId | null>(null);
   const t = UI_TEXT[lang];
+  const fx = getFeatureText(lang);
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
 
   const woodCount = inventory.wood ?? 0;
   const stoneCount = inventory.stone ?? 0;
@@ -72,6 +81,17 @@ export function CraftModal({
             }`}
           >
             {t.craftTab}
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('kitchen')}
+            data-testid="craft-kitchen-tab"
+            className={`px-3.5 py-1.5 rounded-md text-sm font-semibold cursor-pointer whitespace-nowrap inline-flex items-center gap-1.5 ${
+              tab === 'kitchen' ? 'bg-[#b45309] text-white' : 'bg-[#e5d2af] text-[#4a3322] hover:bg-[#dbc39a]'
+            }`}
+          >
+            <FlameKindling className="w-3.5 h-3.5" />
+            <span>{fx.kitchenTab}</span>
           </button>
           <button
             type="button"
@@ -135,6 +155,77 @@ export function CraftModal({
                 </div>
               );
             })}
+
+          {tab === 'kitchen' && (
+            <div className="space-y-3">
+              <div className="p-3 rounded-lg bg-[#fef6dc] border border-[#cfa859]">
+                <div className="font-bold text-sm text-[#78350f]">{fx.kitchenTitle}</div>
+                <div className="text-xs text-[#694d36] mt-0.5">{fx.kitchenSub}</div>
+              </div>
+              {COOKING_RECIPES.map((recipe) => {
+                let canCook = true;
+                const reqBadges: { id: ItemId; name: string; owned: number; qty: number }[] = [];
+                for (const [k, qty] of Object.entries(recipe.ingredients)) {
+                  if (!qty) continue;
+                  const id = k as ItemId;
+                  const owned = inventory[id] ?? 0;
+                  if (owned < qty) canCook = false;
+                  reqBadges.push({ id, name: getItemLabel(id, lang).name, owned, qty });
+                }
+                const dishDef = ITEMS[recipe.id];
+                const dishLabel = getItemLabel(recipe.id, lang);
+
+                return (
+                  <div
+                    key={recipe.id}
+                    data-testid={`kitchen-recipe-${recipe.id}`}
+                    className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 p-3 rounded-lg bg-[#fbf2e1] border border-[#d6be96]"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <ItemIcon id={recipe.id} className="w-9 h-9 shrink-0" />
+                      <div className="min-w-0">
+                        <div className="font-semibold text-sm text-[#2c1e14] flex flex-wrap items-center gap-1.5">
+                          <span>{dishLabel.name}</span>
+                          {recipe.buff && (
+                            <span className="px-1.5 py-0.5 rounded bg-[#14532d] text-[#bbf7d0] text-[10px] font-bold">
+                              {getBuffLabel(recipe.buff, lang)}
+                            </span>
+                          )}
+                          <span dir="ltr" className="text-[10px] font-mono-tabular font-bold text-[#9a3412]">
+                            +{dishDef.edibleStamina ?? 0}⚡ · {dishDef.sellPrice ?? 0}g
+                          </span>
+                        </div>
+                        <div className="text-xs text-[#694d36]">{dishLabel.description}</div>
+                        <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                          {reqBadges.map((rb) => (
+                            <span
+                              key={rb.id}
+                              className={`text-[11px] font-mono-tabular px-1.5 py-0.5 rounded border ${
+                                rb.owned >= rb.qty
+                                  ? 'bg-[#e6f4ea] border-[#7bbd8c] text-[#1e5631]'
+                                  : 'bg-[#fef2f2] border-[#fca5a5] text-[#991b1b]'
+                              }`}
+                            >
+                              {rb.name} ({rb.owned}/{rb.qty})
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!canCook}
+                      data-testid={`cook-btn-${recipe.id}`}
+                      onClick={() => onCook?.(recipe.id)}
+                      className="wood-button-primary px-4 py-1.5 rounded text-xs font-semibold disabled:opacity-45 cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      {fx.cookBtn}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {tab === 'satchel' && (
             <div className="space-y-4">

@@ -514,6 +514,157 @@ export function ItemIcon({ id, className = 'w-6 h-6' }: { id: ItemId; className?
           <rect x="11" y="4" width="3" height="2" fill="#fde047" />
         </svg>
       );
+    case 'pest_spray':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="8" y="8" width="8" height="12" rx="2" fill="#16a34a" stroke="#14532d" strokeWidth="1.4" />
+          <rect x="10" y="4" width="4" height="4" fill="#e2e8f0" />
+          <rect x="14" y="4" width="4" height="2" fill="#94a3b8" />
+          <rect x="10" y="11" width="4" height="5" fill="#86efac" />
+          <rect x="19" y="3" width="2" height="2" fill="#bbf7d0" />
+          <rect x="19" y="6" width="2" height="2" fill="#bbf7d0" />
+        </svg>
+      );
+    case 'apple_sapling':
+    case 'olive_sapling':
+    case 'palm_sapling': {
+      const leaf =
+        id === 'apple_sapling' ? '#22c55e' : id === 'olive_sapling' ? '#4d7c5b' : '#15803d';
+      const fruit =
+        id === 'apple_sapling' ? '#ef4444' : id === 'olive_sapling' ? '#bef264' : '#f59e0b';
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="10" y="13" width="4" height="7" fill="#7c4a21" />
+          <rect x="6" y="6" width="12" height="8" rx="3" fill={leaf} />
+          <rect x="8" y="4" width="8" height="4" rx="2" fill={leaf} />
+          <rect x="9" y="8" width="2" height="2" fill={fruit} />
+          <rect x="13" y="10" width="2" height="2" fill={fruit} />
+          <rect x="7" y="19" width="10" height="2" fill="#6b4528" />
+        </svg>
+      );
+    }
+    case 'ladybug_house':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="11" y="15" width="2" height="6" fill="#6b4528" />
+          <rect x="6" y="7" width="12" height="9" rx="3" fill="#dc2626" stroke="#7f1d1d" strokeWidth="1.2" />
+          <rect x="8" y="5" width="8" height="3" fill="#1e293b" />
+          <rect x="9" y="10" width="2" height="2" fill="#0f172a" />
+          <rect x="13" y="11" width="2" height="2" fill="#0f172a" />
+          <rect x="11" y="13" width="2" height="3" fill="#fef08a" />
+        </svg>
+      );
+    case 'cooking_stove':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="4" y="9" width="16" height="11" rx="1" fill="#9a3412" stroke="#451a03" strokeWidth="1.3" />
+          <rect x="5" y="7" width="14" height="3" fill="#475569" />
+          <rect x="8" y="4" width="8" height="4" rx="1" fill="#334155" />
+          <rect x="9" y="13" width="6" height="5" rx="1" fill="#f97316" />
+          <rect x="10" y="15" width="4" height="3" fill="#fde047" />
+        </svg>
+      );
+    case 'wooden_bench':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="4" y="7" width="16" height="4" fill="#9a5f32" />
+          <rect x="3" y="12" width="18" height="3" fill="#b87642" />
+          <rect x="5" y="15" width="3" height="5" fill="#5c361a" />
+          <rect x="16" y="15" width="3" height="5" fill="#5c361a" />
+        </svg>
+      );
+    case 'festive_lantern':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="7" y="19" width="10" height="2" fill="#5c361a" />
+          <rect x="11" y="6" width="2" height="13" fill="#7c4a21" />
+          <rect x="11" y="4" width="7" height="2" fill="#7c4a21" />
+          <rect x="14" y="6" width="6" height="7" rx="2" fill="#fbbf24" stroke="#b45309" strokeWidth="1.2" />
+          <rect x="15" y="8" width="4" height="3" fill="#fef08a" />
+        </svg>
+      );
+    case 'garden_arch':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="4" y="8" width="3" height="13" fill="#15803d" />
+          <rect x="17" y="8" width="3" height="13" fill="#15803d" />
+          <rect x="5" y="4" width="14" height="5" rx="2" fill="#22c55e" />
+          <rect x="7" y="5" width="3" height="3" fill="#f472b6" />
+          <rect x="14" y="5" width="3" height="3" fill="#fde047" />
+          <rect x="11" y="4" width="2" height="3" fill="#fb7185" />
+        </svg>
+      );
+    case 'apple':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="11" y="4" width="2" height="3" fill="#6b4528" />
+          <rect x="13" y="4" width="3" height="2" fill="#22c55e" />
+          <rect x="6" y="7" width="12" height="12" rx="4" fill="#ef4444" />
+          <rect x="8" y="9" width="3" height="3" fill="#fca5a5" />
+        </svg>
+      );
+    case 'olive':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="10" y="5" width="5" height="2" fill="#4d7c5b" />
+          <rect x="6" y="8" width="6" height="9" rx="3" fill="#65a30d" />
+          <rect x="12" y="10" width="6" height="9" rx="3" fill="#4d7c0f" />
+          <rect x="8" y="10" width="2" height="3" fill="#d9f99d" />
+        </svg>
+      );
+    case 'date_fruit':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="11" y="4" width="2" height="3" fill="#854d0e" />
+          <rect x="6" y="7" width="6" height="10" rx="3" fill="#b45309" />
+          <rect x="12" y="9" width="6" height="10" rx="3" fill="#d97706" />
+          <rect x="13" y="11" width="2" height="4" fill="#fde68a" />
+        </svg>
+      );
+    case 'pumpkin_pie':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="4" y="12" width="16" height="6" rx="2" fill="#d9a45b" />
+          <rect x="5" y="9" width="14" height="5" rx="2" fill="#ea580c" />
+          <rect x="10" y="7" width="4" height="3" rx="1" fill="#fffbeb" />
+        </svg>
+      );
+    case 'summer_salad':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="4" y="12" width="16" height="7" rx="3" fill="#f8fafc" stroke="#94a3b8" strokeWidth="1.2" />
+          <rect x="6" y="8" width="12" height="5" rx="2" fill="#22c55e" />
+          <rect x="8" y="7" width="3" height="3" fill="#ef4444" />
+          <rect x="13" y="8" width="3" height="3" fill="#facc15" />
+        </svg>
+      );
+    case 'fish_soup':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="4" y="12" width="16" height="7" rx="3" fill="#9a3412" />
+          <rect x="6" y="10" width="12" height="4" rx="2" fill="#f59e0b" />
+          <rect x="9" y="11" width="4" height="2" fill="#bae6fd" />
+          <rect x="9" y="5" width="2" height="3" fill="#e2e8f0" />
+          <rect x="13" y="4" width="2" height="4" fill="#e2e8f0" />
+        </svg>
+      );
+    case 'honey_carrot':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="4" y="14" width="16" height="5" rx="2" fill="#e2e8f0" />
+          <rect x="7" y="9" width="10" height="5" rx="2" fill="#f97316" />
+          <rect x="8" y="8" width="8" height="3" fill="#fbbf24" />
+          <rect x="15" y="10" width="3" height="3" fill="#22c55e" />
+        </svg>
+      );
+    case 'date_smoothie':
+      return (
+        <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+          <rect x="13" y="3" width="2" height="6" fill="#22c55e" />
+          <rect x="7" y="8" width="10" height="12" rx="2" fill="#d97706" stroke="#fde68a" strokeWidth="1.3" />
+          <rect x="8" y="7" width="8" height="3" fill="#fef3c7" />
+        </svg>
+      );
   }
 }
 
@@ -545,6 +696,34 @@ export function WeatherIcon({ weather, className = 'w-5 h-5' }: { weather: Weath
         <circle cx="12" cy="10" r="5" fill="#eb6c34" />
         <rect x="4" y="18" width="16" height="2" fill="#f2a649" />
         <rect x="6" y="21" width="12" height="2" fill="#eb6c34" />
+      </svg>
+    );
+  }
+  if (weather === 'Mist') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <rect x="4" y="7" width="16" height="3" rx="1.5" fill="#cbd5e1" />
+        <rect x="2" y="12" width="18" height="3" rx="1.5" fill="#94a3b8" />
+        <rect x="5" y="17" width="14" height="3" rx="1.5" fill="#cbd5e1" />
+      </svg>
+    );
+  }
+  if (weather === 'Windy') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path d="M3 9h13a2.5 2.5 0 1 0-2.5-2.5" fill="none" stroke="#7dd3fc" strokeWidth="2" strokeLinecap="round" />
+        <path d="M3 14h16a2.5 2.5 0 1 1-2.5 2.5" fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" />
+        <path d="M5 18h8" fill="none" stroke="#bae6fd" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (weather === 'Meteor') {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path d="M19 4L9 14" stroke="#fde047" strokeWidth="2.5" strokeLinecap="round" />
+        <circle cx="8" cy="15" r="3" fill="#fef08a" />
+        <rect x="5" y="5" width="2" height="2" fill="#c084fc" />
+        <rect x="17" y="15" width="2" height="2" fill="#fde047" />
       </svg>
     );
   }

@@ -2,7 +2,7 @@ export type GamePhase = 'title' | 'playing' | 'paused' | 'gameover';
 
 export type Season = 'Spring' | 'Summer' | 'Autumn' | 'Winter';
 
-export type WeatherType = 'Clear' | 'Drought' | 'Rainstorm' | 'Heatwave';
+export type WeatherType = 'Clear' | 'Drought' | 'Rainstorm' | 'Heatwave' | 'Mist' | 'Windy' | 'Meteor';
 
 export type TimePhase = 'Day' | 'Sunset' | 'Night';
 
@@ -43,7 +43,32 @@ export type PlaceableType =
   | 'greenhouse'
   | 'owl_box'
   | 'butter_churn'
-  | 'tea_kettle';
+  | 'tea_kettle'
+  | 'ladybug_house'
+  | 'cooking_stove'
+  | 'wooden_bench'
+  | 'festive_lantern'
+  | 'garden_arch';
+
+export type FruitTreeKind = 'apple' | 'olive' | 'date_fruit';
+
+export type SaplingItemId = 'apple_sapling' | 'olive_sapling' | 'palm_sapling';
+
+export type CookedDishId =
+  | 'pumpkin_pie'
+  | 'summer_salad'
+  | 'fish_soup'
+  | 'honey_carrot'
+  | 'date_smoothie';
+
+export type CookingBuffKind = 'swift' | 'double_xp' | 'eco_blessing';
+
+export type RelicId =
+  | 'ancient_amber'
+  | 'whispering_totem'
+  | 'oasis_prism'
+  | 'sky_compass'
+  | 'star_chalice';
 
 export type ResourceType = 'wood' | 'stone';
 
@@ -52,8 +77,11 @@ export type ItemCategory = 'tool' | 'seed' | 'placeable' | 'crop' | 'resource' |
 export type ItemId =
   | ToolType
   | `${CropType}_seed`
+  | SaplingItemId
   | PlaceableType
   | CropType
+  | FruitTreeKind
+  | CookedDishId
   | 'egg'
   | 'honey'
   | 'milk'
@@ -66,6 +94,7 @@ export type ItemId =
   | 'golden_koi'
   | 'fertilizer'
   | 'bio_mulch'
+  | 'pest_spray'
   | ResourceType;
 
 export interface ItemDef {
@@ -118,12 +147,61 @@ export type TileTerrain =
 
 export type ObstacleType = 'weed' | 'rock' | 'stump';
 
+export interface FruitTreeDef {
+  kind: FruitTreeKind;
+  saplingId: SaplingItemId;
+  name: string;
+  daysToMature: number;
+  harvestSeasons: Season[];
+  saplingPrice: number;
+  sellPrice: number;
+  edibleStamina: number;
+  edibleHealth: number;
+  canopyColor: string;
+  fruitColor: string;
+}
+
+export interface FruitTreeInstance {
+  kind: FruitTreeKind;
+  growthDays: number;
+  hasFruit: boolean;
+}
+
+export interface CookingRecipeDef {
+  id: CookedDishId;
+  ingredients: Partial<Record<ItemId, number>>;
+  buff?: CookingBuffKind;
+  buffMinutes?: number;
+  xpReward: number;
+}
+
+export interface RelicDef {
+  id: RelicId;
+  realm: RealmId | 'meteor';
+  accentColor: string;
+  sellBonusPct?: number;
+  xpBonusPct?: number;
+  staminaSaveChance?: number;
+  windmillBonusGold?: number;
+}
+
+export interface EcoScoreBreakdown {
+  total: number;
+  energyScore: number;
+  waterSoilScore: number;
+  biodiversityScore: number;
+  pestPenalty: number;
+  dividendGold: number;
+  rank: 'seedling' | 'balanced' | 'thriving' | 'guardian';
+}
+
 export interface CropInstance {
   type: CropType;
   growthDays: number;
   daysUnwatered: number;
   withered: boolean;
   floodedDays: number;
+  pestInfested?: boolean;
 }
 
 export interface StructureInstance {
@@ -145,6 +223,7 @@ export interface FarmTile {
   mulchedDays?: number;
   obstacle: ObstacleType | null;
   crop: CropInstance | null;
+  fruitTree?: FruitTreeInstance | null;
   structure: StructureInstance | null;
 }
 
@@ -344,6 +423,15 @@ export interface DaySummary {
   dripWatered?: number;
   waterSavedLiters?: number;
   rainCollectedLiters?: number;
+  fruitsGrown?: number;
+  pestsAppeared?: number;
+  pestsClearedByLadybug?: number;
+  mistHydrated?: number;
+  windyWindmillBonus?: number;
+  meteorBonusGold?: number;
+  ecoScore?: number;
+  ecoDividendGold?: number;
+  relicUnlocked?: RelicId;
   hasNasaStation?: boolean;
   soilMoisturePct?: number;
   tempC?: number;
@@ -391,6 +479,14 @@ export interface FarmStats {
   quizzesSolved?: number;
   wheelSpins?: number;
   rushCompleted?: number;
+  fruitsHarvested?: number;
+  pestsCured?: number;
+  dishesCooked?: number;
+  festivalsAttended?: number;
+  relicsFound?: number;
+  ecoDividendsEarned?: number;
+  coopTradesCompleted?: number;
+  coopChallengesCompleted?: number;
 }
 
 export type MissionId =
@@ -490,6 +586,11 @@ export interface GameWorldState {
   xp?: number;
   level?: number;
   swiftUntilMinutes?: number;
+  doubleXpUntilMinutes?: number;
+  ecoBlessingUntilMinutes?: number;
+  collectedRelics?: RelicId[];
+  festivalClaimedSeasons?: string[];
+  lastMeteorStarsEarned?: number;
   marketSurgeCrop?: CropType;
   rainbowActive?: boolean;
   wishedToday?: boolean;
@@ -516,7 +617,7 @@ export interface GameWorldState {
 }
 
 export interface CraftRecipe {
-  id: PlaceableType | 'fertilizer' | 'bio_mulch';
+  id: PlaceableType | 'fertilizer' | 'bio_mulch' | 'pest_spray';
   name: string;
   description: string;
   ingredients: Partial<Record<ResourceType | 'gold', number>>;

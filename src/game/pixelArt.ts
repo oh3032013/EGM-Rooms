@@ -3,6 +3,8 @@ import {
   COMPOST_RADIUS,
   CROPS,
   FARMHOUSE_POS,
+  FRUIT_TREES,
+  LADYBUG_RADIUS,
   NIGHT_START_MINUTES,
   REALM_DEFS,
   SCARECROW_RADIUS,
@@ -360,7 +362,8 @@ export function renderGameWorld(
         selectedId === 'sprinkler' ||
         selectedId === 'sensor' ||
         selectedId === 'compost' ||
-        selectedId === 'beehive'
+        selectedId === 'beehive' ||
+        selectedId === 'ladybug_house'
       ) {
         const radiusTiles =
           selectedId === 'scarecrow'
@@ -371,6 +374,8 @@ export function renderGameWorld(
             ? SENSOR_RADIUS
             : selectedId === 'beehive'
             ? BEEHIVE_RADIUS
+            : selectedId === 'ladybug_house'
+            ? LADYBUG_RADIUS
             : COMPOST_RADIUS;
         const fillStyle =
           selectedId === 'sprinkler'
@@ -381,6 +386,8 @@ export function renderGameWorld(
             ? 'rgba(136, 209, 75, 0.13)'
             : selectedId === 'beehive'
             ? 'rgba(250, 204, 21, 0.15)'
+            : selectedId === 'ladybug_house'
+            ? 'rgba(244, 63, 94, 0.14)'
             : 'rgba(245, 210, 110, 0.12)';
         const strokeStyle =
           selectedId === 'sprinkler'
@@ -391,6 +398,8 @@ export function renderGameWorld(
             ? 'rgba(136, 209, 75, 0.58)'
             : selectedId === 'beehive'
             ? 'rgba(250, 204, 21, 0.7)'
+            : selectedId === 'ladybug_house'
+            ? 'rgba(244, 63, 94, 0.65)'
             : 'rgba(245, 210, 110, 0.55)';
         ctx.beginPath();
         ctx.arc(hx + TILE_SIZE / 2, hy + TILE_SIZE / 2, radiusTiles * TILE_SIZE, 0, Math.PI * 2);
@@ -479,10 +488,17 @@ export function renderGameWorld(
           draw: () => drawCrop(ctx, tile, px, py, elapsedSec),
         });
       }
+      if (tile.fruitTree) {
+        drawList.push({
+          sortY: py + TILE_SIZE,
+          draw: () => drawFruitTree(ctx, tile, px, py, elapsedSec),
+        });
+      }
       if (tile.structure) {
         const isGround = tile.structure.type === 'stone_path';
+        const isArch = tile.structure.type === 'garden_arch';
         drawList.push({
-          sortY: isGround ? py + 2 : py + TILE_SIZE - 1,
+          sortY: isGround ? py + 2 : isArch ? py + TILE_SIZE + 10 : py + TILE_SIZE - 1,
           draw: () => drawStructure(ctx, state, tile, px, py, timePhase, elapsedSec),
         });
       }
@@ -652,20 +668,67 @@ export function renderGameWorld(
       ctx.fillRect(0, 0, canvasWidth, canvasHeight);
       ctx.restore();
     } else if (state.weather === 'Heatwave') {
-    ctx.save();
-    const pulse = 0.13 + Math.sin(elapsedSec * 2.5) * 0.03;
-    ctx.fillStyle = `rgba(245, 108, 45, ${pulse.toFixed(3)})`;
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-    ctx.strokeStyle = 'rgba(255, 210, 120, 0.25)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    for (let i = 0; i < 14; i++) {
-      const hx = ((i * 137 + elapsedSec * 28) % (canvasWidth + 60)) - 30;
-      const hy = ((i * 89 + Math.sin(elapsedSec * 2 + i) * 18) % canvasHeight);
-      ctx.moveTo(hx, hy);
-      ctx.lineTo(hx + 22, hy - 4);
-    }
+      ctx.save();
+      const pulse = 0.13 + Math.sin(elapsedSec * 2.5) * 0.03;
+      ctx.fillStyle = `rgba(245, 108, 45, ${pulse.toFixed(3)})`;
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+      ctx.strokeStyle = 'rgba(255, 210, 120, 0.25)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (let i = 0; i < 14; i++) {
+        const hx = ((i * 137 + elapsedSec * 28) % (canvasWidth + 60)) - 30;
+        const hy = ((i * 89 + Math.sin(elapsedSec * 2 + i) * 18) % canvasHeight);
+        ctx.moveTo(hx, hy);
+        ctx.lineTo(hx + 22, hy - 4);
+      }
       ctx.stroke();
+      ctx.restore();
+    } else if (state.weather === 'Mist') {
+      ctx.save();
+      ctx.fillStyle = 'rgba(219, 234, 254, 0.13)';
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+      for (let i = 0; i < 7; i++) {
+        const mx = ((i * 210 + elapsedSec * (16 + (i % 3) * 6)) % (canvasWidth + 240)) - 120;
+        const my = ((i * 115) % Math.max(120, canvasHeight - 40)) + 20;
+        ctx.fillStyle = 'rgba(241, 245, 249, 0.14)';
+        ctx.fillRect(Math.round(mx), Math.round(my), 110, 20);
+        ctx.fillRect(Math.round(mx + 18), Math.round(my - 8), 72, 12);
+      }
+      ctx.restore();
+    } else if (state.weather === 'Windy') {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(186, 230, 253, 0.28)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (let i = 0; i < 18; i++) {
+        const wx = ((i * 143 + elapsedSec * 360) % (canvasWidth + 120)) - 60;
+        const wy = ((i * 71 + Math.sin(elapsedSec * 3 + i) * 14) % canvasHeight);
+        ctx.moveTo(wx, wy);
+        ctx.lineTo(wx + 34, wy + 5);
+      }
+      ctx.stroke();
+      ctx.restore();
+    } else if (state.weather === 'Meteor') {
+      ctx.save();
+      ctx.fillStyle = 'rgba(88, 28, 135, 0.10)';
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+      for (let i = 0; i < 4; i++) {
+        const cycle = (elapsedSec * 0.85 + i * 1.45) % 2.8;
+        if (cycle < 1.1) {
+          const p = cycle / 1.1;
+          const sx = ((i * 223 + 80) % Math.max(200, canvasWidth - 100)) + p * 170;
+          const sy = 20 + i * 38 + p * 110;
+          ctx.globalAlpha = Math.max(0, 1 - p) * 0.9;
+          ctx.strokeStyle = i % 2 === 0 ? '#fde047' : '#e9d5ff';
+          ctx.lineWidth = 2.2;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(sx - 28, sy - 16);
+          ctx.stroke();
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(Math.round(sx) - 1, Math.round(sy) - 1, 3, 3);
+        }
+      }
       ctx.restore();
     }
   }
@@ -1351,7 +1414,7 @@ function drawCrop(
 
   // Ripe golden harvest sparkle (twinkling cross-star so ripe fields visibly gleam)
   const spPhase = Math.sin(elapsedSec * 4.5 + tile.x * 1.1 + tile.y * 0.7);
-  if (spPhase > 0.45) {
+  if (spPhase > 0.45 && !crop.pestInfested) {
     const sx = px + 21;
     const sy = py + 6;
     ctx.fillStyle = '#fff6b3';
@@ -1360,6 +1423,84 @@ function drawCrop(
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(sx + 1, sy - 2, 1, 7);
       ctx.fillRect(sx - 2, sy + 1, 7, 1);
+    }
+  }
+
+  // Pest infestation visual indicator (buzzing bugs & warning pip)
+  if (crop.pestInfested) {
+    const bx = Math.round(Math.sin(elapsedSec * 7 + tile.x) * 4);
+    const by = Math.round(Math.cos(elapsedSec * 6 + tile.y) * 3);
+    ctx.fillStyle = '#a855f7';
+    ctx.fillRect(px + 9 + bx, py + 9 + by, 3, 2);
+    ctx.fillRect(px + 18 - bx, py + 14 - by, 3, 2);
+    ctx.fillStyle = '#ef4444';
+    ctx.fillRect(px + 14, py + 2, 4, 4);
+    ctx.fillStyle = '#fef08a';
+    ctx.fillRect(px + 15, py + 3, 2, 2);
+  }
+}
+
+function drawFruitTree(
+  ctx: CanvasRenderingContext2D,
+  tile: FarmTile,
+  px: number,
+  py: number,
+  elapsedSec: number
+): void {
+  const tree = tile.fruitTree;
+  if (!tree) return;
+  const def = FRUIT_TREES[tree.kind];
+  const mature = tree.growthDays >= def.daysToMature;
+  const sway = Math.round(Math.sin(elapsedSec * 1.8 + tile.x + tile.y * 0.5));
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.fillRect(px + 7, py + 26, 18, 4);
+
+  if (!mature && tree.growthDays < 2) {
+    // Young sapling
+    ctx.fillStyle = '#7c4a21';
+    ctx.fillRect(px + 15, py + 17, 3, 10);
+    ctx.fillStyle = def.canopyColor;
+    ctx.fillRect(px + 11 + sway, py + 11, 11, 7);
+    ctx.fillRect(px + 13 + sway, py + 8, 7, 4);
+    return;
+  }
+
+  if (tree.kind === 'date_fruit') {
+    // Desert Date Palm
+    ctx.fillStyle = '#854d0e';
+    ctx.fillRect(px + 14, py + 11, 4, 16);
+    ctx.fillStyle = '#a16207';
+    ctx.fillRect(px + 13, py + 15, 5, 2);
+    ctx.fillRect(px + 13, py + 20, 5, 2);
+    // Fronds
+    ctx.fillStyle = def.canopyColor;
+    ctx.fillRect(px + 4 + sway, py + 5, 24, 5);
+    ctx.fillRect(px + 7 + sway, py + 2, 18, 4);
+    ctx.fillRect(px + 2 + sway, py + 9, 6, 4);
+    ctx.fillRect(px + 24 + sway, py + 9, 6, 4);
+    if (tree.hasFruit) {
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(px + 11 + sway, py + 11, 3, 4);
+      ctx.fillRect(px + 18 + sway, py + 11, 3, 4);
+    }
+  } else {
+    // Apple or Olive tree
+    ctx.fillStyle = '#6b4528';
+    ctx.fillRect(px + 13, py + 16, 6, 11);
+    ctx.fillStyle = def.canopyColor;
+    ctx.fillRect(px + 5 + sway, py + 4, 22, 14);
+    ctx.fillRect(px + 8 + sway, py + 1, 16, 5);
+    ctx.fillStyle = tree.kind === 'olive' ? '#84a98c' : '#4ade80';
+    ctx.fillRect(px + 8 + sway, py + 5, 6, 4);
+    if (tree.hasFruit) {
+      ctx.fillStyle = def.fruitColor;
+      ctx.fillRect(px + 8 + sway, py + 9, 3, 3);
+      ctx.fillRect(px + 15 + sway, py + 6, 3, 3);
+      ctx.fillRect(px + 20 + sway, py + 12, 3, 3);
+      ctx.fillStyle = '#fef08a';
+      ctx.fillRect(px + 21, py + 3, 2, 2);
     }
   }
 }
@@ -1694,10 +1835,11 @@ function drawStructure(
     ctx.fillRect(px + 10, py + 3, 12, 6);
     ctx.fillStyle = '#5c3a21';
     ctx.fillRect(px + 14, py + 20, 4, 8);
-    // Rotating wooden blades
+    // Rotating wooden blades (2.7x faster in Windy weather!)
+    const bladeSpeed = state.weather === 'Windy' ? 3.8 : 1.4;
     ctx.save();
     ctx.translate(px + 16, py + 11);
-    ctx.rotate(elapsedSec * 1.4 + tile.x);
+    ctx.rotate(elapsedSec * bladeSpeed + tile.x);
     ctx.fillStyle = '#6b4528';
     ctx.fillRect(-11, -1.5, 22, 3);
     ctx.fillRect(-1.5, -11, 3, 22);
@@ -1820,6 +1962,89 @@ function drawStructure(
     ctx.fillStyle = 'rgba(240, 253, 244, 0.8)';
     ctx.fillRect(px + 24, py + 9 - steamY, 2, 2);
     ctx.fillRect(px + 15, py + 5 - Math.floor(steamY * 0.7), 2, 2);
+    return;
+  }
+
+  if (s.type === 'ladybug_house') {
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.fillRect(px + 10, py + 26, 12, 4);
+    ctx.fillStyle = '#6b4528';
+    ctx.fillRect(px + 14, py + 17, 4, 11);
+    // Cute ladybug dome
+    ctx.fillStyle = '#dc2626';
+    ctx.fillRect(px + 8, py + 8, 16, 10);
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(px + 10, py + 5, 12, 4);
+    ctx.fillRect(px + 11, py + 11, 2, 2);
+    ctx.fillRect(px + 18, py + 12, 2, 2);
+    ctx.fillStyle = '#fef08a';
+    ctx.fillRect(px + 14, py + 14, 4, 4);
+    // Tiny orbiting ladybug
+    const lx = Math.round(Math.cos(elapsedSec * 3.2 + tile.x) * 9);
+    const ly = Math.round(Math.sin(elapsedSec * 3.2 + tile.x) * 4);
+    ctx.fillStyle = '#ef4444';
+    ctx.fillRect(px + 15 + lx, py + 10 + ly, 2, 2);
+    return;
+  }
+
+  if (s.type === 'cooking_stove') {
+    ctx.fillStyle = 'rgba(0,0,0,0.24)';
+    ctx.fillRect(px + 4, py + 26, 24, 4);
+    // Brick body + iron top + stewpot
+    ctx.fillStyle = '#9a3412';
+    ctx.fillRect(px + 5, py + 11, 22, 16);
+    ctx.fillStyle = '#475569';
+    ctx.fillRect(px + 4, py + 9, 24, 4);
+    ctx.fillStyle = '#334155';
+    ctx.fillRect(px + 10, py + 4, 12, 6);
+    // Warm hearth fire flicker
+    const flicker = Math.sin(elapsedSec * 11 + tile.x) > 0;
+    ctx.fillStyle = '#ea580c';
+    ctx.fillRect(px + 11, py + 18, 10, 7);
+    ctx.fillStyle = flicker ? '#fde047' : '#fb923c';
+    ctx.fillRect(px + 13, py + 20, 6, 5);
+    return;
+  }
+
+  if (s.type === 'wooden_bench') {
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.fillRect(px + 4, py + 25, 24, 4);
+    ctx.fillStyle = '#5c361a';
+    ctx.fillRect(px + 6, py + 19, 3, 8);
+    ctx.fillRect(px + 23, py + 19, 3, 8);
+    ctx.fillStyle = '#9a5f32';
+    ctx.fillRect(px + 5, py + 10, 22, 5);
+    ctx.fillStyle = '#b87642';
+    ctx.fillRect(px + 4, py + 16, 24, 4);
+    return;
+  }
+
+  if (s.type === 'festive_lantern') {
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.fillRect(px + 9, py + 26, 14, 4);
+    ctx.fillStyle = '#7c4a21';
+    ctx.fillRect(px + 13, py + 6, 3, 21);
+    ctx.fillRect(px + 13, py + 4, 9, 3);
+    const sway = Math.round(Math.sin(elapsedSec * 2.5 + tile.x));
+    ctx.fillStyle = '#fbbf24';
+    ctx.fillRect(px + 18 + sway, py + 7, 7, 8);
+    ctx.fillStyle = '#fef9c3';
+    ctx.fillRect(px + 19 + sway, py + 9, 5, 4);
+    return;
+  }
+
+  if (s.type === 'garden_arch') {
+    // Tall floral trellis arch (walkable underneath!)
+    ctx.fillStyle = '#15803d';
+    ctx.fillRect(px + 3, py + 6, 4, 24);
+    ctx.fillRect(px + 25, py + 6, 4, 24);
+    ctx.fillStyle = '#22c55e';
+    ctx.fillRect(px + 4, py + 2, 24, 6);
+    ctx.fillStyle = '#f472b6';
+    ctx.fillRect(px + 7, py + 3, 4, 4);
+    ctx.fillRect(px + 21, py + 4, 4, 4);
+    ctx.fillStyle = '#fde047';
+    ctx.fillRect(px + 14, py + 2, 4, 4);
     return;
   }
 }
@@ -2687,6 +2912,10 @@ function drawLightingOverlay(
       punchLight(tile.x + 0.5, tile.y + 0.5, 4.6);
     } else if (tile.structure?.type === 'lantern') {
       punchLight(tile.x + 0.5, tile.y + 0.5, 4.2);
+    } else if (tile.structure?.type === 'festive_lantern') {
+      punchLight(tile.x + 0.5, tile.y + 0.5, 3.8);
+    } else if (tile.structure?.type === 'cooking_stove') {
+      punchLight(tile.x + 0.5, tile.y + 0.5, 2.6);
     } else if (tile.structure?.type === 'sensor' || tile.structure?.type === 'nasa_station') {
       punchLight(tile.x + 0.5, tile.y + 0.5, 2.1);
     } else if (tile.structure?.type === 'wishing_fountain') {

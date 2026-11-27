@@ -1,11 +1,14 @@
 import type { ActionFeedback } from './rules';
 import type {
   BadgeId,
+  CookingBuffKind,
   DaySummary,
+  EcoScoreBreakdown,
   ItemId,
   MissionId,
   PlaceableType,
   RealmId,
+  RelicId,
   Season,
   WeatherType,
 } from './types';
@@ -109,6 +112,12 @@ export function translateWeather(weather: WeatherType, lang: Language): string {
       return 'عاصفة';
     case 'Heatwave':
       return 'موجة حر';
+    case 'Mist':
+      return 'ضباب صباحي';
+    case 'Windy':
+      return 'عاصف بالرياح';
+    case 'Meteor':
+      return 'زخة شهب';
   }
 }
 
@@ -426,6 +435,91 @@ export const ITEM_AR: Record<
     description: 'يُجمع من تكسير الصخور. يُستخدم للفوانيس والممرات.',
     roleClue: 'مادة تصنيع',
   },
+  pest_spray: {
+    name: 'بخاخ النيم العضوي',
+    description: 'يرش المحاصيل المصابة بالآفات لعلاجها فوراً دون الإضرار بالنحل أو التربة.',
+    roleClue: 'علاج الآفات · +خبرة',
+  },
+  apple_sapling: {
+    name: 'شتلة شجرة التفاح',
+    description: 'شجرة مثمرة دائمة تنضج خلال 4 أيام وتثمر تفاحاً في الربيع والخريف!',
+    roleClue: 'شجرة · ربيع وخريف',
+  },
+  olive_sapling: {
+    name: 'شتلة شجرة الزيتون',
+    description: 'شجرة زيتون مباركة تنضج خلال 4 أيام وتثمر في الصيف والخريف!',
+    roleClue: 'شجرة · صيف وخريف',
+  },
+  palm_sapling: {
+    name: 'فسيلة نخيل الواحة',
+    description: 'نخلة صحراوية تتحمل المناخ وتثمر تموراً ذهبية في الصيف والشتاء!',
+    roleClue: 'نخلة · صيف وشتاء',
+  },
+  ladybug_house: {
+    name: 'بيت الدعسوقة الحارس',
+    description: 'يؤوي خنافس الدعسوقة النافعة التي تطهّر المحاصيل من الآفات تلقائياً ضمن 3.5 مربعات!',
+    roleClue: 'مكافحة حيوية 3.5 مربع',
+  },
+  cooking_stove: {
+    name: 'موقد مطبخ المزرعة',
+    description: 'موقد حجري يوضع في المزرعة — انقر عليه لفتح المطبخ وطهي أطباق تمنح تأثيرات قوية!',
+    roleClue: 'المطبخ · أطباق وتعزيزات',
+  },
+  wooden_bench: {
+    name: 'مقعد الحديقة الخشبي',
+    description: 'مقعد مريح مصنوع يدوياً يجمّل الفناء ويرفع نقاط الاستدامة البيئية.',
+    roleClue: 'زينة مريحة · +نقاط بيئية',
+  },
+  festive_lantern: {
+    name: 'فانوس الاحتفال المضيء',
+    description: 'فانوس دافئ على عمود خشبي ينشر إضاءة ذهبية ليلاً ويرفع جمال المزرعة!',
+    roleClue: 'إضاءة ليلية دافئة · زينة',
+  },
+  garden_arch: {
+    name: 'قوس الأزهار المتسلقة',
+    description: 'بوابة مقوسة مزينة بالورود يمكن المرور من تحتها لتزيين الممرات.',
+    roleClue: 'قوس قابل للمرور · +نقاط بيئية',
+  },
+  apple: {
+    name: 'تفاح البستان المقرمش',
+    description: 'تفاح أحمر طازج من أشجار المزرعة (+28 طاقة أو للسلطة الصيفية).',
+    roleClue: 'بيع 70g · +28 طاقة',
+  },
+  olive: {
+    name: 'زيتون المزرعة الفضي',
+    description: 'زيتون غني مقطوف من شجرة الزيتون الناضجة (+24 طاقة، +20 صحة).',
+    roleClue: 'بيع 82g · +24 طاقة',
+  },
+  date_fruit: {
+    name: 'تمر الواحة الذهبي',
+    description: 'تمر عسلي فاخر من نخيل الواحة (+38 طاقة، +22 صحة أو للعصائر).',
+    roleClue: 'بيع 98g · +38 طاقة',
+  },
+  pumpkin_pie: {
+    name: 'فطيرة اليقطين المتبّلة',
+    description: 'فطيرة دافئة (+95 طاقة، +40 صحة) وتمنح خبرة مضاعفة 2× لمدة 5 ساعات!',
+    roleClue: 'بيع 260g · خبرة 2×',
+  },
+  summer_salad: {
+    name: 'سلطة البستان الصيفية',
+    description: 'مزيج طماطم وتفاح وزيتون (+80 طاقة، +35 صحة) + خبرة مضاعفة 2×!',
+    roleClue: 'بيع 245g · خبرة 2×',
+  },
+  fish_soup: {
+    name: 'حساء السمك الدافئ',
+    description: 'مرق سمك وبطاطس شهي (+85 طاقة، +35 صحة) + توفير طاقة الأدوات (-1)!',
+    roleClue: 'بيع 195g · -1 طاقة أدوات',
+  },
+  honey_carrot: {
+    name: 'جزر مشوي بالعسل',
+    description: 'جزر مكرمل بعسل المزرعة (+70 طاقة، +25 صحة) + تعزيز السرعة!',
+    roleClue: 'بيع 180g · +25% سرعة',
+  },
+  date_smoothie: {
+    name: 'سموثي التمر بالحليب',
+    description: 'مشروب تمر وحليب فاخر (+100 طاقة، +45 صحة) + تعزيز السرعة القصوى!',
+    roleClue: 'بيع 280g · وجبة فاخرة',
+  },
 };
 
 export function getItemLabel(id: ItemId, lang: Language) {
@@ -440,7 +534,7 @@ export function getItemLabel(id: ItemId, lang: Language) {
 }
 
 export function getRecipeLabel(
-  id: PlaceableType | 'fertilizer' | 'bio_mulch',
+  id: PlaceableType | 'fertilizer' | 'bio_mulch' | 'pest_spray',
   fallbackName: string,
   fallbackDesc: string,
   lang: Language
@@ -454,7 +548,7 @@ export function getRecipeLabel(
   return { name: fallbackName, description: fallbackDesc };
 }
 
-export const RECIPE_AR: Partial<Record<PlaceableType | 'fertilizer' | 'bio_mulch', { name: string; description: string }>> = {
+export const RECIPE_AR: Partial<Record<PlaceableType | 'fertilizer' | 'bio_mulch' | 'pest_spray', { name: string; description: string }>> = {
   fence: {
     name: 'سياج خشبي (×2)',
     description: 'يمنع الأرانب ويبطئ الخنازير البرية ليلاً.',
@@ -518,6 +612,30 @@ export const RECIPE_AR: Partial<Record<PlaceableType | 'fertilizer' | 'bio_mulch
   jam_maker: {
     name: 'صانعة مربى التوت',
     description: 'تطهى الفراولة لإنتاج مربى الفراولة الشهي.',
+  },
+  ladybug_house: {
+    name: 'بيت الدعسوقة الحارس',
+    description: 'يطهّر ويحمي المحاصيل ضمن 3.5 مربعات من الآفات تلقائياً.',
+  },
+  pest_spray: {
+    name: 'بخاخ النيم العضوي (×2)',
+    description: 'يعالج المحاصيل المصابة بالآفات فوراً وبأمان.',
+  },
+  cooking_stove: {
+    name: 'موقد مطبخ المزرعة',
+    description: 'موقد حجري يفتح المطبخ لإعداد أطباق بمزايا خاصة.',
+  },
+  wooden_bench: {
+    name: 'مقعد الحديقة الخشبي',
+    description: 'مقعد دافئ يرفع جمال المزرعة ونقاط الاستدامة البيئية.',
+  },
+  festive_lantern: {
+    name: 'فانوس الاحتفال المضيء',
+    description: 'ينير الممرات ليلاً بوهج دافئ وأنيق.',
+  },
+  garden_arch: {
+    name: 'قوس الأزهار المتسلقة',
+    description: 'بوابة وردية جميلة يمكن المرور من تحتها.',
   },
 };
 
@@ -994,7 +1112,9 @@ export function formatMorningSummaryText(summary: DaySummary, lang: Language): s
   }
   const notes: string[] = [];
   if (summary.cropsGrown > 0) notes.push(`نما ${summary.cropsGrown} محصول`);
+  if ((summary.fruitsGrown ?? 0) > 0) notes.push(`أثمرت ${summary.fruitsGrown} شجرة فاكهة`);
   if (summary.rainbowActive) notes.push('صباح قوس قزح!');
+  if ((summary.mistHydrated ?? 0) > 0) notes.push(`رطّب الضباب ${summary.mistHydrated} تربة`);
   if ((summary.sprinklerWatered ?? 0) > 0) notes.push(`سقت المرشة ${summary.sprinklerWatered} تربة`);
   if ((summary.dripWatered ?? 0) > 0) {
     notes.push(`ري بالتنقيط ${summary.dripWatered} (وفّر ${summary.waterSavedLiters ?? 0} لتر)`);
@@ -1010,9 +1130,19 @@ export function formatMorningSummaryText(summary: DaySummary, lang: Language): s
   if ((summary.jamMade ?? 0) > 0) notes.push(`+${summary.jamMade} مربى توت`);
   if ((summary.butterMade ?? 0) > 0) notes.push(`+${summary.butterMade} زبدة ذهبية`);
   if ((summary.teaMade ?? 0) > 0) notes.push(`+${summary.teaMade} شاي أعشاب`);
-  if ((summary.windmillGold ?? 0) > 0) notes.push(`+${summary.windmillGold}g دخل الطاحونة`);
+  if ((summary.windmillGold ?? 0) > 0) {
+    notes.push(
+      summary.windyWindmillBonus
+        ? `+${summary.windmillGold}g طاحونة الرياح (×2)`
+        : `+${summary.windmillGold}g دخل الطاحونة`
+    );
+  }
+  if ((summary.meteorBonusGold ?? 0) > 0) notes.push(`+${summary.meteorBonusGold}g غبار النجوم`);
+  if ((summary.ecoDividendGold ?? 0) > 0) notes.push(`+${summary.ecoDividendGold}g مكافأة الاستدامة`);
   if ((summary.morningBonusGold ?? 0) > 0) notes.push(`+${summary.morningBonusGold}g مكافأة المواظبة`);
   if ((summary.owlRepelled ?? 0) > 0) notes.push(`البومة صدّت ${summary.owlRepelled} غارة`);
+  if ((summary.pestsClearedByLadybug ?? 0) > 0) notes.push(`عالجت الدعسوقة ${summary.pestsClearedByLadybug} آفة`);
+  if ((summary.pestsAppeared ?? 0) > 0) notes.push(`ظهرت آفات على ${summary.pestsAppeared} محصول`);
   if (summary.catGift) notes.push(`هدية القط: ${summary.catGift === 'fish' ? 'سمكة' : summary.catGift}`);
   if (summary.cropsWithered > 0) notes.push(`ذبل ${summary.cropsWithered}`);
   if (summary.wildlifeDamage > 0) notes.push(`أكلت الحيوانات ${summary.wildlifeDamage}`);
@@ -1190,7 +1320,30 @@ export function formatFeedbackMessage(res: ActionFeedback, lang: Language): stri
       return 'واحة الكريستال! اصطدت سمكة الكوي الذهبية!';
     case 'Reeled Crystal Oasis Pearl (+60g)!':
       return 'اصطدت لؤلؤة واحة الكريستال (+60g)!';
+    case 'Opened Homestead Kitchen!':
+      return 'تم فتح مطبخ المزرعة!';
+    case 'Cured crop pests with Neem Spray!':
+      return 'تم علاج المحصول من الآفات ببخاخ النيم!';
+    case 'Use Neem Spray on pest-infested crops':
+      return 'استخدم بخاخ النيم على محصول مصاب بالآفات';
+    case 'Out of Neem Spray':
+      return 'نفد بخاخ النيم العضوي';
+    case 'Tile already has a fruit tree':
+      return 'توجد شجرة مثمرة مزروعة هنا بالفعل';
+    case 'Step off tile to plant':
+      return 'ابتعد عن المربع لزراعة الشجرة';
+    case 'Out of saplings':
+      return 'نفدت الشتلات';
+    case 'Planted fruit tree sapling!':
+      return 'تم غرس شتلة الشجرة المثمرة!';
+    case 'This crop has pests! Use Neem Spray or place a Ladybug House.':
+      return 'هذا المحصول مصاب بآفات! عالجه ببخاخ النيم أو بيت الدعسوقة.';
     default:
+      if (res.message?.startsWith('Harvested +1 ')) {
+        const raw = res.message.replace('Harvested +1 ', '').replace('!', '');
+        const match = (Object.keys(ITEMS) as ItemId[]).find((k) => ITEMS[k].name === raw);
+        return match ? `تم حصاد +1 ${ITEM_AR[match].name}!` : res.message;
+      }
       if (res.message?.startsWith('Wishing Fountain gifted +1 ')) {
         const raw = res.message.replace('Wishing Fountain gifted +1 ', '').replace('!', '');
         const match = (Object.keys(ITEMS) as ItemId[]).find((k) => ITEMS[k].name === raw);
@@ -1894,3 +2047,235 @@ export const UI_TEXT: Record<Language, UiTextMap> = {
   ko: EXTRA_LOCALES.ko.ui,
   zh: EXTRA_LOCALES.zh.ui,
 };
+
+const RELIC_TEXT: Record<RelicId, { en: { name: string; source: string; buff: string }; ar: { name: string; source: string; buff: string } }> = {
+  ancient_amber: {
+    en: { name: 'Sun-Sealed Amber', source: 'Homestead Strange Zone', buff: '+5% Harvest Sell & 10% Free Tool Stamina' },
+    ar: { name: 'كهرمان الشمس العتيق', source: 'المنطقة الغريبة بالوادي', buff: '+5% سعر البيع و10% توفير طاقة الأدوات' },
+  },
+  whispering_totem: {
+    en: { name: 'Whispering Grove Totem', source: 'Whispering Woods Monolith', buff: '+20% All Farmer XP Earned' },
+    ar: { name: 'طوطم الغابة الهامسة', source: 'مسلّة الغابة الهامسة', buff: '+20% خبرة المزارع في كل الأعمال' },
+  },
+  oasis_prism: {
+    en: { name: 'Mirage Oasis Prism', source: 'Crystal Oasis Geode Rift', buff: '+10% All Harvest & Artisan Sell Gold' },
+    ar: { name: 'منشور واحة الكريستال', source: 'صدع الكريستال بالواحة', buff: '+10% ذهب إضافي عند بيع أي منتج' },
+  },
+  sky_compass: {
+    en: { name: 'Celestial Star Compass', source: 'Sky Sanctuary 2040 Altar', buff: '20% Chance for Zero Stamina Tool Actions' },
+    ar: { name: 'بوصلة السماء النجمية', source: 'مذبح صدع الزمن في السماء', buff: 'فرصة 20% لاستخدام الأدوات دون فقد طاقة' },
+  },
+  star_chalice: {
+    en: { name: 'Astral Meteor Chalice', source: 'Meteor Shower Night Sky', buff: '+15% XP & +12g Bonus Windmill Gold' },
+    ar: { name: 'كأس الشهب النجمي', source: 'ليلة زخة الشهب السماوية', buff: '+15% خبرة و +12g إضافية لطاحونة الرياح' },
+  },
+};
+
+export function getRelicLabel(id: RelicId, lang: Language) {
+  return lang === 'ar' ? RELIC_TEXT[id].ar : RELIC_TEXT[id].en;
+}
+
+const FESTIVAL_TEXT: Record<Season, { en: { title: string; subtitle: string; reward: string }; ar: { title: string; subtitle: string; reward: string } }> = {
+  Spring: {
+    en: {
+      title: 'Spring Blossom Fair',
+      subtitle: 'The valley celebrates fresh sprouts, bees, and gentle morning mist.',
+      reward: '+120g Gold, +40 XP, Full Energy, 2 Apple Saplings & 2 Neem Sprays',
+    },
+    ar: {
+      title: 'مهرجان أزهار الربيع',
+      subtitle: 'تحتفل القرية بتفتح البراعم وعمل النحل وندى الصباح اللطيف.',
+      reward: '+120g ذهب، +40 خبرة، طاقة كاملة، شتلتا تفاح وبخاخا نيم',
+    },
+  },
+  Summer: {
+    en: {
+      title: 'Summer Sun Splash',
+      subtitle: 'A lively warm-season gathering honoring solar irrigation and orchard groves.',
+      reward: '+140g Gold, +45 XP, Full Energy, 2 Olive Saplings & Swift Feast',
+    },
+    ar: {
+      title: 'مهرجان شمس الصيف',
+      subtitle: 'احتفال صيفي بهيج بالري الشمسي وبساتين الزيتون والثمار الذهبية.',
+      reward: '+140g ذهب، +45 خبرة، طاقة كاملة، شتلتا زيتون وتعزيز سرعة',
+    },
+  },
+  Autumn: {
+    en: {
+      title: 'Autumn Harvest Feast',
+      subtitle: 'Villagers gather golden pumpkins, honey, and roasted orchard treats!',
+      reward: '+160g Gold, +50 XP, Full Energy, +2 Honey & +2 Pumpkin Pies',
+    },
+    ar: {
+      title: 'عيد الحصاد الذهبي',
+      subtitle: 'يجتمع أهل القرية حول اليقطين الذهبي والعسل وفطائر البستان الدافئة!',
+      reward: '+160g ذهب، +50 خبرة، طاقة كاملة، +2 عسل وفطيرتي يقطين',
+    },
+  },
+  Winter: {
+    en: {
+      title: 'Winter Starlight Night',
+      subtitle: 'Lanterns glow across the frost while farmers toast under shooting stars.',
+      reward: '+180g Gold, +60 XP, Full Energy, 2 Palm Saplings & 2 Festive Lanterns',
+    },
+    ar: {
+      title: 'ليلة أضواء الشتاء',
+      subtitle: 'تتوهج الفوانيس الدافئة تحت نجوم الشتاء احتفاءً بصمود المزارعين.',
+      reward: '+180g ذهب، +60 خبرة، طاقة كاملة، فصيلتا نخيل وفانوسا احتفال',
+    },
+  },
+};
+
+export function getFestivalLabel(season: Season, lang: Language) {
+  return lang === 'ar' ? FESTIVAL_TEXT[season].ar : FESTIVAL_TEXT[season].en;
+}
+
+export function getEcoRankLabel(rank: EcoScoreBreakdown['rank'], lang: Language): string {
+  if (lang === 'ar') {
+    switch (rank) {
+      case 'guardian':
+        return 'حارس البيئة الأعلى';
+      case 'thriving':
+        return 'مزرعة مزدهرة خضراء';
+      case 'balanced':
+        return 'توازن بيئي جيد';
+      default:
+        return 'بداية خضراء';
+    }
+  }
+  switch (rank) {
+    case 'guardian':
+      return 'Eco Guardian';
+    case 'thriving':
+      return 'Thriving Green';
+    case 'balanced':
+      return 'Balanced Farm';
+    default:
+      return 'Sprouting Green';
+  }
+}
+
+export function getBuffLabel(buff: CookingBuffKind, lang: Language): string {
+  if (lang === 'ar') {
+    switch (buff) {
+      case 'swift':
+        return '+25% سرعة';
+      case 'double_xp':
+        return 'خبرة 2×';
+      case 'eco_blessing':
+        return '-1 طاقة أدوات';
+    }
+  }
+  switch (buff) {
+    case 'swift':
+      return '+25% Swift';
+    case 'double_xp':
+      return '2× XP Boost';
+    case 'eco_blessing':
+      return '-1 Tool Stam';
+  }
+}
+
+export function getFeatureText(lang: Language) {
+  if (lang === 'ar') {
+    return {
+      kitchenTab: 'مطبخ المزرعة',
+      kitchenTitle: 'طهي الأطباق الريفية',
+      kitchenSub: 'اصنع وجبات مغذية تمنح سرعة مضاعفة، خبرة 2×، أو توفير الطاقة!',
+      cookBtn: 'طهي الطبق',
+      orchardAlmanacTab: 'البساتين والآثار',
+      fruitTreesHeader: 'أشجار الفاكهة المعمرة',
+      cookedDishesHeader: 'أطباق المطبخ الريفية',
+      relicsHeader: 'الآثار القديمة النادرة',
+      relicsSub: 'اكشف المناطق الغريبة عبر العوالم وشاهد زخات الشهب لجمع الآثار الدائمة.',
+      harvestSeasonsLabel: 'مواسم الإثمار',
+      ecoGridTitle: 'مؤشر الاستدامة والشبكة الخضراء',
+      ecoScoreLabel: 'نقاط البيئة',
+      ecoEnergyLabel: 'الطاقة النظيفة والحماية',
+      ecoWaterSoilLabel: 'صحة التربة والري الذكي',
+      ecoBioLabel: 'التنوع الحيوي والأشجار',
+      ecoPestPenaltyLabel: 'خصم الآفات الحالية',
+      ecoDividendActive: 'عائد بيئي يومي نشط: +{g}g كل صباح!',
+      ecoDividendHint: 'اوصل إلى 60% لبدء ربح عائد استدامة يومي تلقائي كل صباح!',
+      festivalBannerBtn: 'مهرجان اليوم 8!',
+      festivalClaimBtn: 'استلام بركة المهرجان',
+      festivalClaimedBadge: 'تم الاحتفال هذا الموسم ✓',
+      festivalDayBadge: 'احتفال اليوم الثامن',
+      coopHubBtn: 'التعاون والتبادل',
+      coopHubTitle: 'تحديات التعاون وتبادل اللاعبين',
+      coopHubSub: 'تعاونوا في تحديات زمنية مشتركة أو بادلوا المحاصيل مباشرة داخل الغرفة.',
+      challengesTab: 'تحديات زمنية',
+      tradingTab: 'تبادل المنتجات',
+      startChallengeHeader: 'إطلاق تحدٍّ تعاوني للفريق',
+      challengeHarvest: 'سباق الحصاد (6 محاصيل · 90 ثانية)',
+      challengeWater: 'حملة الري (10 مربعات · 75 ثانية)',
+      challengeDefend: 'درع الحماية (صد 3 أو علاج آفات · 90 ثانية)',
+      activeChallengeTitle: 'تحدي تعاوني جارٍ',
+      timeLeftSec: '{s} ثانية متبقية',
+      rewardPoolLabel: 'المكافأة الجماعية: +{gold}g و +{xp} خبرة لكل لاعب',
+      sendOfferTitle: 'إرسال عرض تبادل للاعب في الغرفة',
+      offerItemLabel: 'تقدّم',
+      requestItemLabel: 'تطلب مقابلها',
+      targetPlayerLabel: 'إلى المزارع',
+      sendOfferBtn: 'إرسال العرض',
+      incomingOffersTitle: 'عروض التبادل الجارية',
+      noOffersHint: 'لا توجد عروض تبادل حالياً — اقترح صفقة لأصدقائك (+20g مكافأة تعاون)!',
+      acceptTradeBtn: 'قبول (+20g)',
+      declineTradeBtn: 'رفض',
+      pestBadge: 'آفات!',
+      pestCureTip: 'استخدم بخاخ النيم أو بيت الدعسوقة',
+      doubleXpBuff: 'خبرة 2×',
+      ecoStamBuff: 'توفير طاقة',
+    };
+  }
+  return {
+    kitchenTab: 'Kitchen',
+    kitchenTitle: 'Homestead Country Kitchen',
+    kitchenSub: 'Cook gourmet dishes for Double XP, Swift speed, or Tool Stamina Saver buffs!',
+    cookBtn: 'Cook Dish',
+    orchardAlmanacTab: 'Orchards & Relics',
+    fruitTreesHeader: 'Permanent Fruit Trees',
+    cookedDishesHeader: 'Kitchen Gourmet Dishes',
+    relicsHeader: 'Ancient Relics Collection',
+    relicsSub: 'Investigate Strange Zones across realms & catch Meteor Showers to unlock permanent blessings.',
+    harvestSeasonsLabel: 'Harvest Seasons',
+    ecoGridTitle: 'Eco-Score & Green Grid',
+    ecoScoreLabel: 'Eco Score',
+    ecoEnergyLabel: 'Clean Energy & Protection',
+    ecoWaterSoilLabel: 'Water & Soil Stewardship',
+    ecoBioLabel: 'Biodiversity & Orchards',
+    ecoPestPenaltyLabel: 'Active Pest Penalty',
+    ecoDividendActive: 'Daily Eco Dividend Active: +{g}g each morning!',
+    ecoDividendHint: 'Reach 60% Eco Score to earn automatic daily sustainability dividends!',
+    festivalBannerBtn: 'Day 8 Festival!',
+    festivalClaimBtn: 'Celebrate & Claim Gift',
+    festivalClaimedBadge: 'Celebrated This Season ✓',
+    festivalDayBadge: 'Day 8 Seasonal Celebration',
+    coopHubBtn: 'Co-op & Trade',
+    coopHubTitle: 'Co-op Challenges & Player Trading',
+    coopHubSub: 'Launch shared timed farm goals or barter crops directly with room teammates.',
+    challengesTab: 'Timed Challenges',
+    tradingTab: 'Trade Board',
+    startChallengeHeader: 'Launch Team Timed Challenge',
+    challengeHarvest: 'Harvest Rush (6 crops · 90s)',
+    challengeWater: 'Aqua Dash (10 plots · 75s)',
+    challengeDefend: 'Homestead Shield (3 defends/cures · 90s)',
+    activeChallengeTitle: 'Live Co-op Challenge',
+    timeLeftSec: '{s}s left',
+    rewardPoolLabel: 'Team Reward: +{gold}g & +{xp} XP each',
+    sendOfferTitle: 'Propose Barter Trade to Teammate',
+    offerItemLabel: 'You Offer',
+    requestItemLabel: 'You Request',
+    targetPlayerLabel: 'Recipient',
+    sendOfferBtn: 'Send Trade Offer',
+    incomingOffersTitle: 'Active Room Trade Offers',
+    noOffersHint: 'No active trade offers — propose a barter (+20g co-op bonus per trade)!',
+    acceptTradeBtn: 'Accept (+20g)',
+    declineTradeBtn: 'Decline',
+    pestBadge: 'Pests!',
+    pestCureTip: 'Cure with Neem Spray or Ladybug House',
+    doubleXpBuff: '2× XP',
+    ecoStamBuff: '-1 Stam',
+  };
+}
+

@@ -3,6 +3,7 @@ import {
   CAT_PRICE,
   CHICKEN_PRICE,
   COMPOST_RADIUS,
+  COOKING_RECIPES,
   COW_PRICE,
   CRAFT_RECIPES,
   CROPS,
@@ -14,12 +15,14 @@ import {
   FARMHOUSE_DOOR,
   FARMHOUSE_POS,
   FISHING_COOLDOWN_MS,
+  FRUIT_TREES,
   GREENHOUSE_HALF_EXTENT,
   GRID_HEIGHT,
   GRID_WIDTH,
   HOMESTEAD_PORTAL_POS,
   HOMESTEAD_STRANGE_ZONE_POS,
   ITEMS,
+  LADYBUG_RADIUS,
   LITERS_PER_WATERING,
   MAX_CATS,
   MAX_CHICKENS,
@@ -32,6 +35,8 @@ import {
   PLACEABLE_MAX_HP,
   RAIN_TANK_MAX_CHARGES,
   REALM_DEFS,
+  RELIC_DEFS,
+  SAPLING_TO_FRUIT,
   SCARECROW_RADIUS,
   SEASONS,
   SENSITIVE_CROPS,
@@ -54,12 +59,15 @@ import {
 } from './funFeatures.ts';
 import type {
   BadgeId,
+  CookedDishId,
   CropType,
   DailyOrder,
   DaySummary,
+  EcoScoreBreakdown,
   FarmChicken,
   FarmTile,
   FireflyEntity,
+  FruitTreeKind,
   FutureDispatch,
   GameWorldState,
   ItemId,
@@ -73,6 +81,8 @@ import type {
   RealmCreatureEntity,
   RealmCreatureKind,
   RealmId,
+  RelicId,
+  SaplingItemId,
   Season,
   TimePhase,
   ToolType,
@@ -130,7 +140,12 @@ export function isTileWalkable(state: GameWorldState, tx: number, ty: number): b
     return false;
   }
   if (tile.obstacle === 'rock' || tile.obstacle === 'stump') return false;
-  if (tile.structure && tile.structure.type !== 'stone_path' && tile.structure.type !== 'flowerbed') {
+  if (
+    tile.structure &&
+    tile.structure.type !== 'stone_path' &&
+    tile.structure.type !== 'flowerbed' &&
+    tile.structure.type !== 'garden_arch'
+  ) {
     return false;
   }
   return true;
@@ -469,10 +484,46 @@ export function getXpThreshold(level: number): number {
   return Math.max(1, level) * 100;
 }
 
+export function isDoubleXpActive(state: GameWorldState): boolean {
+  return (state.doubleXpUntilMinutes ?? 0) > state.timeMinutes;
+}
+
+export function isEcoBlessingActive(state: GameWorldState): boolean {
+  return (state.ecoBlessingUntilMinutes ?? 0) > state.timeMinutes;
+}
+
+export function hasRelic(state: GameWorldState, id: RelicId): boolean {
+  return Array.isArray(state.collectedRelics) && state.collectedRelics.includes(id);
+}
+
+export function grantRelic(state: GameWorldState, id: RelicId): boolean {
+  if (!Array.isArray(state.collectedRelics)) state.collectedRelics = [];
+  if (state.collectedRelics.includes(id)) return false;
+  state.collectedRelics.push(id);
+  state.stats.relicsFound = state.collectedRelics.length;
+  return true;
+}
+
+export function getRelicSellMultiplier(state: GameWorldState): number {
+  let pct = 0;
+  if (hasRelic(state, 'ancient_amber')) pct += RELIC_DEFS.ancient_amber.sellBonusPct ?? 0;
+  if (hasRelic(state, 'oasis_prism')) pct += RELIC_DEFS.oasis_prism.sellBonusPct ?? 0;
+  return 1 + pct / 100;
+}
+
+export function getRelicXpMultiplier(state: GameWorldState): number {
+  let pct = 0;
+  if (hasRelic(state, 'whispering_totem')) pct += RELIC_DEFS.whispering_totem.xpBonusPct ?? 0;
+  if (hasRelic(state, 'star_chalice')) pct += RELIC_DEFS.star_chalice.xpBonusPct ?? 0;
+  return 1 + pct / 100;
+}
+
 export function grantXp(state: GameWorldState, amount: number): number | undefined {
   if (amount <= 0) return undefined;
   state.level = state.level ?? 1;
-  state.xp = (state.xp ?? 0) + amount;
+  const buffMul = isDoubleXpActive(state) ? 2 : 1;
+  const adjusted = Math.max(1, Math.round(amount * getRelicXpMultiplier(state) * buffMul));
+  state.xp = (state.xp ?? 0) + adjusted;
   let leveledUpTo: number | undefined;
   while (state.xp >= getXpThreshold(state.level)) {
     state.xp -= getXpThreshold(state.level);
@@ -502,10 +553,12 @@ export function getToolHitCount(level: number): number {
 }
 
 export function getToolStaminaCost(tool: ToolType, state: GameWorldState): number {
-  const swiftDiscount = isSwiftBuffActive(state) ? 1 : 0;
-  if (tool === 'hoe') return Math.max(1, Math.max(2, 5 - state.upgrades.hoeLevel) - swiftDiscount);
-  if (tool === 'watering_can') return Math.max(1, Math.max(1, 4 - state.upgrades.canLevel) - swiftDiscount);
-  return Math.max(1, Math.max(2, 6 - state.upgrades.axeLevel) - swiftDiscount);
+  const buffDiscount = isSwiftBuffActive(state) || isEcoBlessingActive(state) ? 1 : 0;
+  const relicDiscount = hasRelic(state, 'sky_compass') ? 1 : 0;
+  const discount = buffDiscount + relicDiscount;
+  if (tool === 'hoe') return Math.max(1, Math.max(2, 5 - state.upgrades.hoeLevel) - discount);
+  if (tool === 'watering_can') return Math.max(1, Math.max(1, 4 - state.upgrades.canLevel) - discount);
+  return Math.max(1, Math.max(2, 6 - state.upgrades.axeLevel) - discount);
 }
 
 export function addInventoryItem(state: GameWorldState, id: ItemId, amount: number): void {
@@ -672,8 +725,11 @@ export function computeSoilMoisturePct(state: GameWorldState): number {
   const wateredRatio = tilled.length > 0 ? watered / tilled.length : 0.4;
   let base = 46;
   if (state.weather === 'Rainstorm') base = 86;
+  else if (state.weather === 'Mist') base = 68;
   else if (state.weather === 'Drought') base = 22;
   else if (state.weather === 'Heatwave') base = 18;
+  else if (state.weather === 'Windy') base = 38;
+  else if (state.weather === 'Meteor') base = 44;
   return Math.max(10, Math.min(98, Math.round(base + wateredRatio * 14)));
 }
 
@@ -683,11 +739,86 @@ export function computeTemperatureC(state: GameWorldState): number {
   if (state.weather === 'Heatwave') temp += 11;
   else if (state.weather === 'Drought') temp += 5;
   else if (state.weather === 'Rainstorm') temp -= 4;
+  else if (state.weather === 'Mist') temp -= 2;
+  else if (state.weather === 'Windy') temp -= 3;
+  else if (state.weather === 'Meteor') temp -= 1;
   return temp;
 }
 
 export function isCoveredByBeehive(state: GameWorldState, x: number, y: number): boolean {
   return isCoveredByStructureRadius(state, x, y, 'beehive', BEEHIVE_RADIUS);
+}
+
+export function isCoveredByLadybug(state: GameWorldState, x: number, y: number): boolean {
+  return isCoveredByStructureRadius(state, x, y, 'ladybug_house', LADYBUG_RADIUS);
+}
+
+export function computeEcoScore(state: GameWorldState): EcoScoreBreakdown {
+  const sourceTiles =
+    (state.activeRealm ?? 'homestead') === 'homestead'
+      ? state.tiles
+      : state.realmCaches?.homestead?.tiles ?? state.tiles;
+
+  let energyPts = 0;
+  let waterSoilPts = 0;
+  let bioPts = 0;
+  let activePests = 0;
+  const uniqueCrops = new Set<CropType>();
+
+  for (const t of sourceTiles) {
+    if (t.crop && !t.crop.withered) {
+      uniqueCrops.add(t.crop.type);
+      if (t.crop.pestInfested) activePests += 1;
+    }
+    if ((t.mulchedDays ?? 0) > 0 || t.beanRotationBonus) {
+      waterSoilPts += 2;
+    }
+    if (t.fruitTree) {
+      bioPts += 7;
+    }
+    const st = t.structure?.type;
+    if (!st) continue;
+    if (st === 'windmill') energyPts += 12;
+    else if (st === 'sprinkler') energyPts += 6;
+    else if (st === 'lantern' || st === 'festive_lantern') energyPts += 4;
+    else if (st === 'nasa_station') energyPts += 8;
+
+    if (st === 'rain_tank') waterSoilPts += 10;
+    else if (st === 'drip_sprinkler') waterSoilPts += 10;
+    else if (st === 'compost') waterSoilPts += 6;
+    else if (st === 'sensor') waterSoilPts += 6;
+    else if (st === 'greenhouse') waterSoilPts += 9;
+
+    if (st === 'beehive') bioPts += 6;
+    else if (st === 'ladybug_house') bioPts += 8;
+    else if (st === 'owl_box') bioPts += 6;
+    else if (st === 'flowerbed' || st === 'wooden_bench' || st === 'garden_arch') bioPts += 3;
+  }
+
+  bioPts += uniqueCrops.size * 2;
+  const energyScore = Math.min(35, energyPts);
+  const waterSoilScore = Math.min(35, waterSoilPts);
+  const biodiversityScore = Math.min(30, bioPts);
+  const pestPenalty = Math.min(30, activePests * 8);
+  const total = Math.max(0, Math.min(100, energyScore + waterSoilScore + biodiversityScore - pestPenalty));
+  const rank: EcoScoreBreakdown['rank'] =
+    total >= 85 ? 'guardian' : total >= 65 ? 'thriving' : total >= 35 ? 'balanced' : 'seedling';
+  const dividendGold = total >= 80 ? Math.round(total * 0.35) : total >= 60 ? 15 : 0;
+  return { total, energyScore, waterSoilScore, biodiversityScore, pestPenalty, dividendGold, rank };
+}
+
+export function getSeasonFestivalKey(state: GameWorldState): string {
+  const cycle = Math.floor((Math.max(1, state.day) - 1) / (DAYS_PER_SEASON * SEASONS.length)) + 1;
+  return `${cycle}:${getSeason(state.seasonIndex)}`;
+}
+
+export function isFestivalDay(state: GameWorldState): boolean {
+  return getDayOfSeason(state.day) === DAYS_PER_SEASON;
+}
+
+export function hasClaimedCurrentFestival(state: GameWorldState): boolean {
+  const key = getSeasonFestivalKey(state);
+  return Array.isArray(state.festivalClaimedSeasons) && state.festivalClaimedSeasons.includes(key);
 }
 
 export function generateDailyOrder(
@@ -804,6 +935,28 @@ export function performTileAction(
   if (Math.hypot(dx, dy) > 0.05) {
     state.player.facingX = dx;
     state.player.facingY = dy;
+  }
+
+  // Priority 0.9: Harvest ripe Fruit Tree regardless of selected tool
+  if (tile.fruitTree?.hasFruit) {
+    if (state.player.stamina < 1) {
+      return { performed: false, kind: 'error', message: 'Too exhausted! Rest or eat' };
+    }
+    state.player.stamina = Math.max(0, state.player.stamina - 1);
+    const fDef = FRUIT_TREES[tile.fruitTree.kind];
+    addInventoryItem(state, tile.fruitTree.kind, 1);
+    tile.fruitTree.hasFruit = false;
+    state.stats.fruitsHarvested = (state.stats.fruitsHarvested ?? 0) + 1;
+    const leveledUpTo = grantXp(state, 18);
+    return {
+      performed: true,
+      kind: 'harvest',
+      tileX,
+      tileY,
+      wishOutcome: tile.fruitTree.kind,
+      leveledUpTo,
+      message: `+1 ${ITEMS[tile.fruitTree.kind].name} (${fDef.name})`,
+    };
   }
 
   // Priority 1: Harvest ripe crop regardless of selected tool (cozy QoL!)
@@ -1134,6 +1287,17 @@ export function performTileAction(
     };
   }
 
+  if (tile.structure?.type === 'cooking_stove') {
+    return {
+      performed: true,
+      kind: 'artisan',
+      tileX,
+      tileY,
+      wishOutcome: 'open_kitchen',
+      message: 'Opened Homestead Kitchen!',
+    };
+  }
+
   const selectedId = state.hotbar[state.player.selectedHotbarIndex];
 
   // Priority 2c-bis: Interactive Farm Animal Petting (when tile has no crop/obstacle/structure/tilled plot blocking)
@@ -1332,6 +1496,28 @@ export function performTileAction(
       wishOutcome: 'bio_mulch',
       leveledUpTo,
       message: 'Applied Bio-Mulch (2d moisture shield)!',
+    };
+  }
+
+  // Organic Neem Spray cures pest infestations safely
+  if (selectedId === 'pest_spray') {
+    if (!tile.crop || tile.crop.withered || !tile.crop.pestInfested) {
+      return { performed: false, kind: 'error', message: 'Use Neem Spray on pest-infested crops' };
+    }
+    if (!consumeInventoryItem(state, 'pest_spray', 1)) {
+      return { performed: false, kind: 'error', message: 'Out of Neem Spray' };
+    }
+    tile.crop.pestInfested = false;
+    state.stats.pestsCured = (state.stats.pestsCured ?? 0) + 1;
+    const leveledUpTo = grantXp(state, 12);
+    return {
+      performed: true,
+      kind: 'fertilize',
+      tileX,
+      tileY,
+      wishOutcome: 'pest_cured',
+      leveledUpTo,
+      message: 'Cured crop pests with Neem Spray!',
     };
   }
 
@@ -1561,12 +1747,47 @@ export function performTileAction(
     }
   }
 
+  // Fruit Tree sapling planting
+  if (itemDef.category === 'seed' && selectedId in SAPLING_TO_FRUIT) {
+    if (
+      tile.terrain !== 'grass' &&
+      tile.terrain !== 'moss_floor' &&
+      tile.terrain !== 'sand_dune' &&
+      tile.terrain !== 'cloud_stone'
+    ) {
+      return { performed: false, kind: 'error', message: 'Cannot plant tree on this terrain' };
+    }
+    if (tile.obstacle || tile.crop || tile.structure || tile.fruitTree) {
+      return { performed: false, kind: 'error', message: 'Tile is occupied' };
+    }
+    if (state.player.stamina < 2) {
+      return { performed: false, kind: 'error', message: 'Low Stamina — Rest at Farmhouse' };
+    }
+    if (!consumeInventoryItem(state, selectedId, 1)) {
+      return { performed: false, kind: 'error', message: 'Out of saplings' };
+    }
+    state.player.stamina -= 2;
+    tile.tilled = false;
+    tile.watered = false;
+    const kind = SAPLING_TO_FRUIT[selectedId as SaplingItemId];
+    tile.fruitTree = { kind, growthDays: 0, hasFruit: false };
+    const leveledUpTo = grantXp(state, 10);
+    return {
+      performed: true,
+      kind: 'plant',
+      tileX,
+      tileY,
+      leveledUpTo,
+      message: `Planted ${itemDef.name}`,
+    };
+  }
+
   // Seed planting
   if (itemDef.category === 'seed' && itemDef.cropType) {
     if (!tile.tilled) {
       return { performed: false, kind: 'error', message: 'Till soil with Hoe first' };
     }
-    if (tile.crop) {
+    if (tile.crop || tile.fruitTree) {
       return { performed: false, kind: 'error', message: 'A crop is already planted here' };
     }
     if (state.player.stamina < 1) {
@@ -1598,7 +1819,7 @@ export function performTileAction(
     ) {
       return { performed: false, kind: 'error', message: 'Cannot build on this terrain' };
     }
-    if (tile.obstacle || tile.crop || tile.structure) {
+    if (tile.obstacle || tile.crop || tile.structure || tile.fruitTree) {
       return { performed: false, kind: 'error', message: 'Tile is occupied' };
     }
     // Prevent blocking player's current tile with solid structures
@@ -1651,16 +1872,116 @@ export function eatCrop(
   state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + (def.edibleStamina ?? 0));
   state.player.health = Math.min(state.player.maxHealth, state.player.health + (def.edibleHealth ?? 0));
   let swiftApplied = false;
+  let buffLabel = '';
   if (id === 'herbal_tea') {
     state.swiftUntilMinutes = Math.min(DAY_END_MINUTES, state.timeMinutes + 180);
     swiftApplied = true;
+    buffLabel = ', Swift Brew!';
+  } else {
+    const recipe = COOKING_RECIPES.find((r) => r.id === id);
+    if (recipe?.buff && recipe.buffMinutes) {
+      const until = Math.min(DAY_END_MINUTES, state.timeMinutes + recipe.buffMinutes);
+      if (recipe.buff === 'swift') {
+        state.swiftUntilMinutes = Math.max(state.swiftUntilMinutes ?? 0, until);
+        swiftApplied = true;
+        buffLabel = ', Swift Brew!';
+      } else if (recipe.buff === 'double_xp') {
+        state.doubleXpUntilMinutes = Math.max(state.doubleXpUntilMinutes ?? 0, until);
+        buffLabel = ', 2× XP!';
+      } else if (recipe.buff === 'eco_blessing') {
+        state.ecoBlessingUntilMinutes = Math.max(state.ecoBlessingUntilMinutes ?? 0, until);
+        buffLabel = ', Eco Stamina Saver!';
+      }
+    }
   }
   return {
     ok: true,
     swiftApplied,
-    message: swiftApplied
-      ? `Drank ${def.name} (+${def.edibleStamina ?? 0} Stam, Swift Brew!)`
-      : `Ate ${def.name} (+${def.edibleStamina ?? 0} Stam)`,
+    message:
+      id === 'herbal_tea'
+        ? `Drank ${def.name} (+${def.edibleStamina ?? 0} Stam${buffLabel})`
+        : `Ate ${def.name} (+${def.edibleStamina ?? 0} Stam${buffLabel})`,
+  };
+}
+
+export function cookRecipe(
+  state: GameWorldState,
+  recipeId: CookedDishId
+): { ok: boolean; recipeId: CookedDishId; leveledUpTo?: number; message: string } {
+  const recipe = COOKING_RECIPES.find((r) => r.id === recipeId);
+  if (!recipe) {
+    return { ok: false, recipeId, message: 'Unknown kitchen recipe' };
+  }
+  for (const [ingId, qty] of Object.entries(recipe.ingredients) as [ItemId, number][]) {
+    if (!qty) continue;
+    if ((state.inventory[ingId] ?? 0) < qty) {
+      return {
+        ok: false,
+        recipeId,
+        message: `Need ${qty}× ${ITEMS[ingId]?.name ?? ingId}`,
+      };
+    }
+  }
+  for (const [ingId, qty] of Object.entries(recipe.ingredients) as [ItemId, number][]) {
+    if (!qty) continue;
+    consumeInventoryItem(state, ingId, qty);
+  }
+  addInventoryItem(state, recipe.id, 1);
+  state.stats.dishesCooked = (state.stats.dishesCooked ?? 0) + 1;
+  const leveledUpTo = grantXp(state, recipe.xpReward);
+  return {
+    ok: true,
+    recipeId,
+    leveledUpTo,
+    message: `Cooked ${ITEMS[recipe.id].name}!`,
+  };
+}
+
+export function participateInFestival(
+  state: GameWorldState
+): {
+  ok: boolean;
+  season: Season;
+  rewardGold: number;
+  rewardItem?: { id: ItemId; qty: number };
+  leveledUpTo?: number;
+  message: string;
+} {
+  const season = getSeason(state.seasonIndex);
+  if (!isFestivalDay(state)) {
+    return { ok: false, season, rewardGold: 0, message: 'Festival is held on Day 8 of each season' };
+  }
+  const key = getSeasonFestivalKey(state);
+  if (!Array.isArray(state.festivalClaimedSeasons)) state.festivalClaimedSeasons = [];
+  if (state.festivalClaimedSeasons.includes(key)) {
+    return { ok: false, season, rewardGold: 0, message: 'Festival gift already claimed this season' };
+  }
+  state.festivalClaimedSeasons.push(key);
+  state.stats.festivalsAttended = (state.stats.festivalsAttended ?? 0) + 1;
+
+  const rewardGold = 120;
+  const rewardItem: { id: ItemId; qty: number } =
+    season === 'Spring'
+      ? { id: 'apple_sapling', qty: 1 }
+      : season === 'Summer'
+      ? { id: 'olive_sapling', qty: 1 }
+      : season === 'Autumn'
+      ? { id: 'pumpkin_pie', qty: 1 }
+      : { id: 'date_smoothie', qty: 1 };
+
+  state.player.gold += rewardGold;
+  state.stats.totalGoldEarned += rewardGold;
+  state.player.stamina = state.player.maxStamina;
+  state.player.health = state.player.maxHealth;
+  addInventoryItem(state, rewardItem.id, rewardItem.qty);
+  const leveledUpTo = grantXp(state, 35);
+  return {
+    ok: true,
+    season,
+    rewardGold,
+    rewardItem,
+    leveledUpTo,
+    message: `${season} Festival! +${rewardGold}g & +${rewardItem.qty} ${ITEMS[rewardItem.id].name}`,
   };
 }
 
@@ -1693,24 +2014,36 @@ export function rollWeather(season: Season, rng: () => number = Math.random): We
   if (season === 'Spring') {
     if (r < 0.25) return 'Rainstorm';
     if (r < 0.40) return 'Drought';
-    if (r < 0.54) return 'Heatwave';
+    if (r < 0.50) return 'Heatwave';
+    if (r >= 0.62 && r < 0.69) return 'Mist';
+    if (r >= 0.71 && r < 0.78) return 'Windy';
+    if (r >= 0.93) return 'Meteor';
     return 'Clear';
   }
   if (season === 'Summer') {
     if (r < 0.28) return 'Heatwave';
-    if (r < 0.50) return 'Drought';
-    if (r < 0.65) return 'Rainstorm';
+    if (r < 0.46) return 'Drought';
+    if (r < 0.49) return 'Rainstorm';
+    if (r >= 0.62 && r < 0.68) return 'Mist';
+    if (r >= 0.71 && r < 0.79) return 'Windy';
+    if (r >= 0.93) return 'Meteor';
     return 'Clear';
   }
   if (season === 'Autumn') {
     if (r < 0.30) return 'Rainstorm';
-    if (r < 0.44) return 'Drought';
-    if (r < 0.54) return 'Heatwave';
+    if (r < 0.42) return 'Drought';
+    if (r < 0.49) return 'Heatwave';
+    if (r >= 0.62 && r < 0.69) return 'Mist';
+    if (r >= 0.71 && r < 0.79) return 'Windy';
+    if (r >= 0.93) return 'Meteor';
     return 'Clear';
   }
   // Winter
   if (r < 0.38) return 'Rainstorm';
-  if (r < 0.50) return 'Drought';
+  if (r < 0.49) return 'Drought';
+  if (r >= 0.62 && r < 0.69) return 'Mist';
+  if (r >= 0.71 && r < 0.78) return 'Windy';
+  if (r >= 0.93) return 'Meteor';
   return 'Clear';
 }
 
@@ -1773,6 +2106,9 @@ export function advanceDay(
   let wildlifeDamage = 0;
   let owlRepelled = 0;
   let shadedCropsInHeatwave = 0;
+  let pestsAppeared = 0;
+  let pestsClearedByLadybug = 0;
+  let fruitsGrown = 0;
 
   let owlCharges = state.tiles.filter((t) => t.structure?.type === 'owl_box').length;
 
@@ -1800,10 +2136,27 @@ export function advanceDay(
   for (const tile of state.tiles) {
     const inGreenhouse = inSkySanctuary || isCoveredByGreenhouse(state, tile.x, tile.y);
 
+    if (tile.fruitTree) {
+      const fDef = FRUIT_TREES[tile.fruitTree.kind];
+      if (tile.fruitTree.growthDays < fDef.daysToMature) {
+        tile.fruitTree.growthDays = Math.min(
+          fDef.daysToMature,
+          tile.fruitTree.growthDays + (inSkySanctuary ? 2 : 1)
+        );
+      }
+    }
+
     if (tile.crop) {
       const crop = tile.crop;
       if (!crop.withered) {
         const def = CROPS[crop.type];
+
+        // Natural biological pest control via Ladybug Sanctuary cures existing infestations before growth
+        if (crop.pestInfested && isCoveredByLadybug(state, tile.x, tile.y)) {
+          crop.pestInfested = false;
+          pestsClearedByLadybug += 1;
+          state.stats.pestsCured = (state.stats.pestsCured ?? 0) + 1;
+        }
 
         // Heatwave withers unprotected sensitive crops (e.g. Strawberry, Tomato) unless covered by Shade Net or Greenhouse
         if (prevWeather === 'Heatwave' && !inGreenhouse) {
@@ -1822,8 +2175,9 @@ export function advanceDay(
           shadedCropsInHeatwave += 1;
         }
 
-        // Rainstorm auto-waters, but completely unprotected crops risk flood/frost stress (Chili & Greenhouse are immune)
-        const wasWatered = tile.watered || prevWeather === 'Rainstorm' || inSkySanctuary;
+        // Rainstorm or Morning Mist hydrates, but unprotected crops risk flood stress in storms
+        const wasWatered =
+          tile.watered || prevWeather === 'Rainstorm' || prevWeather === 'Mist' || inSkySanctuary;
 
         if (
           prevWeather === 'Rainstorm' &&
@@ -1844,7 +2198,7 @@ export function advanceDay(
           }
         }
 
-        if (wasWatered) {
+        if (wasWatered && !crop.pestInfested) {
           crop.daysUnwatered = 0;
           const isFavSeason = def.favoriteSeasons.includes(prevSeason);
           // In winter, non-favorite crops grow half as likely unless warmed by lantern or inside Greenhouse
@@ -1871,12 +2225,27 @@ export function advanceDay(
           ) {
             crop.growthDays += 1;
           }
-        } else {
+        } else if (!wasWatered) {
           // Un-watered crops wither after 2 days
           crop.daysUnwatered += 1;
           if (crop.daysUnwatered >= 2) {
             crop.withered = true;
             cropsWithered += 1;
+          }
+        }
+
+        // Unprotected living crops may pick up pests overnight unless guarded by Ladybug House or Greenhouse
+        if (
+          !crop.withered &&
+          !crop.pestInfested &&
+          !isCoveredByLadybug(state, tile.x, tile.y) &&
+          !inGreenhouse &&
+          prevWeather !== 'Rainstorm'
+        ) {
+          const pestRoll = rng();
+          if (pestRoll >= 0.63 && pestRoll < 0.71) {
+            crop.pestInfested = true;
+            pestsAppeared += 1;
           }
         }
       }
@@ -1899,6 +2268,22 @@ export function advanceDay(
   state.seasonIndex = newSeasonIndex;
   const newSeason = getSeason(newSeasonIndex);
 
+  // Fruit tree seasonal blossoming on mature trees
+  for (const tile of state.tiles) {
+    if (!tile.fruitTree) continue;
+    const fDef = FRUIT_TREES[tile.fruitTree.kind];
+    if (
+      tile.fruitTree.growthDays >= fDef.daysToMature &&
+      !tile.fruitTree.hasFruit &&
+      (fDef.harvestSeasons.includes(newSeason) ||
+        inSkySanctuary ||
+        isCoveredByGreenhouse(state, tile.x, tile.y))
+    ) {
+      tile.fruitTree.hasFruit = true;
+      fruitsGrown += 1;
+    }
+  }
+
   // Use forecastWeather if present, otherwise roll; also roll tomorrow's forecast for NASA Station
   const nextWeather = state.forecastWeather ?? rollWeather(newSeason, rng);
   const tomorrowSeason = getSeason(Math.floor(state.day / DAYS_PER_SEASON));
@@ -1910,6 +2295,8 @@ export function advanceDay(
   state.heatwaveMiddayTriggered = false;
   state.wishedToday = false;
   state.swiftUntilMinutes = 0;
+  state.doubleXpUntilMinutes = 0;
+  state.ecoBlessingUntilMinutes = 0;
   state.pettedAnimalsToday = [];
   state.elderGiftsToday = [];
   state.strangeZoneUsedToday = [];
@@ -1922,13 +2309,27 @@ export function advanceDay(
   state.timeMinutes = DAY_START_MINUTES;
   state.wildlife = [];
 
-  // Also keep cached Homestead crops growing overnight if player slept while away in another realm
+  // Also keep cached Homestead crops & fruit trees growing overnight if player slept while away in another realm
   if ((state.activeRealm ?? 'homestead') !== 'homestead' && state.realmCaches?.homestead) {
     const homeCache = state.realmCaches.homestead;
     for (const tile of homeCache.tiles) {
+      if (tile.fruitTree) {
+        const fDef = FRUIT_TREES[tile.fruitTree.kind];
+        if (tile.fruitTree.growthDays < fDef.daysToMature) {
+          tile.fruitTree.growthDays += 1;
+        }
+        if (
+          tile.fruitTree.growthDays >= fDef.daysToMature &&
+          !tile.fruitTree.hasFruit &&
+          fDef.harvestSeasons.includes(newSeason)
+        ) {
+          tile.fruitTree.hasFruit = true;
+          fruitsGrown += 1;
+        }
+      }
       if (tile.crop && !tile.crop.withered) {
         const def = CROPS[tile.crop.type];
-        if ((tile.watered || prevWeather === 'Rainstorm') && tile.crop.growthDays < def.daysToGrow) {
+        if ((tile.watered || prevWeather === 'Rainstorm' || prevWeather === 'Mist') && tile.crop.growthDays < def.daysToGrow) {
           tile.crop.growthDays += 1;
           cropsGrown += 1;
         }
@@ -1937,7 +2338,7 @@ export function advanceDay(
         tile.mulchedDays = Math.max(0, (tile.mulchedDays ?? 0) - 1);
         if (tile.tilled) tile.watered = true;
       } else {
-        tile.watered = nextWeather === 'Rainstorm' && tile.tilled;
+        tile.watered = (nextWeather === 'Rainstorm' || nextWeather === 'Mist') && tile.tilled;
       }
       tile.droughtDriedToday = false;
     }
@@ -1980,9 +2381,10 @@ export function advanceDay(
     }
   }
 
-  // Rainstorm, Drip Sprinklers, Solar Auto-Sprinklers, & Bio-Mulch water tilled soil for the new morning
+  // Rainstorm, Mist, Drip Sprinklers, Solar Auto-Sprinklers, & Bio-Mulch water tilled soil for the new morning
   let sprinklerWatered = 0;
   let dripWatered = 0;
+  let mistHydrated = 0;
   for (const tile of state.tiles) {
     if ((tile.mulchedDays ?? 0) > 0) {
       tile.mulchedDays = Math.max(0, (tile.mulchedDays ?? 0) - 1);
@@ -1991,6 +2393,9 @@ export function advanceDay(
     if (!tile.tilled) continue;
     if (nextWeather === 'Rainstorm') {
       tile.watered = true;
+    } else if (nextWeather === 'Mist') {
+      tile.watered = true;
+      mistHydrated += 1;
     } else if (dripRows.has(tile.y)) {
       tile.watered = true;
       dripWatered += 1;
@@ -2051,6 +2456,10 @@ export function advanceDay(
   let butterMade = 0;
   let teaMade = 0;
   let windmillGold = 0;
+  let windyWindmillBonus = 0;
+  const starWindmillBonus = hasRelic(state, 'star_chalice')
+    ? RELIC_DEFS.star_chalice.windmillBonusGold ?? 0
+    : 0;
   for (const tile of state.tiles) {
     if (tile.structure?.type === 'cheese_press' && (state.inventory.milk ?? 0) >= 1) {
       consumeInventoryItem(state, 'milk', 1);
@@ -2085,12 +2494,30 @@ export function advanceDay(
         state.stats.teaBrewed = (state.stats.teaBrewed ?? 0) + 1;
       }
     } else if (tile.structure?.type === 'windmill') {
-      windmillGold += WINDMILL_DAILY_GOLD;
+      const base = WINDMILL_DAILY_GOLD + starWindmillBonus;
+      windmillGold += base;
+      if (nextWeather === 'Windy' || prevWeather === 'Windy') {
+        windyWindmillBonus += base;
+      }
     }
   }
-  if (windmillGold > 0) {
-    state.player.gold += windmillGold;
-    state.stats.totalGoldEarned += windmillGold;
+  const totalWindmill = windmillGold + windyWindmillBonus;
+  if (totalWindmill > 0) {
+    state.player.gold += totalWindmill;
+    state.stats.totalGoldEarned += totalWindmill;
+  }
+
+  // Meteor Shower overnight blessing & Star Chalice relic discovery
+  let meteorBonusGold = 0;
+  let meteorRelicUnlocked: RelicId | undefined;
+  if (prevWeather === 'Meteor') {
+    meteorBonusGold = hasNasaStation(state) ? 45 : 25;
+    state.player.gold += meteorBonusGold;
+    state.stats.totalGoldEarned += meteorBonusGold;
+    state.lastMeteorStarsEarned = (state.lastMeteorStarsEarned ?? 0) + 1;
+    if (grantRelic(state, 'star_chalice')) {
+      meteorRelicUnlocked = 'star_chalice';
+    }
   }
 
   // Barn Cat morning friendship gift (+1 Fish on even days, +15g on odd days)
@@ -2114,6 +2541,15 @@ export function advanceDay(
     state.stats.totalGoldEarned += morningBonusGold;
   }
 
+  // Eco-Score Sustainability Dividend
+  const eco = computeEcoScore(state);
+  const ecoDividendGold = eco.dividendGold;
+  if (ecoDividendGold > 0) {
+    state.player.gold += ecoDividendGold;
+    state.stats.totalGoldEarned += ecoDividendGold;
+    state.stats.ecoDividendsEarned = (state.stats.ecoDividendsEarned ?? 0) + ecoDividendGold;
+  }
+
   // Generate fresh Daily Village Order, Daily Market Surge (+50%), & reset harvest combo streak
   state.dailyOrder = generateDailyOrder(state.day, newSeason, rng);
   state.marketSurgeCrop = rollMarketSurgeCrop(state.day, rng);
@@ -2131,7 +2567,9 @@ export function advanceDay(
 
   const notes: string[] = [];
   if (cropsGrown > 0) notes.push(`${cropsGrown} crop${cropsGrown > 1 ? 's' : ''} grew`);
+  if (fruitsGrown > 0) notes.push(`${fruitsGrown} orchard tree fruited`);
   if (rainbowActive) notes.push('Rainbow morning!');
+  if (mistHydrated > 0) notes.push(`Morning mist hydrated ${mistHydrated} tiles`);
   if (sprinklerWatered > 0) notes.push(`${sprinklerWatered} sprinkler-watered`);
   if (dripWatered > 0) notes.push(`${dripWatered} drip-irrigated (-${waterSavedLiters}L saved)`);
   if (rainCollectedLiters > 0) notes.push(`+${rainCollectedLiters}L rain stored`);
@@ -2143,8 +2581,12 @@ export function advanceDay(
   if (butterMade > 0) notes.push(`+${butterMade} farm butter`);
   if (jamMade > 0) notes.push(`+${jamMade} berry jam`);
   if (teaMade > 0) notes.push(`+${teaMade} herbal tea`);
-  if (windmillGold > 0) notes.push(`+${windmillGold}g windmill income`);
+  if (totalWindmill > 0) notes.push(`+${totalWindmill}g windmill income`);
+  if (meteorBonusGold > 0) notes.push(`+${meteorBonusGold}g meteor starlight`);
+  if (ecoDividendGold > 0) notes.push(`+${ecoDividendGold}g Eco Dividend`);
   if (morningBonusGold > 0) notes.push(`+${morningBonusGold}g streak bonus`);
+  if (pestsClearedByLadybug > 0) notes.push(`Ladybugs cured ${pestsClearedByLadybug} pests`);
+  if (pestsAppeared > 0) notes.push(`${pestsAppeared} pest alert`);
   if (owlRepelled > 0) notes.push(`${owlRepelled} owl save`);
   if (catGift) notes.push(`cat gift: ${catGift}`);
   if (cropsWithered > 0) notes.push(`${cropsWithered} withered`);
@@ -2169,7 +2611,16 @@ export function advanceDay(
     butterMade,
     jamMade,
     teaMade,
-    windmillGold,
+    windmillGold: totalWindmill,
+    windyWindmillBonus,
+    meteorBonusGold,
+    fruitsGrown,
+    pestsAppeared,
+    pestsClearedByLadybug,
+    mistHydrated,
+    ecoScore: eco.total,
+    ecoDividendGold,
+    relicUnlocked: meteorRelicUnlocked,
     morningBonusGold,
     catGift,
     rainbowActive,
@@ -2231,6 +2682,10 @@ export function sellCropItem(
   if (def.cropType && state.marketSurgeCrop === def.cropType) {
     unitPrice = Math.round(unitPrice * 1.5); // +50% daily Market Surge!
   }
+  const relicMul = getRelicSellMultiplier(state);
+  if (relicMul > 1) {
+    unitPrice = Math.round(unitPrice * relicMul);
+  }
 
   const earned = unitPrice * sellQty;
   consumeInventoryItem(state, itemId, sellQty);
@@ -2273,7 +2728,7 @@ export function upgradeTool(
 
 export function craftItem(
   state: GameWorldState,
-  recipeId: PlaceableType | 'fertilizer' | 'bio_mulch'
+  recipeId: PlaceableType | 'fertilizer' | 'bio_mulch' | 'pest_spray'
 ): { ok: boolean; message: string } {
   const recipe = CRAFT_RECIPES.find((r) => r.id === recipeId);
   if (!recipe) return { ok: false, message: 'Unknown recipe' };
@@ -2312,7 +2767,9 @@ export function computeFarmRestorationPercent(state: GameWorldState): number {
     if (t.tillable) {
       farmPlotTiles += 1;
       if (!t.obstacle) clearedFarmTiles += 1;
-      if (t.tilled || t.structure) cultivatedTiles += 1;
+      if (t.tilled || t.structure || t.fruitTree) cultivatedTiles += 1;
+    } else if (t.fruitTree) {
+      cultivatedTiles += 1;
     }
     if (t.structure) {
       defenseDecorCount += 1;
@@ -3467,6 +3924,7 @@ export function interactWithStrangeZone(
   realmId: RealmId;
   firstDiscovery: boolean;
   blessedToday: boolean;
+  relicUnlocked?: RelicId;
   leveledUpTo?: number;
   message: string;
 } {
@@ -3491,6 +3949,16 @@ export function interactWithStrangeZone(
     state.investigatedStrangeZones.push(realmId);
     state.stats.strangeZonesFound = state.investigatedStrangeZones.length;
   }
+
+  const realmRelic: RelicId =
+    realmId === 'homestead'
+      ? 'ancient_amber'
+      : realmId === 'whispering_woods'
+      ? 'whispering_totem'
+      : realmId === 'crystal_oasis'
+      ? 'oasis_prism'
+      : 'sky_compass';
+  const relicUnlocked = grantRelic(state, realmRelic) ? realmRelic : undefined;
 
   const alreadyUsed = state.strangeZoneUsedToday.includes(realmId);
   let leveledUpTo: number | undefined;
@@ -3526,6 +3994,7 @@ export function interactWithStrangeZone(
     realmId,
     firstDiscovery,
     blessedToday: !alreadyUsed,
+    relicUnlocked,
     leveledUpTo,
     message: !alreadyUsed
       ? `Strange Zone resonance activated in ${realmId}`

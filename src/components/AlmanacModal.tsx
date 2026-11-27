@@ -1,7 +1,15 @@
 import { useState } from 'react';
-import { BookOpen, CheckCircle2, Lock, Sparkles, TrendingUp, X } from 'lucide-react';
-import { CROPS, ITEMS } from '../game/constants';
-import { getItemLabel, translateSeason, UI_TEXT, type Language } from '../game/i18n';
+import { Award, BookOpen, CheckCircle2, Lock, Sparkles, TrendingUp, X } from 'lucide-react';
+import { COOKING_RECIPES, CROPS, FRUIT_TREES, ITEMS, RELIC_DEFS, RELIC_ORDER } from '../game/constants';
+import {
+  getBuffLabel,
+  getFeatureText,
+  getItemLabel,
+  getRelicLabel,
+  translateSeason,
+  UI_TEXT,
+  type Language,
+} from '../game/i18n';
 import { getXpThreshold } from '../game/rules';
 import type { CropType, GameWorldState, ItemId } from '../game/types';
 import { ItemIcon } from './PixelIcons';
@@ -28,13 +36,15 @@ const ARTISAN_ITEMS: ItemId[] = [
 ];
 
 export function AlmanacModal({ world, lang, onClose }: AlmanacModalProps) {
-  const [tab, setTab] = useState<'crops' | 'artisan' | 'stats'>('crops');
+  const [tab, setTab] = useState<'crops' | 'artisan' | 'orchards' | 'stats'>('crops');
   const t = UI_TEXT[lang];
+  const fx = getFeatureText(lang);
   const level = world.level ?? 1;
   const xp = world.xp ?? 0;
   const xpNeed = getXpThreshold(level);
   const xpPct = Math.min(100, Math.round((xp / xpNeed) * 100));
   const discovered = new Set(world.discoveredItems ?? []);
+  const collectedRelics = new Set(world.collectedRelics ?? []);
   const surgeCrop = world.marketSurgeCrop ?? 'wheat';
   const surgeLabel = getItemLabel(surgeCrop, lang);
   const cropList = Object.keys(CROPS) as CropType[];
@@ -137,6 +147,18 @@ export function AlmanacModal({ world, lang, onClose }: AlmanacModalProps) {
             }`}
           >
             {t.almanacArtisanTab} ({ARTISAN_ITEMS.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('orchards')}
+            data-testid="almanac-orchards-tab"
+            className={`px-3.5 py-1.5 rounded-md text-sm font-semibold cursor-pointer whitespace-nowrap ${
+              tab === 'orchards'
+                ? 'bg-[#3d7a47] text-white'
+                : 'bg-[#e5d2af] text-[#4a3322] hover:bg-[#dbc39a]'
+            }`}
+          >
+            {fx.orchardAlmanacTab} ({collectedRelics.size}/{RELIC_ORDER.length})
           </button>
           <button
             type="button"
@@ -273,12 +295,142 @@ export function AlmanacModal({ world, lang, onClose }: AlmanacModalProps) {
             </div>
           )}
 
+          {tab === 'orchards' && (
+            <div className="space-y-4">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-[#5c4028] flex items-center gap-1.5">
+                    <Award className="w-3.5 h-3.5 text-[#d97706]" />
+                    <span>{fx.relicsHeader}</span>
+                  </h3>
+                  <span className="text-xs font-mono-tabular font-bold text-[#7d5207]">
+                    {collectedRelics.size}/{RELIC_ORDER.length}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#694d36] mb-2">{fx.relicsSub}</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {RELIC_ORDER.map((relicId) => {
+                    const def = RELIC_DEFS[relicId];
+                    const rLabel = getRelicLabel(relicId, lang);
+                    const unlocked = collectedRelics.has(relicId);
+                    return (
+                      <div
+                        key={relicId}
+                        data-testid={`relic-card-${relicId}`}
+                        className={`p-3 rounded-lg border flex items-start gap-2.5 ${
+                          unlocked
+                            ? 'bg-[#fef6dc] border-[#cfa859]'
+                            : 'bg-[#ede0c4]/65 border-[#cbb48d] opacity-80'
+                        }`}
+                      >
+                        <span
+                          className="w-8 h-8 rounded-lg flex items-center justify-center border shrink-0 mt-0.5 font-bold text-sm"
+                          style={{
+                            backgroundColor: unlocked ? `${def.accentColor}30` : '#d6c2a3',
+                            borderColor: unlocked ? def.accentColor : '#a68c64',
+                            color: '#2c1e14',
+                          }}
+                        >
+                          {unlocked ? '✦' : '?'}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="font-bold text-xs sm:text-sm text-[#2c1e14] truncate">
+                              {rLabel.name}
+                            </span>
+                            <span
+                              className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                                unlocked ? 'bg-[#3d7a47] text-white' : 'bg-[#d8c39b] text-[#5c4028]'
+                              }`}
+                            >
+                              {unlocked ? t.unlockedLabel : t.lockedBadge}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-[#694d36]">{rLabel.source}</div>
+                          <div className="text-[11px] font-semibold text-[#1e5631] mt-0.5">{rLabel.buff}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-[#5c4028] mb-2">
+                  {fx.fruitTreesHeader}
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {Object.values(FRUIT_TREES).map((tree) => {
+                    const label = getItemLabel(tree.kind, lang);
+                    const isDiscovered = discovered.has(tree.kind) || discovered.has(tree.saplingId);
+                    const seasonsText = tree.harvestSeasons
+                      .map((s) => translateSeason(s, lang))
+                      .join(' · ');
+                    return (
+                      <div
+                        key={tree.kind}
+                        className={`p-2.5 rounded-lg border flex flex-col gap-1.5 ${
+                          isDiscovered ? 'bg-[#fbf2e1] border-[#d6be96]' : 'bg-[#ede0c4]/70 border-[#cbb48d]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <ItemIcon id={tree.kind} className="w-8 h-8 shrink-0" />
+                          <div className="min-w-0">
+                            <div className="font-bold text-xs text-[#2c1e14] truncate">{label.name}</div>
+                            <div className="text-[11px] font-mono-tabular text-[#7d5207]">
+                              {tree.daysToMature}d · {tree.sellPrice}g
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-[11px] text-[#2f6e3a] font-medium">
+                          {fx.harvestSeasonsLabel}: {seasonsText}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-[#5c4028] mb-2">
+                  {fx.cookedDishesHeader}
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {COOKING_RECIPES.map((recipe) => {
+                    const label = getItemLabel(recipe.id, lang);
+                    const def = ITEMS[recipe.id];
+                    return (
+                      <div
+                        key={recipe.id}
+                        className="p-2.5 rounded-lg bg-[#fbf2e1] border border-[#d6be96] flex items-center gap-2.5"
+                      >
+                        <ItemIcon id={recipe.id} className="w-8 h-8 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <div className="font-bold text-xs text-[#2c1e14] truncate">{label.name}</div>
+                          <div className="text-[11px] text-[#1e5631] font-semibold">
+                            {recipe.buff ? `${getBuffLabel(recipe.buff, lang)} · ` : ''}
+                            <span dir="ltr" className="text-[#7d5207] font-mono-tabular">
+                              {def.sellPrice}g
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
           {tab === 'stats' && (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
               {[
                 { label: t.daysStat, val: `${world.day}`, icon: 'wheat' as ItemId },
                 { label: t.harvestedStat, val: `${world.stats.cropsHarvested}`, icon: 'carrot' as ItemId },
                 { label: t.gold, val: `${world.stats.totalGoldEarned}g`, icon: 'sunflower' as ItemId },
+                { label: getItemLabel('apple', lang).name, val: `${world.stats.fruitsHarvested ?? 0}`, icon: 'apple' as ItemId },
+                { label: getItemLabel('pumpkin_pie', lang).name, val: `${world.stats.dishesCooked ?? 0}`, icon: 'pumpkin_pie' as ItemId },
+                { label: getItemLabel('pest_spray', lang).name, val: `${world.stats.pestsCured ?? 0}`, icon: 'pest_spray' as ItemId },
                 { label: getItemLabel('fish', lang).name, val: `${world.stats.fishCaught ?? 0}`, icon: 'fish' as ItemId },
                 { label: getItemLabel('golden_koi', lang).name, val: `${world.stats.koiCaught ?? 0}`, icon: 'golden_koi' as ItemId },
                 { label: getItemLabel('cheese', lang).name, val: `${world.stats.cheeseMade ?? 0}`, icon: 'cheese' as ItemId },
@@ -287,7 +439,7 @@ export function AlmanacModal({ world, lang, onClose }: AlmanacModalProps) {
                 { label: getItemLabel('herbal_tea', lang).name, val: `${world.stats.teaBrewed ?? 0}`, icon: 'herbal_tea' as ItemId },
                 { label: getItemLabel('owl_box', lang).name, val: `${world.stats.owlSaves ?? 0}`, icon: 'owl_box' as ItemId },
                 { label: t.waterSavedLabel, val: `${Math.round(world.stats.waterSavedLiters)}${t.litersUnit}`, icon: 'drip_sprinkler' as ItemId },
-                { label: t.missions, val: `${world.claimedMissions.length}/24`, icon: 'greenhouse' as ItemId },
+                { label: t.missions, val: `${world.claimedMissions.length}/31`, icon: 'greenhouse' as ItemId },
               ].map((stat) => (
                 <div
                   key={stat.label}

@@ -19,16 +19,20 @@ import {
 import type {
   ChatMessage,
   ClientToServerMessage,
+  CoopChallengeKind,
+  CoopChallengeState,
   FxPayload,
   RemotePlayerState,
   RoomSummary,
   ServerToClientMessage,
+  TradeOffer,
   VoicePeerState,
   VoiceSignalPayload,
 } from '../game/multiplayer.ts';
 import { COOP_EMOTES, MAX_ROOM_PLAYERS, PLAYER_PALETTE } from '../game/multiplayer.ts';
 import { getDailyQuizForDay, normalizeFarmerStyle } from '../game/funFeatures.ts';
 import {
+  addInventoryItem,
   advanceDay,
   answerEcoQuiz,
   buyDairyCow,
@@ -39,12 +43,15 @@ import {
   buyShopItem,
   catchNearbyFirefly,
   claimMissionReward,
+  consumeInventoryItem,
+  cookRecipe,
   craftItem,
   createInitialFarmState,
   eatBestFood,
   eatCrop,
   fulfillDailyOrder,
   getSeason,
+  grantXp,
   interactWithStrangeZone,
   interactWithVillageElder,
   isNearStrangeZone,
@@ -52,6 +59,7 @@ import {
   isNearWell,
   isTileWalkable,
   openMysteryChest,
+  participateInFestival,
   performTileAction,
   renameFarmPet,
   sellCropItem,
@@ -67,7 +75,7 @@ import {
   unlockRealm,
   upgradeTool,
 } from '../game/rules.ts';
-import type { GameWorldState, ItemId, RealmId, ToolType } from '../game/types.ts';
+import type { CookedDishId, GameWorldState, ItemId, RealmId, ToolType } from '../game/types.ts';
 import {
   APP_VERSION,
   parsePatchManifest,
@@ -99,6 +107,8 @@ interface ServerRoom {
   players: Map<string, RoomClient>;
   sleepVotes: Set<string>;
   chat: ChatMessage[];
+  coopChallenge: CoopChallengeState | null;
+  tradeOffers: TradeOffer[];
   wildlifeSpawnTimer: number;
   lastTickMs: number;
   emptySinceMs: number | null;
@@ -462,7 +472,17 @@ export function createMultiplayerServer(
       players: getConnectedPlayers(room).map(toPublicPlayer),
       hostId: room.hostId,
       sleepVotes: Array.from(room.sleepVotes),
+      coopChallenge: room.coopChallenge,
+      tradeOffers: room.tradeOffers,
       ...(teleportIds && teleportIds.length > 0 ? { teleportIds } : {}),
+    });
+  }
+
+  function broadcastCoopState(room: ServerRoom): void {
+    broadcastToRoom(room, {
+      type: 'coop:state',
+      coopChallenge: room.coopChallenge,
+      tradeOffers: room.tradeOffers,
     });
   }
 
@@ -706,6 +726,8 @@ export function createMultiplayerServer(
         players: new Map([[player.id, player]]),
         sleepVotes: new Set(),
         chat: [],
+        coopChallenge: null,
+        tradeOffers: [],
         wildlifeSpawnTimer: 4,
         lastTickMs: now,
         emptySinceMs: null,
@@ -733,6 +755,8 @@ export function createMultiplayerServer(
         sleepVotes: [],
         chat: room.chat,
         voiceStates: getRoomVoiceStates(room),
+        coopChallenge: room.coopChallenge,
+        tradeOffers: room.tradeOffers,
       });
       if (room.isPublic) {
         broadcastRoomsListToLobby();
@@ -848,6 +872,8 @@ export function createMultiplayerServer(
         sleepVotes: Array.from(room.sleepVotes),
         chat: room.chat,
         voiceStates,
+        coopChallenge: room.coopChallenge,
+        tradeOffers: room.tradeOffers,
       });
 
       broadcastToRoom(
@@ -1043,6 +1069,27 @@ export function createMultiplayerServer(
       const wy = (msg.ty + 0.5) * TILE_SIZE;
 
       if (res.performed) {
+        let challengeJustFinished = false;
+        if (room.coopChallenge && room.coopChallenge.status === 'active') {
+          const ch = room.coopChallenge;
+          const matchKind =
+            (ch.kind === 'harvest' && res.kind === 'harvest') ||
+            (ch.kind === 'water' && res.kind === 'water') ||
+            (ch.kind === 'defend' && (res.kind === 'defend' || res.wishOutcome === 'pest_cured'));
+          if (matchKind) {
+            ch.progress = Math.min(ch.target, ch.progress + 1);
+            ch.contributors[player.id] = (ch.contributors[player.id] ?? 0) + 1;
+            if (ch.progress >= ch.target) {
+              ch.status = 'completed';
+              challengeJustFinished = true;
+              room.world.player.gold += ch.rewardGold;
+              room.world.stats.totalGoldEarned += ch.rewardGold;
+              room.world.stats.coopChallengesCompleted =
+                (room.world.stats.coopChallengesCompleted ?? 0) + 1;
+              grantXp(room.world, 25);
+            }
+          }
+        }
         syncWorldToRoom(room);
         broadcastFx(room, {
           kind: 'tile',
@@ -1060,6 +1107,19 @@ export function createMultiplayerServer(
           leveledUpTo: res.leveledUpTo,
           treasureFound: res.treasureFound,
         });
+        if (challengeJustFinished && room.coopChallenge) {
+          broadcastFx(room, {
+            kind: 'toast',
+            actorId: player.id,
+            wx,
+            wy: wy - 20,
+            sfx: 'quest',
+            color: '#4ade80',
+            count: 24,
+            text: `Co-op Rush +${room.coopChallenge.rewardGold}g!`,
+            textColor: '#4ade80',
+          });
+        }
       } else if (res.kind === 'error' && res.message) {
         sendToClient(ws, {
           type: 'fx:event',
@@ -1142,6 +1202,27 @@ export function createMultiplayerServer(
       if (res.ok) {
         syncWorldToRoom(room);
         sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'place' } });
+      } else {
+        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
+      }
+      return;
+    }
+
+    if (msg.type === 'action:cook') {
+      const res = cookRecipe(room.world, msg.recipeId as CookedDishId);
+      extractPlayerFromWorld(room, player);
+      if (res.ok) {
+        syncWorldToRoom(room);
+        broadcastFx(room, {
+          kind: 'toast',
+          actorId: player.id,
+          wx: player.x * TILE_SIZE,
+          wy: (player.y - 1) * TILE_SIZE,
+          sfx: 'brew',
+          color: '#fb923c',
+          count: 14,
+          leveledUpTo: res.leveledUpTo,
+        });
       } else {
         sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
       }
@@ -1358,11 +1439,166 @@ export function createMultiplayerServer(
           count: 16,
           storyRealm: res.realmId,
           storyKind: msg.kind,
+          relicUnlocked: 'relicUnlocked' in res ? res.relicUnlocked : undefined,
           leveledUpTo: res.leveledUpTo,
         });
       } else {
         sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
       }
+      return;
+    }
+
+    if (msg.type === 'action:festival_claim') {
+      const res = participateInFestival(room.world);
+      extractPlayerFromWorld(room, player);
+      if (res.ok) {
+        syncWorldToRoom(room);
+        broadcastFx(room, {
+          kind: 'toast',
+          actorId: player.id,
+          wx: player.x * TILE_SIZE,
+          wy: (player.y - 1) * TILE_SIZE,
+          sfx: 'quest',
+          color: '#f472b6',
+          count: 24,
+          text: `+${res.rewardGold}g Festival!`,
+          textColor: '#fde047',
+          leveledUpTo: res.leveledUpTo,
+        });
+      } else {
+        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
+      }
+      return;
+    }
+
+    if (msg.type === 'action:coop_challenge_start') {
+      const kind = msg.kind;
+      if (kind !== 'harvest' && kind !== 'water' && kind !== 'defend') return;
+      if (room.coopChallenge && room.coopChallenge.status === 'active') {
+        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
+        return;
+      }
+      const nowMs = Date.now();
+      const target = kind === 'water' ? 10 : kind === 'harvest' ? 6 : 3;
+      const durationMs = kind === 'water' ? 75_000 : 90_000;
+      const rewardGold = kind === 'water' ? 110 : kind === 'harvest' ? 140 : 150;
+      room.coopChallenge = {
+        id: `cc_${nowMs}_${Math.random().toString(36).slice(2, 6)}`,
+        kind: kind as CoopChallengeKind,
+        target,
+        progress: 0,
+        rewardGold,
+        startedById: player.id,
+        startedByName: player.name,
+        startedAtMs: nowMs,
+        expiresAtMs: nowMs + durationMs,
+        status: 'active',
+        contributors: {},
+      };
+      broadcastCoopState(room);
+      broadcastFx(room, {
+        kind: 'toast',
+        actorId: player.id,
+        wx: player.x * TILE_SIZE,
+        wy: (player.y - 1) * TILE_SIZE,
+        sfx: 'quest',
+        color: '#38bdf8',
+        count: 14,
+      });
+      return;
+    }
+
+    if (msg.type === 'action:trade_send') {
+      if (!isOwnKey(ITEMS, msg.giveItemId) || !isOwnKey(ITEMS, msg.requestItemId)) return;
+      if (msg.giveItemId === msg.requestItemId) return;
+      const giveQty = Math.max(1, Math.min(20, Math.floor(Number(msg.giveQty) || 1)));
+      const requestQty = Math.max(1, Math.min(20, Math.floor(Number(msg.requestQty) || 1)));
+      if ((room.world.inventory[msg.giveItemId] ?? 0) < giveQty) {
+        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
+        return;
+      }
+      const targetPlayer = msg.toId === 'anyone' ? null : room.players.get(msg.toId);
+      const nowMs = Date.now();
+      const offer: TradeOffer = {
+        id: `tr_${nowMs}_${Math.random().toString(36).slice(2, 6)}`,
+        fromId: player.id,
+        fromName: player.name,
+        toId: targetPlayer ? targetPlayer.id : 'anyone',
+        toName: targetPlayer?.name,
+        giveItemId: msg.giveItemId,
+        giveQty,
+        requestItemId: msg.requestItemId,
+        requestQty,
+        createdAtMs: nowMs,
+        expiresAtMs: nowMs + 300_000,
+      };
+      room.tradeOffers.unshift(offer);
+      if (room.tradeOffers.length > 10) room.tradeOffers.pop();
+      broadcastCoopState(room);
+      broadcastFx(room, {
+        kind: 'toast',
+        actorId: player.id,
+        wx: player.x * TILE_SIZE,
+        wy: (player.y - 1) * TILE_SIZE,
+        sfx: 'coin',
+        color: '#fde047',
+        count: 10,
+      });
+      return;
+    }
+
+    if (msg.type === 'action:trade_accept') {
+      const idx = room.tradeOffers.findIndex((t) => t.id === msg.tradeId);
+      if (idx === -1) return;
+      const offer = room.tradeOffers[idx];
+      if (offer.expiresAtMs <= Date.now()) {
+        room.tradeOffers.splice(idx, 1);
+        broadcastCoopState(room);
+        return;
+      }
+      if (offer.toId !== 'anyone' && offer.toId !== player.id) {
+        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
+        return;
+      }
+      if (
+        (room.world.inventory[offer.giveItemId] ?? 0) < offer.giveQty ||
+        (room.world.inventory[offer.requestItemId] ?? 0) < offer.requestQty
+      ) {
+        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
+        return;
+      }
+      room.tradeOffers.splice(idx, 1);
+      // Fulfill co-op barter contract: transform/exchange batch and award +20g co-op trade bonus!
+      consumeInventoryItem(room.world, offer.requestItemId, offer.requestQty);
+      addInventoryItem(room.world, offer.giveItemId, offer.giveQty);
+      room.world.player.gold += 20;
+      room.world.stats.totalGoldEarned += 20;
+      room.world.stats.coopTradesCompleted = (room.world.stats.coopTradesCompleted ?? 0) + 1;
+      const leveledUpTo = grantXp(room.world, 12);
+      extractPlayerFromWorld(room, player);
+      syncWorldToRoom(room);
+      broadcastFx(room, {
+        kind: 'toast',
+        actorId: player.id,
+        wx: player.x * TILE_SIZE,
+        wy: (player.y - 1) * TILE_SIZE,
+        sfx: 'coin',
+        color: '#4ade80',
+        count: 16,
+        text: '+20g Trade!',
+        textColor: '#fde047',
+        leveledUpTo,
+      });
+      return;
+    }
+
+    if (msg.type === 'action:trade_decline') {
+      const idx = room.tradeOffers.findIndex((t) => t.id === msg.tradeId);
+      if (idx === -1) return;
+      const offer = room.tradeOffers[idx];
+      if (offer.fromId !== player.id && offer.toId !== player.id && offer.toId !== 'anyone') return;
+      room.tradeOffers.splice(idx, 1);
+      broadcastCoopState(room);
       return;
     }
 
@@ -1488,6 +1724,20 @@ export function createMultiplayerServer(
 
       const dt = Math.min(0.25, (now - room.lastTickMs) / 1000);
       room.lastTickMs = now;
+
+      let coopDirty = false;
+      if (room.coopChallenge && room.coopChallenge.status === 'active' && now >= room.coopChallenge.expiresAtMs) {
+        room.coopChallenge.status = 'expired';
+        coopDirty = true;
+      }
+      if (room.tradeOffers.length > 0) {
+        const before = room.tradeOffers.length;
+        room.tradeOffers = room.tradeOffers.filter((t) => t.expiresAtMs > now);
+        if (room.tradeOffers.length !== before) coopDirty = true;
+      }
+      if (coopDirty) {
+        broadcastCoopState(room);
+      }
 
       const world = room.world;
       world.timeMinutes += dt * GAME_MINUTES_PER_REAL_SECOND;

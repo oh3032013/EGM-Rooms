@@ -1,4 +1,5 @@
 import type {
+  CookedDishId,
   DaySummary,
   FarmChicken,
   FarmerStyle,
@@ -10,11 +11,42 @@ import type {
   PlaceableType,
   RealmCreatureEntity,
   RealmId,
+  RelicId,
   Season,
   ToolType,
   WeatherType,
   WildlifeEntity,
 } from './types.ts';
+
+export type CoopChallengeKind = 'harvest' | 'water' | 'defend';
+
+export interface CoopChallengeState {
+  id: string;
+  kind: CoopChallengeKind;
+  target: number;
+  progress: number;
+  rewardGold: number;
+  startedById: string;
+  startedByName: string;
+  startedAtMs: number;
+  expiresAtMs: number;
+  status: 'active' | 'completed' | 'expired';
+  contributors: Record<string, number>;
+}
+
+export interface TradeOffer {
+  id: string;
+  fromId: string;
+  fromName: string;
+  toId: string; // target playerId or 'anyone'
+  toName?: string;
+  giveItemId: ItemId;
+  giveQty: number;
+  requestItemId: ItemId;
+  requestQty: number;
+  createdAtMs: number;
+  expiresAtMs: number;
+}
 
 export type GameMode = 'singleplayer' | 'multiplayer';
 
@@ -119,6 +151,7 @@ export interface FxPayload {
   actionMessage?: string;
   storyRealm?: RealmId;
   storyKind?: 'elder' | 'strange_zone';
+  relicUnlocked?: RelicId;
   swingTool?: ToolType | null;
   cropHarvested?: ItemId;
   goldenBonus?: boolean;
@@ -169,12 +202,25 @@ export type ClientToServerMessage =
   | { type: 'action:shop_buy'; itemId: ItemId; qty: number }
   | { type: 'action:shop_sell'; itemId: ItemId; qty: number }
   | { type: 'action:upgrade_tool'; tool: ToolType }
-  | { type: 'action:craft'; id: PlaceableType | 'fertilizer' | 'bio_mulch' }
+  | { type: 'action:craft'; id: PlaceableType | 'fertilizer' | 'bio_mulch' | 'pest_spray' }
+  | { type: 'action:cook'; recipeId: CookedDishId }
   | { type: 'action:eat'; id: ItemId }
   | { type: 'action:quick_eat' }
   | { type: 'action:assign_hotbar'; id: ItemId; slotIdx: number }
   | { type: 'action:mission_claim'; id: MissionId }
   | { type: 'action:order_fulfill' }
+  | { type: 'action:festival_claim' }
+  | { type: 'action:coop_challenge_start'; kind: CoopChallengeKind }
+  | {
+      type: 'action:trade_send';
+      toId: string;
+      giveItemId: ItemId;
+      giveQty: number;
+      requestItemId: ItemId;
+      requestQty: number;
+    }
+  | { type: 'action:trade_accept'; tradeId: string }
+  | { type: 'action:trade_decline'; tradeId: string }
   | { type: 'action:buy_animal'; kind: 'chicken' | 'cow' | 'sheep' | 'dog' | 'cat' }
   | { type: 'action:unlock_realm'; realmId: RealmId }
   | { type: 'action:travel_realm'; realmId: RealmId }
@@ -207,6 +253,8 @@ export type ServerToClientMessage =
       sleepVotes: string[];
       chat: ChatMessage[];
       voiceStates?: Record<string, VoicePeerState>;
+      coopChallenge?: CoopChallengeState | null;
+      tradeOffers?: TradeOffer[];
     }
   | { type: 'room:error'; code: string; message: string }
   | {
@@ -216,6 +264,13 @@ export type ServerToClientMessage =
       hostId: string;
       sleepVotes: string[];
       teleportIds?: string[];
+      coopChallenge?: CoopChallengeState | null;
+      tradeOffers?: TradeOffer[];
+    }
+  | {
+      type: 'coop:state';
+      coopChallenge: CoopChallengeState | null;
+      tradeOffers: TradeOffer[];
     }
   | {
       type: 'tick:entities';

@@ -8,9 +8,11 @@ import {
   buyGuardDog,
   buyShopItem,
   claimMissionReward,
+  computeEcoScore,
   computeFarmRestorationPercent,
   computeSoilMoisturePct,
   computeTemperatureC,
+  cookRecipe,
   craftItem,
   createInitialFarmState,
   eatCrop,
@@ -27,12 +29,18 @@ import {
   getXpThreshold,
   grantXp,
   hasNasaStation,
+  interactWithStrangeZone,
   isCoveredByBeehive,
   isCoveredByCompost,
+  isCoveredByLadybug,
   isCoveredBySensor,
   isCoveredByShadeNet,
   isCoveredBySprinkler,
+  isDoubleXpActive,
+  isEcoBlessingActive,
+  isFestivalDay,
   isProtectedByScarecrow,
+  participateInFestival,
   performTileAction,
   rollMarketSurgeCrop,
   sellCropItem,
@@ -46,6 +54,7 @@ import {
   DAYS_PER_SEASON,
   DOG_PRICE,
   FISHING_COOLDOWN_MS,
+  HOMESTEAD_STRANGE_ZONE_POS,
   SHEEP_PRICE,
   WELL_POS,
   WINDMILL_DAILY_GOLD,
@@ -880,6 +889,207 @@ test('Farmer XP & Leveling (+5 Max Stamina), Market Surge (+50%), Rainbow Mornin
   assert.equal(tA.watered, true);
   assert.equal(tB.watered, true);
 });
+
+test('Fruit Trees grow to maturity, bear seasonal fruit, and harvest cleanly', () => {
+  const state = createInitialFarmState(42);
+  state.player.gold = 400;
+  assert.equal(buyShopItem(state, 'apple_sapling', 1).ok, true);
+
+  const treeTile = getTile(state, 12, 11)!;
+  treeTile.obstacle = null;
+  treeTile.crop = null;
+  treeTile.structure = null;
+  treeTile.tilled = false;
+
+  state.player.x = 12.5;
+  state.player.y = 10.5;
+  state.hotbar[8] = 'apple_sapling';
+  state.player.selectedHotbarIndex = 8;
+
+  const plantRes = performTileAction(state, 12, 11, 1000);
+  assert.equal(plantRes.performed, true);
+  assert.equal(plantRes.kind, 'plant');
+  assert.equal(treeTile.fruitTree?.kind, 'apple');
+  assert.equal(treeTile.fruitTree?.growthDays, 0);
+
+  // Advance 4 Spring mornings -> matures and bears fruit!
+  for (let d = 0; d < 4; d++) {
+    state.forecastWeather = 'Clear';
+    advanceDay(state, () => 0.8);
+  }
+  assert.equal(treeTile.fruitTree?.growthDays, 4);
+  assert.equal(treeTile.fruitTree?.hasFruit, true);
+
+  // Harvest apple
+  const harvestRes = performTileAction(state, 12, 11, 5000);
+  assert.equal(harvestRes.performed, true);
+  assert.equal(harvestRes.kind, 'harvest');
+  assert.equal(treeTile.fruitTree?.hasFruit, false);
+  assert.equal(state.inventory.apple, 1);
+  assert.equal(state.stats.fruitsHarvested, 1);
+});
+
+test('Natural Pest Control: pests stall growth, Neem Spray cures pests, Ladybug House cures overnight', () => {
+  const state = createInitialFarmState(42);
+  const cropTile = getTile(state, 13, 10)!;
+  cropTile.tilled = true;
+  cropTile.watered = true;
+  cropTile.crop = { type: 'tomato', growthDays: 1, daysUnwatered: 0, withered: false, floodedDays: 0 };
+
+  // Deterministic rng returning 0.66 (falls in [0.63, 0.71) pest window, and >= 0.5 Clear weather)
+  state.forecastWeather = 'Clear';
+  const day1 = advanceDay(state, () => 0.66);
+  assert.equal(day1.pestsAppeared, 1);
+  assert.equal(cropTile.crop?.pestInfested, true);
+  assert.equal(cropTile.crop?.growthDays, 2); // grew this night right when infested
+
+  // While pestInfested, crop stalls even when watered
+  cropTile.watered = true;
+  state.forecastWeather = 'Clear';
+  advanceDay(state, () => 0.8);
+  assert.equal(cropTile.crop?.growthDays, 2);
+
+  // Craft and apply Organic Neem Spray
+  state.inventory.wood = 10;
+  assert.equal(craftItem(state, 'pest_spray').ok, true);
+  state.player.x = 13.5;
+  state.player.y = 9.5;
+  state.hotbar[8] = 'pest_spray';
+  state.player.selectedHotbarIndex = 8;
+  const sprayRes = performTileAction(state, 13, 10, 2000);
+  assert.equal(sprayRes.performed, true);
+  assert.equal(sprayRes.wishOutcome, 'pest_cured');
+  assert.equal(cropTile.crop?.pestInfested, false);
+
+  // Place Ladybug House at (14, 11) and re-infest crop -> overnight cure!
+  const ladyTile = getTile(state, 14, 11)!;
+  ladyTile.obstacle = null;
+  ladyTile.crop = null;
+  ladyTile.structure = { type: 'ladybug_house', hp: 80, maxHp: 80 };
+  assert.equal(isCoveredByLadybug(state, 13, 10), true);
+  cropTile.crop!.pestInfested = true;
+  cropTile.watered = true;
+  state.forecastWeather = 'Clear';
+  const curedSummary = advanceDay(state, () => 0.8);
+  assert.equal(cropTile.crop?.pestInfested, false);
+  assert.equal(curedSummary.pestsClearedByLadybug, 1);
+  assert.equal(cropTile.crop?.growthDays, 3);
+});
+
+test('Cooking Kitchen dishes grant Double XP, Eco Tool Stamina Saver, and Swift Speed buffs', () => {
+  const state = createInitialFarmState(42);
+  state.xp = 0;
+  state.inventory.pumpkin = 1;
+  state.inventory.wheat = 1;
+  state.inventory.egg = 1;
+  state.inventory.fish = 1;
+  state.inventory.potato = 1;
+
+  const pieRes = cookRecipe(state, 'pumpkin_pie');
+  assert.equal(pieRes.ok, true);
+  assert.equal(state.inventory.pumpkin_pie, 1);
+  assert.equal(state.stats.dishesCooked, 1);
+
+  const soupRes = cookRecipe(state, 'fish_soup');
+  assert.equal(soupRes.ok, true);
+  assert.equal(state.inventory.fish_soup, 1);
+
+  // Eat Pumpkin Pie -> Double XP active
+  state.player.stamina = 10;
+  assert.equal(eatCrop(state, 'pumpkin_pie').ok, true);
+  assert.equal(isDoubleXpActive(state), true);
+  const xpBefore = state.xp;
+  grantXp(state, 10);
+  assert.equal(state.xp, xpBefore + 20);
+
+  // Eat Fish Soup -> Eco Stamina Saver active (-1 tool stamina)
+  assert.equal(eatCrop(state, 'fish_soup').ok, true);
+  assert.equal(isEcoBlessingActive(state), true);
+  const emptyPlot = getTile(state, 12, 11)!;
+  emptyPlot.obstacle = null;
+  emptyPlot.crop = null;
+  emptyPlot.structure = null;
+  emptyPlot.tilled = false;
+  emptyPlot.tillable = true;
+  state.player.x = 12.5;
+  state.player.y = 10.5;
+  state.player.selectedHotbarIndex = 0; // hoe costs 4 normally, 3 with eco_blessing
+  const stamBefore = state.player.stamina;
+  assert.equal(performTileAction(state, 12, 11, 3000).performed, true);
+  assert.equal(state.player.stamina, stamBefore - 3);
+});
+
+test('Eco-Score, Day 8 Seasonal Festival, Ancient Relics, and Dynamic Weather (Mist, Windy, Meteor)', () => {
+  const state = createInitialFarmState(42);
+
+  // Place green structures + decor + orchard trees to lift Eco-Score >= 60
+  const spots: Array<[number, number, 'windmill' | 'rain_tank' | 'drip_sprinkler' | 'sprinkler' | 'compost' | 'ladybug_house' | 'festive_lantern' | 'garden_arch']> = [
+    [10, 11, 'windmill'],
+    [11, 11, 'rain_tank'],
+    [12, 11, 'drip_sprinkler'],
+    [13, 11, 'ladybug_house'],
+    [14, 11, 'festive_lantern'],
+    [15, 11, 'garden_arch'],
+    [17, 11, 'sprinkler'],
+    [18, 11, 'compost'],
+  ];
+  for (const [x, y, st] of spots) {
+    const t = getTile(state, x, y)!;
+    t.obstacle = null;
+    t.crop = null;
+    t.structure = { type: st, hp: 80, maxHp: 80 };
+  }
+  const treeTile = getTile(state, 16, 11)!;
+  treeTile.obstacle = null;
+  treeTile.fruitTree = { kind: 'olive', growthDays: 4, hasFruit: false };
+
+  const eco = computeEcoScore(state);
+  assert.ok(eco.total >= 60, `Expected Eco Score >= 60, got ${eco.total}`);
+  assert.ok(eco.dividendGold >= 15);
+
+  // Dynamic Weather: Mist hydrates tilled soil, Windy doubles Windmill gold
+  state.forecastWeather = 'Mist';
+  const goldBefore = state.player.gold;
+  const mistDay = advanceDay(state, () => 0.8);
+  assert.equal(mistDay.weather, 'Mist');
+  assert.ok((mistDay.mistHydrated ?? 0) >= 3);
+  assert.equal(mistDay.ecoDividendGold, eco.dividendGold);
+  assert.ok(state.player.gold > goldBefore + eco.dividendGold);
+
+  // Windy weather doubles windmill bonus
+  state.forecastWeather = 'Windy';
+  const windyDay = advanceDay(state, () => 0.8);
+  assert.equal(windyDay.weather, 'Windy');
+  assert.equal(windyDay.windyWindmillBonus, WINDMILL_DAILY_GOLD);
+  assert.equal(windyDay.windmillGold, WINDMILL_DAILY_GOLD * 2);
+
+  // Strange Zone unlocks Ancient Amber relic; Meteor weather unlocks Star Chalice relic
+  state.player.x = HOMESTEAD_STRANGE_ZONE_POS.x + 0.5;
+  state.player.y = HOMESTEAD_STRANGE_ZONE_POS.y + 0.5;
+  const szRes = interactWithStrangeZone(state);
+  assert.equal(szRes.ok, true);
+  assert.equal(szRes.relicUnlocked, 'ancient_amber');
+  assert.ok(state.collectedRelics?.includes('ancient_amber'));
+
+  state.weather = 'Meteor';
+  state.forecastWeather = 'Clear';
+  const meteorDay = advanceDay(state, () => 0.8);
+  assert.ok((meteorDay.meteorBonusGold ?? 0) >= 25);
+  assert.ok(state.collectedRelics?.includes('star_chalice'));
+
+  // Advance to Day 8 (Spring Festival) -> claim once only
+  while (state.day < DAYS_PER_SEASON) {
+    advanceDay(state, () => 0.8);
+  }
+  assert.equal(isFestivalDay(state), true);
+  const festGoldBefore = state.player.gold;
+  const festRes = participateInFestival(state);
+  assert.equal(festRes.ok, true);
+  assert.equal(festRes.rewardGold, 120);
+  assert.equal(state.player.gold, festGoldBefore + 120);
+  assert.equal(participateInFestival(state).ok, false);
+});
+
 
 
 

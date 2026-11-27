@@ -74,7 +74,10 @@ export function ShopModal({
   const t = UI_TEXT[lang];
 
   const sellableItems = (Object.entries(inventory) as [ItemId, number][]).filter(
-    ([id, count]) => count > 0 && ITEMS[id]?.category === 'crop' && ITEMS[id]?.sellPrice
+    ([id, count]) =>
+      count > 0 &&
+      (ITEMS[id]?.category === 'crop' || ITEMS[id]?.category === 'consumable') &&
+      Boolean(ITEMS[id]?.sellPrice)
   );
 
   const seedItems = SHOP_CATALOG.filter((c) => c.tab === 'seeds');

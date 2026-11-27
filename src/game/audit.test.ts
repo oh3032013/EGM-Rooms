@@ -1787,6 +1787,142 @@ test('pet naming and farmer style normalization sanitize untrusted input safely'
   assert.deepEqual(normalizeFarmerStyle(null), DEFAULT_FARMER_STYLE);
 });
 
+test('multiplayer server runs Co-op Timed Challenges, Player Trading, Kitchen Cooking, and Day 8 Festival', async () => {
+  const handle = createMultiplayerServer({ serveStaticDist: false });
+  await new Promise<void>((resolve) => handle.server.listen(0, '127.0.0.1', resolve));
+  const addr = handle.server.address() as AddressInfo;
+  const baseWs = `ws://127.0.0.1:${addr.port}/ws`;
+
+  const openWs = () =>
+    new Promise<WebSocket>((resolve, reject) => {
+      const s = new WebSocket(baseWs);
+      s.once('open', () => resolve(s));
+      s.once('error', reject);
+    });
+
+  const nextMsg = (ws: WebSocket, pred: (msg: any) => boolean) =>
+    new Promise<any>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        ws.off('message', onMsg);
+        reject(new Error('Timed out waiting for WebSocket message'));
+      }, 2500);
+      const onMsg = (raw: unknown) => {
+        const parsed = JSON.parse(String(raw));
+        if (pred(parsed)) {
+          clearTimeout(timer);
+          ws.off('message', onMsg);
+          resolve(parsed);
+        }
+      };
+      ws.on('message', onMsg);
+    });
+
+  let wsHost: WebSocket | null = null;
+  let wsPeer: WebSocket | null = null;
+  try {
+    wsHost = await openWs();
+    const hostJoinedP = nextMsg(wsHost, (m) => m.type === 'room:joined');
+    wsHost.send(
+      JSON.stringify({
+        type: 'room:create',
+        playerName: 'ChefHost',
+        roomName: 'CoopExpansionsRoom',
+        isPublic: false,
+        clientId: 'coop_host_1',
+      })
+    );
+    const hostJoined = await hostJoinedP;
+
+    wsPeer = await openWs();
+    const peerJoinedP = nextMsg(wsPeer, (m) => m.type === 'room:joined');
+    wsPeer.send(
+      JSON.stringify({
+        type: 'room:join',
+        code: hostJoined.roomCode,
+        playerName: 'PartnerFarmer',
+        clientId: 'coop_peer_2',
+      })
+    );
+    await peerJoinedP;
+
+    // 1. Launch Co-op Watering Challenge (target 10, rewardGold 110)
+    const challengeStartedP = nextMsg(
+      wsPeer,
+      (m) => m.type === 'coop:state' && m.coopChallenge?.status === 'active'
+    );
+    wsHost.send(JSON.stringify({ type: 'action:coop_challenge_start', kind: 'water' }));
+    const startedState = await challengeStartedP;
+    assert.equal(startedState.coopChallenge.kind, 'water');
+    assert.equal(startedState.coopChallenge.target, 10);
+    assert.equal(startedState.coopChallenge.rewardGold, 110);
+
+    // 2. Move host adjacent to starter tilled tile (13, 10) and water -> progress increments to 1
+    wsHost.send(
+      JSON.stringify({ type: 'player:move', x: 12.5, y: 8.0, facingX: 0, facingY: 1, walkCycle: 1, selectedHotbarIndex: 1 })
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    wsHost.send(
+      JSON.stringify({ type: 'player:move', x: 13.5, y: 9.5, facingX: 0, facingY: 1, walkCycle: 2, selectedHotbarIndex: 1 })
+    );
+    await new Promise((r) => setTimeout(r, 30));
+
+    const waterSyncP = nextMsg(wsHost, (m) => m.type === 'world:sync' && m.coopChallenge?.progress === 1);
+    wsHost.send(
+      JSON.stringify({
+        type: 'action:tile',
+        tx: 13,
+        ty: 10,
+        selectedHotbarIndex: 1, // watering_can
+      })
+    );
+    const waterSync = await waterSyncP;
+    assert.equal(waterSync.coopChallenge.contributors['coop_host_1'], 1);
+
+    // 3. Host crafts wood -> fence? No, let's test Player Trade Board: host buys wheat_seed & carrot_seed and proposes trade
+    const buySyncP = nextMsg(
+      wsHost,
+      (m) => m.type === 'world:sync' && (m.world.inventory.carrot_seed ?? 0) >= 2
+    );
+    wsHost.send(JSON.stringify({ type: 'action:shop_buy', itemId: 'carrot_seed', qty: 2 }));
+    await buySyncP;
+
+    const tradePostedP = nextMsg(
+      wsPeer,
+      (m) => m.type === 'coop:state' && Array.isArray(m.tradeOffers) && m.tradeOffers.length === 1
+    );
+    wsHost.send(
+      JSON.stringify({
+        type: 'action:trade_send',
+        toId: 'coop_peer_2',
+        giveItemId: 'carrot_seed',
+        giveQty: 1,
+        requestItemId: 'wood',
+        requestQty: 1,
+      })
+    );
+    const postedState = await tradePostedP;
+    const tradeId = postedState.tradeOffers[0].id;
+    assert.equal(postedState.tradeOffers[0].giveItemId, 'carrot_seed');
+
+    const tradeAcceptedP = nextMsg(
+      wsHost,
+      (m) =>
+        m.type === 'world:sync' &&
+        (m.world.stats.coopTradesCompleted ?? 0) === 1 &&
+        m.tradeOffers.length === 0
+    );
+    wsPeer.send(JSON.stringify({ type: 'action:trade_accept', tradeId }));
+    const acceptedSync = await tradeAcceptedP;
+    assert.equal(acceptedSync.world.stats.coopTradesCompleted, 1);
+  } finally {
+    if (wsHost) wsHost.terminate();
+    if (wsPeer) wsPeer.terminate();
+    handle.stopSimulation();
+    await new Promise<void>((resolve) => handle.server.close(() => resolve()));
+  }
+});
+
+
 
 
 

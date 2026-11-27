@@ -1,12 +1,14 @@
-import { CloudRain, Droplets, Radio, Satellite, Sun, X } from 'lucide-react';
+import { CloudRain, Droplets, Leaf, Radio, Satellite, Sun, X } from 'lucide-react';
 import { NASA_OBSERVATORY_CARDS } from '../game/constants';
-import { translateWeather, UI_TEXT, type Language } from '../game/i18n';
+import { getEcoRankLabel, getFeatureText, translateWeather, UI_TEXT, type Language } from '../game/i18n';
 import {
+  computeEcoScore,
   computeSoilMoisturePct,
   computeTemperatureC,
   hasNasaStation,
 } from '../game/rules';
-import type { GameWorldState } from '../game/types';
+import type { GameWorldState, WeatherType } from '../game/types';
+import { WeatherIcon } from './PixelIcons';
 
 interface NasaObservatoryModalProps {
   world: GameWorldState;
@@ -16,10 +18,27 @@ interface NasaObservatoryModalProps {
 
 export function NasaObservatoryModal({ world, lang, onClose }: NasaObservatoryModalProps) {
   const t = UI_TEXT[lang];
+  const fx = getFeatureText(lang);
   const stationInstalled = hasNasaStation(world);
   const moisturePct = computeSoilMoisturePct(world);
   const tempC = computeTemperatureC(world);
   const tomorrow = world.forecastWeather ?? world.weather;
+  const eco = computeEcoScore(world);
+
+  const weatherTips: { w: WeatherType; hint: string }[] = [
+    {
+      w: 'Mist',
+      hint: lang === 'ar' ? 'يروي التربة المحروثة تلقائياً بضباب خفيف' : 'Hydrates tilled soil with morning dew',
+    },
+    {
+      w: 'Windy',
+      hint: lang === 'ar' ? 'يضاعف إنتاج طواحين الرياح اليومي ×2' : 'Doubles daily Windmill gold income',
+    },
+    {
+      w: 'Meteor',
+      hint: lang === 'ar' ? 'زخة شهب تمنح +40g وفرصة كأس الشهب النجمي' : 'Shooting stars grant +40g & Star Chalice relic',
+    },
+  ];
 
   return (
     <div
@@ -55,6 +74,63 @@ export function NasaObservatoryModal({ world, lang, onClose }: NasaObservatoryMo
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto modal-scroll p-4 sm:p-5 space-y-4">
+          {/* Eco-Score & Green Grid */}
+          <div
+            data-testid="eco-score-panel"
+            className="p-3.5 rounded-lg bg-[#e6f4ea] border-2 border-[#7bbd8c] space-y-2.5"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Leaf className="w-4 h-4 text-[#2f6e3a]" />
+                <span className="font-bold text-sm text-[#1e4620]">{fx.ecoGridTitle}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded bg-[#2f6e3a] text-white text-xs font-bold">
+                  {getEcoRankLabel(eco.rank, lang)}
+                </span>
+                <span className="font-mono-tabular font-extrabold text-base text-[#1e4620]">
+                  {eco.total}%
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {[
+                { label: fx.ecoEnergyLabel, val: eco.energyScore, max: 35, bar: 'bg-[#f59e0b]' },
+                { label: fx.ecoWaterSoilLabel, val: eco.waterSoilScore, max: 35, bar: 'bg-[#0284c7]' },
+                { label: fx.ecoBioLabel, val: eco.biodiversityScore, max: 30, bar: 'bg-[#16a34a]' },
+              ].map((row) => (
+                <div key={row.label} className="p-2 rounded bg-white/75 border border-[#b7dfc2]">
+                  <div className="flex items-center justify-between text-[11px] font-semibold text-[#2c1e14] mb-1">
+                    <span className="truncate">{row.label}</span>
+                    <span className="font-mono-tabular">
+                      {row.val}/{row.max}
+                    </span>
+                  </div>
+                  <div className="h-2 rounded-full bg-[#d7eadc] overflow-hidden">
+                    <div
+                      className={`h-full ${row.bar}`}
+                      style={{ width: `${Math.min(100, Math.round((row.val / row.max) * 100))}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="font-semibold text-[#1e5631]">
+                {eco.dividendGold > 0
+                  ? fx.ecoDividendActive.replace('{g}', String(eco.dividendGold))
+                  : fx.ecoDividendHint}
+              </span>
+              {eco.pestPenalty > 0 && (
+                <span className="font-mono-tabular font-bold text-[#b91c1c]">
+                  {fx.ecoPestPenaltyLabel}: -{eco.pestPenalty}
+                </span>
+              )}
+            </div>
+          </div>
+
           {/* 3 Educational Satellite Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {NASA_OBSERVATORY_CARDS.map((card) => {
@@ -88,6 +164,22 @@ export function NasaObservatoryModal({ world, lang, onClose }: NasaObservatoryMo
                 </div>
               );
             })}
+          </div>
+
+          {/* Dynamic Special Weathers Summary */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            {weatherTips.map((item) => (
+              <div
+                key={item.w}
+                className="p-2.5 rounded-lg bg-[#fbf2e1] border border-[#d6be96] flex items-center gap-2.5"
+              >
+                <WeatherIcon weather={item.w} className="w-6 h-6 shrink-0" />
+                <div className="min-w-0">
+                  <div className="font-bold text-xs text-[#2c1e14]">{translateWeather(item.w, lang)}</div>
+                  <div className="text-[11px] text-[#694d36] leading-snug">{item.hint}</div>
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* Local Farm Weather Station Telemetry */}

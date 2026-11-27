@@ -1,14 +1,20 @@
 import type {
   BadgeId,
+  CookingRecipeDef,
   CraftRecipe,
   CropDef,
   CropType,
+  FruitTreeDef,
+  FruitTreeKind,
   ItemDef,
   ItemId,
   MissionDef,
   MissionId,
   PlaceableType,
   RealmId,
+  RelicDef,
+  RelicId,
+  SaplingItemId,
   Season,
 } from './types.ts';
 
@@ -35,6 +41,7 @@ export const RAIN_TANK_MAX_CHARGES = 5; // 5 free waterings per storm
 export const LITERS_PER_WATERING = 10; // 50 liters per full rain tank
 export const DRIP_WATER_SAVED_PER_TILE = 5; // half-water drip irrigation saves 5L/tile
 export const BEEHIVE_RADIUS = 2.5; // pollination boost + daily honey
+export const LADYBUG_RADIUS = 3.5; // protects crops from seasonal pest outbreaks
 export const SENSITIVE_CROPS: CropType[] = ['strawberry', 'tomato'];
 export const CHICKEN_PRICE = 120;
 export const MAX_CHICKENS = 3;
@@ -298,6 +305,135 @@ export const CROPS: Record<CropType, CropDef> = {
   },
 };
 
+export const FRUIT_TREES: Record<FruitTreeKind, FruitTreeDef> = {
+  apple: {
+    kind: 'apple',
+    saplingId: 'apple_sapling',
+    name: 'Crisp Apple Tree',
+    daysToMature: 4,
+    harvestSeasons: ['Spring', 'Autumn'],
+    saplingPrice: 120,
+    sellPrice: 70,
+    edibleStamina: 28,
+    edibleHealth: 16,
+    canopyColor: '#2e7d32',
+    fruitColor: '#ef4444',
+  },
+  olive: {
+    kind: 'olive',
+    saplingId: 'olive_sapling',
+    name: 'Silver Olive Tree',
+    daysToMature: 4,
+    harvestSeasons: ['Summer', 'Autumn'],
+    saplingPrice: 135,
+    sellPrice: 82,
+    edibleStamina: 24,
+    edibleHealth: 20,
+    canopyColor: '#4d7c5b',
+    fruitColor: '#365314',
+  },
+  date_fruit: {
+    kind: 'date_fruit',
+    saplingId: 'palm_sapling',
+    name: 'Oasis Date Palm',
+    daysToMature: 5,
+    harvestSeasons: ['Summer', 'Winter'],
+    saplingPrice: 155,
+    sellPrice: 98,
+    edibleStamina: 38,
+    edibleHealth: 22,
+    canopyColor: '#15803d',
+    fruitColor: '#b45309',
+  },
+};
+
+export const SAPLING_TO_FRUIT: Record<SaplingItemId, FruitTreeKind> = {
+  apple_sapling: 'apple',
+  olive_sapling: 'olive',
+  palm_sapling: 'date_fruit',
+};
+
+export const COOKING_RECIPES: CookingRecipeDef[] = [
+  {
+    id: 'honey_carrot',
+    ingredients: { carrot: 1, honey: 1 },
+    buff: 'swift',
+    buffMinutes: 240,
+    xpReward: 16,
+  },
+  {
+    id: 'summer_salad',
+    ingredients: { tomato: 1, apple: 1, olive: 1 },
+    buff: 'double_xp',
+    buffMinutes: 240,
+    xpReward: 22,
+  },
+  {
+    id: 'fish_soup',
+    ingredients: { fish: 1, potato: 1 },
+    buff: 'eco_blessing',
+    buffMinutes: 260,
+    xpReward: 20,
+  },
+  {
+    id: 'pumpkin_pie',
+    ingredients: { pumpkin: 1, wheat: 1, egg: 1 },
+    buff: 'double_xp',
+    buffMinutes: 300,
+    xpReward: 28,
+  },
+  {
+    id: 'date_smoothie',
+    ingredients: { date_fruit: 1, milk: 1, honey: 1 },
+    buff: 'swift',
+    buffMinutes: 320,
+    xpReward: 30,
+  },
+];
+
+export const RELIC_ORDER: RelicId[] = [
+  'ancient_amber',
+  'whispering_totem',
+  'oasis_prism',
+  'sky_compass',
+  'star_chalice',
+];
+
+export const RELIC_DEFS: Record<RelicId, RelicDef> = {
+  ancient_amber: {
+    id: 'ancient_amber',
+    realm: 'homestead',
+    accentColor: '#f59e0b',
+    sellBonusPct: 5,
+    staminaSaveChance: 0.1,
+  },
+  whispering_totem: {
+    id: 'whispering_totem',
+    realm: 'whispering_woods',
+    accentColor: '#34d399',
+    xpBonusPct: 20,
+  },
+  oasis_prism: {
+    id: 'oasis_prism',
+    realm: 'crystal_oasis',
+    accentColor: '#38bdf8',
+    sellBonusPct: 10,
+  },
+  sky_compass: {
+    id: 'sky_compass',
+    realm: 'sky_sanctuary',
+    accentColor: '#c084fc',
+    staminaSaveChance: 0.2,
+  },
+  star_chalice: {
+    id: 'star_chalice',
+    realm: 'meteor',
+    accentColor: '#fde047',
+    xpBonusPct: 15,
+    windmillBonusGold: 12,
+  },
+};
+
 export const ITEMS: Record<ItemId, ItemDef> = {
   hoe: {
     id: 'hoe',
@@ -443,6 +579,38 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     description: 'Blankets tilled soil in moisture for 2 mornings & shields from drought evaporation!',
     roleClue: '2-Day Moisture & Drought Shield',
     buyPrice: 28,
+  },
+  pest_spray: {
+    id: 'pest_spray',
+    name: 'Organic Neem Spray',
+    category: 'consumable',
+    description: 'Cures pest-infested crops gently without harming bees or soil health!',
+    roleClue: 'Cures Pests · +XP',
+    buyPrice: 22,
+  },
+  apple_sapling: {
+    id: 'apple_sapling',
+    name: 'Apple Tree Sapling',
+    category: 'seed',
+    description: 'Permanent fruit tree maturing in 4 days. Bears Crisp Apples every Spring & Autumn!',
+    roleClue: 'Tree · Harvests Spring/Autumn',
+    buyPrice: 120,
+  },
+  olive_sapling: {
+    id: 'olive_sapling',
+    name: 'Olive Tree Sapling',
+    category: 'seed',
+    description: 'Permanent Mediterranean olive tree (4d). Yields Silver Olives in Summer & Autumn!',
+    roleClue: 'Tree · Harvests Summer/Autumn',
+    buyPrice: 135,
+  },
+  palm_sapling: {
+    id: 'palm_sapling',
+    name: 'Oasis Palm Sapling',
+    category: 'seed',
+    description: 'Resilient desert date palm (5d). Bears sweet Golden Dates in Summer & Winter!',
+    roleClue: 'Tree · Harvests Summer/Winter',
+    buyPrice: 155,
   },
   fence: {
     id: 'fence',
@@ -632,6 +800,51 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     roleClue: 'Brew Tea · +25% Speed Buff',
     buyPrice: 130,
     placeableType: 'tea_kettle',
+  },
+  ladybug_house: {
+    id: 'ladybug_house',
+    name: 'Ladybug Sanctuary',
+    category: 'placeable',
+    description: 'Harbors beneficial ladybugs that clear & prevent crop pests within 3.5 tiles every morning!',
+    roleClue: 'Bio-Pest Shield 3.5 Tiles',
+    buyPrice: 95,
+    placeableType: 'ladybug_house',
+  },
+  cooking_stove: {
+    id: 'cooking_stove',
+    name: 'Homestead Kitchen Stove',
+    category: 'placeable',
+    description: 'Placeable brick stove! Click to open the Kitchen and cook gourmet dishes with buffs.',
+    roleClue: 'Open Kitchen · Gourmet Buffs',
+    buyPrice: 150,
+    placeableType: 'cooking_stove',
+  },
+  wooden_bench: {
+    id: 'wooden_bench',
+    name: 'Garden Timber Bench',
+    category: 'placeable',
+    description: 'Hand-carved wooden garden bench that boosts coziness and Eco restoration.',
+    roleClue: 'Cozy Decor · Eco Boost',
+    buyPrice: 40,
+    placeableType: 'wooden_bench',
+  },
+  festive_lantern: {
+    id: 'festive_lantern',
+    name: 'Festive Glow Lantern',
+    category: 'placeable',
+    description: 'Warm amber paper lantern on timber post that lights up the night & lifts farm charm!',
+    roleClue: 'Warm Night Glow · Decor',
+    buyPrice: 65,
+    placeableType: 'festive_lantern',
+  },
+  garden_arch: {
+    id: 'garden_arch',
+    name: 'Blossom Garden Arch',
+    category: 'placeable',
+    description: 'Vine-draped floral arch centerpiece celebrating seasonal farm harmony.',
+    roleClue: 'Floral Centerpiece · Eco Boost',
+    buyPrice: 110,
+    placeableType: 'garden_arch',
   },
   egg: {
     id: 'egg',
@@ -863,6 +1076,86 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     edibleHealth: 18,
     cropType: 'chili',
   },
+  apple: {
+    id: 'apple',
+    name: 'Crisp Orchard Apple',
+    category: 'crop',
+    description: 'Orchard-grown sweet red apple. Eat for +28 Stam or bake into summer salads!',
+    roleClue: 'Sell 70g · +28 Stam',
+    sellPrice: 70,
+    edibleStamina: 28,
+    edibleHealth: 16,
+  },
+  olive: {
+    id: 'olive',
+    name: 'Silver Grove Olive',
+    category: 'crop',
+    description: 'Rich Mediterranean olives harvested from mature Olive Trees.',
+    roleClue: 'Sell 82g · +24 Stam',
+    sellPrice: 82,
+    edibleStamina: 24,
+    edibleHealth: 20,
+  },
+  date_fruit: {
+    id: 'date_fruit',
+    name: 'Golden Oasis Dates',
+    category: 'crop',
+    description: 'Sweet sun-cured palm dates. Restores +38 Stam & +22 HP!',
+    roleClue: 'Sell 98g · +38 Stam',
+    sellPrice: 98,
+    edibleStamina: 38,
+    edibleHealth: 22,
+  },
+  pumpkin_pie: {
+    id: 'pumpkin_pie',
+    name: 'Spiced Pumpkin Pie',
+    category: 'consumable',
+    description: 'Warm baked pie (+95 Stam, +40 HP) granting Double XP for 5 in-game hours!',
+    roleClue: 'Sell 260g · 2× XP Buff',
+    sellPrice: 260,
+    edibleStamina: 95,
+    edibleHealth: 40,
+  },
+  summer_salad: {
+    id: 'summer_salad',
+    name: 'Orchard Summer Salad',
+    category: 'consumable',
+    description: 'Crisp tomato, apple & olive medley (+80 Stam, +35 HP) + Double XP buff!',
+    roleClue: 'Sell 245g · 2× XP Buff',
+    sellPrice: 245,
+    edibleStamina: 80,
+    edibleHealth: 35,
+  },
+  fish_soup: {
+    id: 'fish_soup',
+    name: 'Hearty Pond Chowder',
+    category: 'consumable',
+    description: 'Savory fish & potato stew (+85 Stam, +35 HP) + Eco Stamina Saver buff!',
+    roleClue: 'Sell 195g · -1 Tool Stam',
+    sellPrice: 195,
+    edibleStamina: 85,
+    edibleHealth: 35,
+  },
+  honey_carrot: {
+    id: 'honey_carrot',
+    name: 'Honey-Glazed Carrots',
+    category: 'consumable',
+    description: 'Caramelized carrots & wild honey (+70 Stam, +25 HP) + Swift Brew speed!',
+    roleClue: 'Sell 180g · +25% Speed Buff',
+    sellPrice: 180,
+    edibleStamina: 70,
+    edibleHealth: 25,
+  },
+  date_smoothie: {
+    id: 'date_smoothie',
+    name: 'Oasis Date Smoothie',
+    category: 'consumable',
+    description: 'Velvety palm date & milk shake (+100 Stam, +45 HP) + Swift Brew speed!',
+    roleClue: 'Sell 280g · Max Feast Buff',
+    sellPrice: 280,
+    edibleStamina: 100,
+    edibleHealth: 45,
+  },
   wood: {
     id: 'wood',
     name: 'Timber Wood',
@@ -994,6 +1287,48 @@ export const CRAFT_RECIPES: CraftRecipe[] = [
     ingredients: { wood: 8, stone: 8, gold: 80 },
     outputCount: 1,
   },
+  {
+    id: 'ladybug_house',
+    name: 'Ladybug Sanctuary',
+    description: 'Protects crops within 3.5 tiles from pests using natural ladybugs.',
+    ingredients: { wood: 4, stone: 1, gold: 18 },
+    outputCount: 1,
+  },
+  {
+    id: 'pest_spray',
+    name: 'Organic Neem Spray (x2)',
+    description: 'Harmless natural mist that cures pest-infested crops immediately.',
+    ingredients: { wood: 2, gold: 10 },
+    outputCount: 2,
+  },
+  {
+    id: 'cooking_stove',
+    name: 'Homestead Kitchen Stove',
+    description: 'Sturdy brick kitchen hearth for cooking buff-granting gourmet dishes.',
+    ingredients: { stone: 6, wood: 4, gold: 45 },
+    outputCount: 1,
+  },
+  {
+    id: 'wooden_bench',
+    name: 'Garden Timber Bench',
+    description: 'Warm timber bench decor adding charm and Eco Score.',
+    ingredients: { wood: 4, gold: 8 },
+    outputCount: 1,
+  },
+  {
+    id: 'festive_lantern',
+    name: 'Festive Glow Lantern',
+    description: 'Warm hanging lantern post illuminating fields & evening walkways.',
+    ingredients: { wood: 2, stone: 2, gold: 22 },
+    outputCount: 1,
+  },
+  {
+    id: 'garden_arch',
+    name: 'Blossom Garden Arch',
+    description: 'Flowering garden archway celebrating sustainable homestead beauty.',
+    ingredients: { wood: 6, stone: 3, gold: 38 },
+    outputCount: 1,
+  },
 ];
 
 export const PLACEABLE_MAX_HP: Record<PlaceableType, number> = {
@@ -1018,6 +1353,11 @@ export const PLACEABLE_MAX_HP: Record<PlaceableType, number> = {
   owl_box: 4,
   butter_churn: 5,
   tea_kettle: 5,
+  ladybug_house: 5,
+  cooking_stove: 6,
+  wooden_bench: 4,
+  festive_lantern: 5,
+  garden_arch: 5,
 };
 
 export const SHOP_CATALOG: { id: ItemId; tab: 'seeds' | 'decor' }[] = [
@@ -1033,10 +1373,16 @@ export const SHOP_CATALOG: { id: ItemId; tab: 'seeds' | 'decor' }[] = [
   { id: 'strawberry_seed', tab: 'seeds' },
   { id: 'watermelon_seed', tab: 'seeds' },
   { id: 'pumpkin_seed', tab: 'seeds' },
+  { id: 'apple_sapling', tab: 'seeds' },
+  { id: 'olive_sapling', tab: 'seeds' },
+  { id: 'palm_sapling', tab: 'seeds' },
   { id: 'fertilizer', tab: 'seeds' },
   { id: 'bio_mulch', tab: 'seeds' },
+  { id: 'pest_spray', tab: 'seeds' },
   { id: 'nasa_station', tab: 'decor' },
   { id: 'greenhouse', tab: 'decor' },
+  { id: 'cooking_stove', tab: 'decor' },
+  { id: 'ladybug_house', tab: 'decor' },
   { id: 'owl_box', tab: 'decor' },
   { id: 'rain_tank', tab: 'decor' },
   { id: 'shade_net', tab: 'decor' },
@@ -1054,7 +1400,10 @@ export const SHOP_CATALOG: { id: ItemId; tab: 'seeds' | 'decor' }[] = [
   { id: 'fence', tab: 'decor' },
   { id: 'scarecrow', tab: 'decor' },
   { id: 'lantern', tab: 'decor' },
+  { id: 'festive_lantern', tab: 'decor' },
   { id: 'flowerbed', tab: 'decor' },
+  { id: 'wooden_bench', tab: 'decor' },
+  { id: 'garden_arch', tab: 'decor' },
   { id: 'stone_path', tab: 'decor' },
 ];
 
