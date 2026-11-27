@@ -1,7 +1,9 @@
 import { useEffect } from 'react';
 import { CheckCircle2, Compass, Lock, Sparkles, Trees, Sun, Cloud, Home, X } from 'lucide-react';
 import { REALM_DEFS, REALM_ORDER } from '../game/constants';
-import { getItemLabel, getRealmLabel, UI_TEXT, type Language } from '../game/i18n';
+import { getItemLabel, getRealmLabel, MISSION_TEXT, UI_TEXT, type Language } from '../game/i18n';
+import { getMissingRealmMissions } from '../game/rules';
+import { CREATURE_LABELS, REALM_STORIES, resolveStoryLang } from '../game/story';
 import type { GameWorldState, RealmId } from '../game/types';
 import { CoinIcon, ItemIcon } from './PixelIcons';
 
@@ -28,6 +30,8 @@ export function PortalModal({
   onClose,
 }: PortalModalProps) {
   const t = UI_TEXT[lang];
+  const sLang = resolveStoryLang(lang);
+  const isAr = sLang === 'ar';
   const activeRealm: RealmId = world.activeRealm ?? 'homestead';
   const unlockedSet = new Set<RealmId>(world.unlockedRealms ?? ['homestead']);
   unlockedSet.add('homestead');
@@ -117,12 +121,16 @@ export function PortalModal({
             {REALM_ORDER.map((id) => {
               const def = REALM_DEFS[id];
               const copy = getRealmLabel(id, lang);
+              const story = REALM_STORIES[id];
               const unlocked = unlockedSet.has(id);
               const isCurrent = activeRealm === id;
               const hasResources =
                 gold >= def.unlockGold &&
                 wood >= def.unlockWood &&
                 stone >= def.unlockStone;
+              const missingMissions = unlocked ? [] : getMissingRealmMissions(world, id);
+              const missingSet = new Set(missingMissions);
+              const canUnlock = hasResources && missingMissions.length === 0;
 
               return (
                 <div
@@ -150,7 +158,7 @@ export function PortalModal({
                             {copy.name}
                           </h3>
                           <span className="text-[10px] font-mono-tabular text-[#694d36]">
-                            {def.width}×{def.height}
+                            {story.chapterLabel[sLang]} · {def.width}×{def.height}
                           </span>
                         </div>
                       </div>
@@ -175,15 +183,56 @@ export function PortalModal({
 
                     <p className="text-xs text-[#5c4028] leading-relaxed">{copy.desc}</p>
 
-                    <div
-                      className="px-2.5 py-1.5 rounded bg-[#f4e4c4] border border-[#d6be96] text-[11px] font-semibold text-[#3f2a1d] flex items-center gap-1.5"
-                    >
-                      <span
-                        className="w-2 h-2 rounded-full shrink-0"
-                        style={{ backgroundColor: def.accentColor }}
-                      />
+                    <div className="text-[11px] text-[#4a3322] space-y-0.5">
+                      <div>
+                        <span className="font-semibold">{isAr ? 'القرية:' : 'Village:'}</span>{' '}
+                        {story.villageName[sLang]}
+                      </div>
+                      <div>
+                        <span className="font-semibold">{isAr ? 'المنطقة الغريبة:' : 'Strange Zone:'}</span>{' '}
+                        {story.strangeZoneName[sLang]}
+                      </div>
+                      {story.nativeCreatures.length > 0 && (
+                        <div>
+                          <span className="font-semibold">{isAr ? 'الحيوانات:' : 'Wildlife:'}</span>{' '}
+                          {story.nativeCreatures.map((k) => CREATURE_LABELS[k][sLang]).join(' · ')}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="px-2.5 py-1.5 rounded bg-[#f4e4c4] border border-[#d6be96] text-[11px] font-semibold text-[#3f2a1d] flex items-center gap-1.5">
                       <span>{copy.perk}</span>
                     </div>
+
+                    {!unlocked && def.requiredMissions.length > 0 && (
+                      <div
+                        data-testid={`realm-missions-${id}`}
+                        className="p-2 rounded bg-[#e8d5b2] border border-[#c9b086] space-y-1 text-[11px]"
+                      >
+                        <div className="font-bold text-[#3f2a1d]">
+                          {isAr ? 'المهام المطلوبة لفتح العالم:' : 'Required Missions to Unlock:'}
+                        </div>
+                        {def.requiredMissions.map((mid) => {
+                          const done = !missingSet.has(mid);
+                          const mTitle = MISSION_TEXT[mid]?.[lang]?.title ?? mid;
+                          return (
+                            <div
+                              key={mid}
+                              className={`flex items-center gap-1.5 ${
+                                done ? 'text-[#2f6e3a] font-semibold' : 'text-[#7c2d12]'
+                              }`}
+                            >
+                              {done ? (
+                                <CheckCircle2 className="w-3 h-3 shrink-0" />
+                              ) : (
+                                <Lock className="w-3 h-3 shrink-0" />
+                              )}
+                              <span className="truncate">{mTitle}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {/* Cost & Action */}
@@ -224,12 +273,16 @@ export function PortalModal({
                         </div>
                         <button
                           type="button"
-                          disabled={!hasResources}
+                          disabled={!canUnlock}
                           onClick={() => onUnlockRealm(id)}
                           data-testid={`unlock-realm-${id}`}
                           className="wood-button-primary px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer whitespace-nowrap disabled:opacity-45 disabled:cursor-not-allowed"
                         >
-                          {t.unlockRealmBtn}
+                          {missingMissions.length > 0
+                            ? isAr
+                              ? 'أتمم المهام أولاً'
+                              : 'Complete Missions'
+                            : t.unlockRealmBtn}
                         </button>
                       </>
                     ) : (

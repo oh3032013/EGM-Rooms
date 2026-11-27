@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { AudioLines, Languages, Maximize2, Minimize2, Play, RefreshCw, RotateCw, Users } from 'lucide-react';
+import { AudioLines, Languages, Maximize2, Minimize2, Palette, Play, RefreshCw, RotateCw, Users } from 'lucide-react';
+import { getFarmerOutfitColors } from '../game/funFeatures';
 import { LANGUAGE_OPTIONS, UI_TEXT, type Language } from '../game/i18n';
+import type { FarmerStyle } from '../game/types';
 import type { VersionCheckStatus } from '../game/version';
 import { PWAInstallButton } from './PWAInstallButton';
 import { TeamModal } from './TeamModal';
@@ -14,6 +16,8 @@ interface TitleScreenProps {
   blindCaption: string;
   versionCheckStatus: VersionCheckStatus;
   versionCooldownSec: number;
+  farmerStyle?: FarmerStyle;
+  onCycleStyle?: () => void;
   onRecheckVersion: () => void;
   onSelectLanguage: (lang: Language) => void;
   onToggleFullscreen: () => void;
@@ -33,6 +37,8 @@ export function TitleScreen({
   blindCaption,
   versionCheckStatus,
   versionCooldownSec,
+  farmerStyle,
+  onCycleStyle,
   onRecheckVersion,
   onSelectLanguage,
   onToggleFullscreen,
@@ -45,6 +51,7 @@ export function TitleScreen({
   const [showTeam, setShowTeam] = useState(false);
   const [showExitScreen, setShowExitScreen] = useState(false);
   const t = UI_TEXT[lang];
+  const outfitDef = getFarmerOutfitColors(farmerStyle);
 
   const handlePrimaryStart = () => {
     if (hasSavedFarm) {
@@ -120,10 +127,14 @@ export function TitleScreen({
 
         {/* Soft Pixel Clouds */}
         <g fill="#fff9e8" opacity="0.9">
-          <rect x="140" y="95" width="120" height="24" rx="10" />
-          <rect x="165" y="80" width="70" height="22" rx="10" />
-          <rect x="980" y="88" width="140" height="26" rx="10" />
-          <rect x="1010" y="72" width="80" height="22" rx="10" />
+          <g className="animate-drift-cloud">
+            <rect x="140" y="95" width="120" height="24" rx="10" />
+            <rect x="165" y="80" width="70" height="22" rx="10" />
+          </g>
+          <g className="animate-drift-cloud-slow">
+            <rect x="980" y="88" width="140" height="26" rx="10" />
+            <rect x="1010" y="72" width="80" height="22" rx="10" />
+          </g>
         </g>
 
         {/* Distant Rolling Hills */}
@@ -154,18 +165,22 @@ export function TitleScreen({
           <circle cx="242" cy="22" r="24" fill="#4f9b44" />
           {/* Cute Cow */}
           <g transform="translate(-15, 92)">
-            <rect x="0" y="6" width="34" height="18" rx="4" fill="#fffdf8" stroke="#4a3c31" strokeWidth="2" />
-            <rect x="8" y="8" width="10" height="8" fill="#3b322c" />
-            <rect x="28" y="2" width="14" height="12" rx="3" fill="#fffdf8" stroke="#4a3c31" strokeWidth="2" />
-            <rect x="4" y="24" width="4" height="8" fill="#4a3c31" />
-            <rect x="24" y="24" width="4" height="8" fill="#4a3c31" />
+            <g className="animate-hop-cozy">
+              <rect x="0" y="6" width="34" height="18" rx="4" fill="#fffdf8" stroke="#4a3c31" strokeWidth="2" />
+              <rect x="8" y="8" width="10" height="8" fill="#3b322c" />
+              <rect x="28" y="2" width="14" height="12" rx="3" fill="#fffdf8" stroke="#4a3c31" strokeWidth="2" />
+              <rect x="4" y="24" width="4" height="8" fill="#4a3c31" />
+              <rect x="24" y="24" width="4" height="8" fill="#4a3c31" />
+            </g>
           </g>
           {/* Cute Sheep */}
           <g transform="translate(88, 108)">
-            <ellipse cx="14" cy="12" rx="15" ry="11" fill="#fcfaf2" stroke="#595045" strokeWidth="2" />
-            <circle cx="28" cy="10" r="6" fill="#3e3630" />
-            <rect x="6" y="21" width="3" height="6" fill="#3e3630" />
-            <rect x="18" y="21" width="3" height="6" fill="#3e3630" />
+            <g className="animate-hop-cozy" style={{ animationDelay: '1.1s' }}>
+              <ellipse cx="14" cy="12" rx="15" ry="11" fill="#fcfaf2" stroke="#595045" strokeWidth="2" />
+              <circle cx="28" cy="10" r="6" fill="#3e3630" />
+              <rect x="6" y="21" width="3" height="6" fill="#3e3630" />
+              <rect x="18" y="21" width="3" height="6" fill="#3e3630" />
+            </g>
           </g>
         </g>
 
@@ -186,8 +201,9 @@ export function TitleScreen({
         {/* Water sparkles & stepping stones */}
         <ellipse cx="755" cy="640" rx="18" ry="10" fill="#8f989e" stroke="#4f575c" strokeWidth="2" />
         <ellipse cx="890" cy="545" rx="14" ry="8" fill="#8f989e" stroke="#4f575c" strokeWidth="2" />
-        <rect x="815" y="595" width="26" height="4" rx="2" fill="#d9f4ff" opacity="0.8" />
-        <rect x="975" y="485" width="30" height="4" rx="2" fill="#d9f4ff" opacity="0.8" />
+        <rect x="815" y="595" width="26" height="4" rx="2" fill="#d9f4ff" className="animate-sparkle-pulse" />
+        <rect x="975" y="485" width="30" height="4" rx="2" fill="#d9f4ff" className="animate-sparkle-pulse" style={{ animationDelay: '0.8s' }} />
+        <rect x="1085" y="425" width="20" height="3.5" rx="2" fill="#ffffff" className="animate-sparkle-pulse" style={{ animationDelay: '1.5s' }} />
 
         {/* Left Golden Wheat & Green Crop Fields */}
         <g transform="translate(105, 455)">
@@ -231,6 +247,25 @@ export function TitleScreen({
             <circle cx="-24" cy="12" r="4.5" fill="#e63e3e" />
           </g>
         ))}
+
+        {/* Cheerful Sunlit Butterflies & Pollen Glints */}
+        <g className="animate-drift-cloud">
+          <g transform="translate(245, 420)">
+            <ellipse cx="-4" cy="0" rx="4" ry="3" fill="#fde047" />
+            <ellipse cx="4" cy="0" rx="4" ry="3" fill="#facc15" />
+            <rect x="-1" y="-3" width="2" height="6" fill="#451a03" />
+          </g>
+          <g transform="translate(520, 415)">
+            <ellipse cx="-4" cy="0" rx="4" ry="3" fill="#f472b6" />
+            <ellipse cx="4" cy="0" rx="4" ry="3" fill="#ec4899" />
+            <rect x="-1" y="-3" width="2" height="6" fill="#451a03" />
+          </g>
+          <g transform="translate(815, 345)">
+            <ellipse cx="-4" cy="0" rx="4" ry="3" fill="#7dd3fc" />
+            <ellipse cx="4" cy="0" rx="4" ry="3" fill="#38bdf8" />
+            <rect x="-1" y="-3" width="2" height="6" fill="#1e293b" />
+          </g>
+        </g>
       </svg>
 
       {/* Lush Leafy Pixel Border Frame around all 4 edges */}
@@ -254,6 +289,22 @@ export function TitleScreen({
           <PWAInstallButton compact lang={lang} />
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2 pointer-events-auto ms-auto">
+          {onCycleStyle && (
+            <button
+              type="button"
+              onClick={onCycleStyle}
+              data-testid="title-style-btn"
+              title={lang === 'ar' ? 'تغيير مظهر المزارع' : 'Cycle Farmer Style'}
+              className="wood-button px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-md"
+            >
+              <span
+                className="w-3 h-3 rounded-full border border-white/70 shrink-0"
+                style={{ backgroundColor: outfitDef.shirt }}
+              />
+              <Palette className="w-3.5 h-3.5 shrink-0 hidden sm:inline" />
+              <span>{lang === 'ar' ? outfitDef.label.ar : outfitDef.label.en}</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={onToggleBlindMode}
@@ -319,7 +370,7 @@ export function TitleScreen({
           {/* Sprout in Soil Crest SVG */}
           <svg
             viewBox="0 0 64 56"
-            className="w-10 h-9 sm:w-16 sm:h-14 [@media(max-height:500px)]:w-9 [@media(max-height:500px)]:h-8 drop-shadow-sm shrink-0"
+            className="w-10 h-9 sm:w-16 sm:h-14 [@media(max-height:500px)]:w-9 [@media(max-height:500px)]:h-8 drop-shadow-sm shrink-0 animate-sway-gentle"
             role="img"
             aria-label="EcoGrow Sprout"
           >

@@ -1,4 +1,4 @@
-import { Award, CheckCircle2, Droplets, Lock, Satellite, Trophy, X } from 'lucide-react';
+import { Award, CheckCircle2, Compass, Droplets, Lock, Satellite, Trophy, X } from 'lucide-react';
 import { BADGE_IDS, MISSIONS } from '../game/constants';
 import { BADGE_TEXT, getItemLabel, MISSION_TEXT, UI_TEXT, type Language } from '../game/i18n';
 import type { GameWorldState, MissionDef, MissionId } from '../game/types';
@@ -22,6 +22,7 @@ export function MissionsModal({ world, lang, onClaim, onClose }: MissionsModalPr
   const coreMissions = MISSIONS.filter((m) => !m.category || m.category === 'core');
   const nasaMissions = MISSIONS.filter((m) => m.category === 'nasa');
   const extendedMissions = MISSIONS.filter((m) => m.category === 'extended');
+  const realmMissions = MISSIONS.filter((m) => m.category === 'realms');
 
   const renderMissionCard = (mission: MissionDef) => {
     const progress = getMissionProgress(world, mission.id);
@@ -235,6 +236,21 @@ export function MissionsModal({ world, lang, onClaim, onClose }: MissionsModalPr
             </div>
             {extendedMissions.map(renderMissionCard)}
           </div>
+
+          {/* World Villages & Strange Zones (27-31) */}
+          {realmMissions.length > 0 && (
+            <div className="space-y-2.5 pt-1" data-testid="realm-missions-section">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-[#4c1d95] uppercase tracking-wide border-b border-[#cbb4dd] pb-1">
+                <Compass className="w-3.5 h-3.5 text-[#6b21a8]" />
+                <span>
+                  {lang === 'ar'
+                    ? 'قصص العوالم والقرى والمناطق الغريبة'
+                    : 'World Villages & Strange Zones'}
+                </span>
+              </div>
+              {realmMissions.map(renderMissionCard)}
+            </div>
+          )}
         </div>
       </div>
     </div>

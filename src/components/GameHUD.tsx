@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AudioLines, BookOpen, Check, Compass, Copy, Eye, Flame, Gamepad2, Hammer, Headphones, Link2, LogOut, Map as MapIcon, Maximize2, MessageSquare, Mic, MicOff, Minimize2, Moon, PackageCheck, Pause, PhoneOff, Satellite, Send, ShoppingBag, Sparkles, Trophy, Users, Utensils, Volume2, VolumeX, X, Zap } from 'lucide-react';
+import { AudioLines, BookOpen, Camera, Check, Compass, Copy, Eye, Flame, Gamepad2, Hammer, Headphones, Link2, LogOut, Map as MapIcon, Maximize2, MessageSquare, Mic, MicOff, Minimize2, Moon, PackageCheck, Pause, PhoneOff, Satellite, ScrollText, Send, ShoppingBag, Sparkles, Trophy, Users, Utensils, Volume2, VolumeX, Wind, X, Zap } from 'lucide-react';
 import { CROPS, ITEMS, REALM_DEFS } from '../game/constants';
 import {
   formatMorningSummaryText,
@@ -57,7 +57,7 @@ export interface HudSnapshot {
   hotbar: (ItemId | null)[];
   selectedHotbarIndex: number;
   inventory: Partial<Record<ItemId, number>>;
-  nearPrompt: { action: 'sleep' | 'shop' | 'well' | 'bin' | 'portal'; label: string } | null;
+  nearPrompt: { action: 'sleep' | 'shop' | 'well' | 'bin' | 'portal' | 'elder' | 'strange_zone' | 'chest'; label: string } | null;
   lowStamina: boolean;
   nightWarning: boolean;
   swiftActive?: boolean;
@@ -69,6 +69,13 @@ export interface HudSnapshot {
   unlockedRealmsCount?: number;
 }
 
+export interface CelebrationBannerState {
+  id: number;
+  title: string;
+  subtitle?: string;
+  tone?: 'gold' | 'emerald' | 'purple';
+}
+
 interface GameHUDProps {
   hud: HudSnapshot;
   lang: Language;
@@ -78,6 +85,7 @@ interface GameHUDProps {
   blindMode: boolean;
   blindCaption: string;
   morningSummary: DaySummary | null;
+  celebrationBanner?: CelebrationBannerState | null;
   dailyOrderReady?: boolean;
   harvestCombo?: number;
   sprintActive?: boolean;
@@ -89,6 +97,13 @@ interface GameHUDProps {
   onOpenNasa: () => void;
   onOpenAlmanac: () => void;
   onOpenPortals?: () => void;
+  onOpenStory?: () => void;
+  onOpenFunHub?: () => void;
+  funDailyReadyCount?: number;
+  onDash?: () => void;
+  dashCooldownSec?: number;
+  onTakeSnapshot?: () => void;
+  rushState?: { active: boolean; progress: number; target: number; remainingSec: number } | null;
   onSleepNow: () => void;
   onToggleSprint?: () => void;
   onToggleMute: () => void;
@@ -100,6 +115,7 @@ interface GameHUDProps {
   onBlindStatus: () => void;
   onPause: () => void;
   onDismissSummary: () => void;
+  onDismissCelebration?: () => void;
   miniMapOpen?: boolean;
   onToggleMiniMap?: () => void;
   onQuickEat?: () => void;
@@ -137,6 +153,7 @@ export function GameHUD({
   blindMode,
   blindCaption,
   morningSummary,
+  celebrationBanner = null,
   dailyOrderReady = false,
   harvestCombo = 0,
   sprintActive = false,
@@ -148,6 +165,13 @@ export function GameHUD({
   onOpenNasa,
   onOpenAlmanac,
   onOpenPortals,
+  onOpenStory,
+  onOpenFunHub,
+  funDailyReadyCount = 0,
+  onDash,
+  dashCooldownSec = 0,
+  onTakeSnapshot,
+  rushState = null,
   onSleepNow,
   onToggleSprint,
   onToggleMute,
@@ -159,6 +183,7 @@ export function GameHUD({
   onBlindStatus,
   onPause,
   onDismissSummary,
+  onDismissCelebration,
   miniMapOpen = false,
   onToggleMiniMap,
   onQuickEat,
@@ -227,6 +252,13 @@ export function GameHUD({
           if (tile.terrain === 'water') col = farmWorld.activeRealm === 'crystal_oasis' ? '#24a5b5' : '#2b82b8';
           else if (tile.terrain === 'dirt_path') col = farmWorld.activeRealm === 'sky_sanctuary' ? '#7b87a8' : '#a8906e';
           else if (tile.terrain === 'forest_edge') col = realmEdgeCol;
+          else if (tile.terrain === 'moss_floor') col = '#1e4d37';
+          else if (tile.terrain === 'sand_dune') col = '#dcb673';
+          else if (tile.terrain === 'cloud_stone') col = '#cbd5e1';
+          else if (tile.terrain === 'village_plaza') col = '#a8875a';
+          else if (tile.terrain === 'village_hut') col = '#fbbf24';
+          else if (tile.terrain === 'village_elder') col = '#22d3ee';
+          else if (tile.terrain === 'strange_zone') col = '#e879f9';
           else if (tile.terrain === 'portal') col = '#c084fc';
           else if (tile.tilled) col = tile.watered ? '#52351d' : '#7a5332';
           else if (tile.terrain === 'farmhouse') col = '#c26a3c';
@@ -262,6 +294,7 @@ export function GameHUD({
       for (const sh of farmWorld.sheep ?? []) drawDot(sh.x, sh.y, '#e2e8f0');
       if (farmWorld.dog) drawDot(farmWorld.dog.x, farmWorld.dog.y, '#fb923c');
       if (farmWorld.cat) drawDot(farmWorld.cat.x, farmWorld.cat.y, '#f59e0b');
+      for (const rc of farmWorld.realmCreatures ?? []) drawDot(rc.x, rc.y, '#34d399');
       for (const w of farmWorld.wildlife ?? []) {
         if (w.state !== 'ko') drawDot(w.x, w.y, '#ef4444');
       }
@@ -370,7 +403,7 @@ export function GameHUD({
             <div className="flex items-center gap-1.5 sm:gap-2 mb-1 sm:mb-1.5">
               <HeartIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
               <div className="flex-1 h-2 sm:h-3 bg-[#24170f] rounded-sm border border-[#593c26] overflow-hidden">
-                <div className="h-full bg-[#d94848]" style={{ width: `${healthPct}%` }} />
+                <div className="h-full bg-[#d94848] transition-[width] duration-200" style={{ width: `${healthPct}%` }} />
               </div>
               <span className="font-mono-tabular text-[10px] sm:text-xs text-[#f5ebd6] w-10 sm:w-14 text-right">
                 {Math.round(hud.health)}/{hud.maxHealth}
@@ -382,7 +415,7 @@ export function GameHUD({
               <BoltIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
               <div className="flex-1 h-2 sm:h-3 bg-[#24170f] rounded-sm border border-[#593c26] overflow-hidden">
                 <div
-                  className={`${hud.lowStamina ? 'bg-[#e87c35]' : 'bg-[#ebc03f]'} h-full`}
+                  className={`${hud.lowStamina ? 'bg-[#e87c35]' : 'bg-[#ebc03f]'} h-full transition-[width] duration-200`}
                   style={{ width: `${staminaPct}%` }}
                 />
               </div>
@@ -411,7 +444,11 @@ export function GameHUD({
                 {harvestCombo >= 2 && (
                   <div
                     data-testid="hud-combo-badge"
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#78350f] border border-[#f59e0b] text-[10px] font-bold text-[#fde047]"
+                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-bold text-[#fde047] animate-banner-pop ${
+                      harvestCombo >= 3
+                        ? 'bg-[#9a3412] border-[#fbbf24] shadow-[0_0_10px_rgba(251,191,36,0.45)]'
+                        : 'bg-[#78350f] border-[#f59e0b]'
+                    }`}
                   >
                     <Flame className="w-3 h-3 text-[#fb923c]" />
                     <span>x{harvestCombo}</span>
@@ -573,6 +610,77 @@ export function GameHUD({
                         {hud.unlockedRealmsCount}/4
                       </span>
                     )}
+                  </button>
+                )}
+                {onOpenStory && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.currentTarget.blur();
+                      onOpenStory();
+                    }}
+                    aria-label={lang === 'ar' ? 'سجل القصة والقرى (O)' : 'Story & Villages (O)'}
+                    title={lang === 'ar' ? 'القصة والقرى (O)' : 'Story & Lore (O)'}
+                    data-testid="hud-story-btn"
+                    className="wood-button p-1 sm:px-2.5 sm:py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <ScrollText className="w-3.5 h-3.5 text-[#fde047]" />
+                    <span className="hidden sm:inline">{lang === 'ar' ? 'القصة' : 'Story'}</span>
+                  </button>
+                )}
+                {onOpenFunHub && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.currentTarget.blur();
+                      onOpenFunHub();
+                    }}
+                    aria-label={lang === 'ar' ? 'مركز المرح والعجلة والتحدي (U)' : 'Fun Hub & Lucky Wheel (U)'}
+                    title={lang === 'ar' ? 'المرح والمظهر (U)' : 'Fun Hub (U)'}
+                    data-testid="hud-fun-btn"
+                    className={`relative p-1 sm:px-2.5 sm:py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
+                      funDailyReadyCount > 0 ? 'wood-button-primary ring-1 ring-[#fde047]' : 'wood-button'
+                    }`}
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-[#fde047]" />
+                    <span className="hidden sm:inline">{lang === 'ar' ? 'المرح' : 'Fun'}</span>
+                    {funDailyReadyCount > 0 && (
+                      <span className="px-1 min-w-[15px] h-4 rounded-full bg-[#22c55e] text-white text-[10px] font-mono-tabular font-bold flex items-center justify-center">
+                        {funDailyReadyCount}
+                      </span>
+                    )}
+                  </button>
+                )}
+                {onDash && (
+                  <button
+                    type="button"
+                    disabled={dashCooldownSec > 0}
+                    onClick={(e) => {
+                      e.currentTarget.blur();
+                      onDash();
+                    }}
+                    aria-label={lang === 'ar' ? 'اندفاع سريع (Y)' : 'Wind Dash (Y)'}
+                    title={lang === 'ar' ? 'اندفاع سريع (Y)' : 'Wind Dash (Y)'}
+                    data-testid="hud-dash-btn"
+                    className="hidden sm:inline-flex items-center gap-1 wood-button p-1 sm:px-2 sm:py-1.5 rounded text-[11px] font-semibold cursor-pointer shrink-0 disabled:opacity-50"
+                  >
+                    <Wind className="w-3.5 h-3.5 text-[#7dd3fc]" />
+                    {dashCooldownSec > 0 && <span className="font-mono-tabular">{dashCooldownSec}s</span>}
+                  </button>
+                )}
+                {onTakeSnapshot && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.currentTarget.blur();
+                      onTakeSnapshot();
+                    }}
+                    aria-label={lang === 'ar' ? 'التقاط صورة للمزرعة (0)' : 'Snap Postcard Photo (0)'}
+                    title={lang === 'ar' ? 'التقاط صورة (0)' : 'Farm Snapshot (0)'}
+                    data-testid="hud-snapshot-btn"
+                    className="hidden md:inline-flex wood-button p-1.5 rounded cursor-pointer shrink-0"
+                  >
+                    <Camera className="w-3.5 h-3.5 text-[#bae6fd]" />
                   </button>
                 )}
                 <button
@@ -1132,11 +1240,75 @@ export function GameHUD({
           </div>
         )}
 
+        {rushState?.active && (
+          <div
+            dir={lang === 'ar' ? 'rtl' : 'ltr'}
+            data-testid="rush-challenge-banner"
+            className="self-center pointer-events-auto rounded-xl bg-gradient-to-r from-[#92400e] via-[#b45309] to-[#92400e] border-2 border-[#fde047] px-4 py-1.5 text-xs sm:text-sm font-bold text-[#fef3c7] flex items-center gap-3 shadow-lg animate-banner-pop"
+          >
+            <Flame className="w-4 h-4 text-[#fde047] shrink-0" />
+            <span>
+              {lang === 'ar'
+                ? `⚡ ساعة الاندفاع الذهبية: ${rushState.progress}/${rushState.target}`
+                : `⚡ Golden Rush: ${rushState.progress}/${rushState.target} actions`}
+            </span>
+            <span className="px-2 py-0.5 rounded bg-[#451a03] text-[#fde047] font-mono-tabular">
+              {rushState.remainingSec}s
+            </span>
+          </div>
+        )}
+
+        {/* Celebration Milestone Banner (non-blocking pop for level-ups, badges, realms, quests) */}
+        {celebrationBanner && (
+          <div
+            key={celebrationBanner.id}
+            data-testid="celebration-banner"
+            dir={lang === 'ar' ? 'rtl' : 'ltr'}
+            className={`self-center pointer-events-auto wood-panel animate-banner-pop rounded-xl px-3.5 sm:px-5 py-2 flex items-center gap-3 max-w-[min(92vw,28rem)] shadow-xl ${
+              celebrationBanner.tone === 'purple'
+                ? 'border-[#c084fc] shadow-[0_8px_24px_rgba(168,85,247,0.35)]'
+                : celebrationBanner.tone === 'emerald'
+                ? 'border-[#4ade80] shadow-[0_8px_24px_rgba(52,211,153,0.3)]'
+                : 'border-[#fde047] shadow-[0_8px_24px_rgba(253,224,71,0.3)]'
+            }`}
+          >
+            <Sparkles
+              className={`w-5 h-5 shrink-0 ${
+                celebrationBanner.tone === 'purple'
+                  ? 'text-[#e9d5ff]'
+                  : celebrationBanner.tone === 'emerald'
+                  ? 'text-[#86efac]'
+                  : 'text-[#fde047]'
+              }`}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="font-display font-bold text-sm sm:text-base text-[#fef08a] leading-tight truncate">
+                {celebrationBanner.title}
+              </div>
+              {celebrationBanner.subtitle && (
+                <div className="text-[11px] sm:text-xs text-[#f5ebd6] truncate">
+                  {celebrationBanner.subtitle}
+                </div>
+              )}
+            </div>
+            {onDismissCelebration && (
+              <button
+                type="button"
+                onClick={onDismissCelebration}
+                aria-label={t.ok}
+                className="text-[#d6c2a3] hover:text-white cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Morning Report Toast (non-blocking) */}
         {morningSummary && (
           <div
             dir={lang === 'ar' ? 'rtl' : 'ltr'}
-            className="self-center pointer-events-auto wood-panel rounded-lg px-3 sm:px-4 py-2 flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 sm:gap-4 max-w-[min(94vw,28rem)]"
+            className="self-center pointer-events-auto wood-panel animate-banner-pop rounded-lg px-3 sm:px-4 py-2 flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 sm:gap-4 max-w-[min(94vw,28rem)]"
           >
             <div>
               <div className="font-display font-bold text-sm text-[#f7d87c]">
@@ -1237,7 +1409,7 @@ export function GameHUD({
                   {isCan && (
                     <div className="absolute bottom-1 left-1 right-1 h-1 bg-[#1b120b] rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-[#5cb6eb]"
+                        className="h-full bg-[#5cb6eb] transition-[width] duration-200"
                         style={{
                           width: `${Math.round((hud.waterLevel / hud.maxWaterLevel) * 100)}%`,
                         }}

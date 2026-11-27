@@ -1,14 +1,16 @@
-import { createHash } from 'crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import express from 'express';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
+  CRAFT_RECIPES,
   DAY_END_MINUTES,
   FARMHOUSE_DOOR,
   GAME_MINUTES_PER_REAL_SECOND,
   ITEMS,
+  MISSIONS,
   NIGHT_START_MINUTES,
   REALM_DEFS,
   TILE_SIZE,
@@ -22,16 +24,20 @@ import type {
   RoomSummary,
   ServerToClientMessage,
   VoicePeerState,
+  VoiceSignalPayload,
 } from '../game/multiplayer.ts';
 import { COOP_EMOTES, MAX_ROOM_PLAYERS, PLAYER_PALETTE } from '../game/multiplayer.ts';
+import { getDailyQuizForDay, normalizeFarmerStyle } from '../game/funFeatures.ts';
 import {
   advanceDay,
+  answerEcoQuiz,
   buyDairyCow,
   buyFarmCat,
   buyFarmChicken,
   buyFluffySheep,
   buyGuardDog,
   buyShopItem,
+  catchNearbyFirefly,
   claimMissionReward,
   craftItem,
   createInitialFarmState,
@@ -39,12 +45,21 @@ import {
   eatCrop,
   fulfillDailyOrder,
   getSeason,
+  interactWithStrangeZone,
+  interactWithVillageElder,
+  isNearStrangeZone,
+  isNearVillageElder,
   isNearWell,
+  isTileWalkable,
+  openMysteryChest,
   performTileAction,
+  renameFarmPet,
   sellCropItem,
   spawnNightWildlife,
+  spinLuckyWheel,
   stepChickens,
   stepLivestockAndDog,
+  stepRealmCreatures,
   stepWildlife,
   travelToRealm,
   triggerMiddayDrought,
@@ -66,6 +81,7 @@ import {
 
 interface RoomClient extends RemotePlayerState {
   clientId: string;
+  sessionToken: string;
   ws: WebSocket | null;
   connected: boolean;
   disconnectedAt: number | null;
@@ -93,11 +109,105 @@ interface ServerRoom {
 }
 
 const MAX_ROOMS = 200;
+const MAX_WS_PER_IP = 24;
+const MAX_ROOM_CREATES_PER_MIN = 30;
+const MAX_MOVE_STEP_TILES = 3.5;
 const DISCONNECTED_PLAYER_TTL_MS = 300_000;
 const EMPTY_ROOM_TTL_MS = 60_000;
 const ACTIVE_BROADCAST_INTERVAL_MS = 120;
 const PASSIVE_ANIMAL_BROADCAST_INTERVAL_MS = 240;
 const IDLE_CLOCK_SYNC_INTERVAL_MS = 1000;
+
+function isOwnKey<T extends object>(obj: T, key: unknown): key is keyof T {
+  return typeof key === 'string' && Object.hasOwn(obj, key);
+}
+
+function tokensMatch(expected: string, provided: string): boolean {
+  if (!expected || !provided || expected.length !== provided.length) return false;
+  const a = Buffer.from(expected, 'utf8');
+  const b = Buffer.from(provided, 'utf8');
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+function sanitizeClientId(raw: unknown): string {
+  if (typeof raw === 'string') {
+    const clean = raw.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32);
+    if (clean.length >= 2) return clean;
+  }
+  return `p_${randomBytes(6).toString('hex')}`;
+}
+
+function sanitizeVoiceSignal(raw: unknown): VoiceSignalPayload | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  if (obj.kind === 'offer' || obj.kind === 'answer') {
+    const sdpObj = obj.sdp;
+    if (!sdpObj || typeof sdpObj !== 'object') return null;
+    const s = sdpObj as Record<string, unknown>;
+    const sdpType = s.type;
+    if (
+      sdpType !== 'offer' &&
+      sdpType !== 'answer' &&
+      sdpType !== 'pranswer' &&
+      sdpType !== 'rollback'
+    ) {
+      return null;
+    }
+    if (s.sdp !== undefined && (typeof s.sdp !== 'string' || s.sdp.length > 12_000)) {
+      return null;
+    }
+    return {
+      kind: obj.kind,
+      sdp: {
+        type: sdpType,
+        ...(typeof s.sdp === 'string' ? { sdp: s.sdp } : {}),
+      },
+    };
+  }
+  if (obj.kind === 'ice') {
+    const candObj = obj.candidate;
+    if (!candObj || typeof candObj !== 'object') return null;
+    const c = candObj as Record<string, unknown>;
+    if (
+      c.candidate !== undefined &&
+      (typeof c.candidate !== 'string' || c.candidate.length > 2048)
+    ) {
+      return null;
+    }
+    if (
+      c.sdpMid !== undefined &&
+      c.sdpMid !== null &&
+      (typeof c.sdpMid !== 'string' || c.sdpMid.length > 128)
+    ) {
+      return null;
+    }
+    if (
+      c.sdpMLineIndex !== undefined &&
+      c.sdpMLineIndex !== null &&
+      (typeof c.sdpMLineIndex !== 'number' || !Number.isInteger(c.sdpMLineIndex) || c.sdpMLineIndex < 0 || c.sdpMLineIndex > 64)
+    ) {
+      return null;
+    }
+    if (
+      c.usernameFragment !== undefined &&
+      c.usernameFragment !== null &&
+      (typeof c.usernameFragment !== 'string' || c.usernameFragment.length > 128)
+    ) {
+      return null;
+    }
+    return {
+      kind: 'ice',
+      candidate: {
+        ...(typeof c.candidate === 'string' ? { candidate: c.candidate } : {}),
+        ...(c.sdpMid !== undefined ? { sdpMid: c.sdpMid as string | null } : {}),
+        ...(c.sdpMLineIndex !== undefined ? { sdpMLineIndex: c.sdpMLineIndex as number | null } : {}),
+        ...(c.usernameFragment !== undefined ? { usernameFragment: c.usernameFragment as string | null } : {}),
+      },
+    };
+  }
+  return null;
+}
 
 export interface MultiplayerServerOptions {
   serveStaticDist?: boolean;
@@ -118,8 +228,10 @@ export function createMultiplayerServer(
   let cachedPublicRoomsJson: string | null = null;
   const socketMeta = new Map<
     WebSocket,
-    { roomCode: string | null; playerId: string | null; msgWindowStart: number; msgCount: number }
+    { roomCode: string | null; playerId: string | null; ip: string; msgWindowStart: number; msgCount: number }
   >();
+  const ipConnections = new Map<string, number>();
+  const roomCreateRate = new Map<string, { windowStart: number; count: number }>();
 
   const distDir = path.resolve(options.distDir || path.join(process.cwd(), 'dist'));
 
@@ -250,6 +362,7 @@ export function createMultiplayerServer(
       waterLevel: p.waterLevel,
       maxWaterLevel: p.maxWaterLevel,
       selectedHotbarIndex: p.selectedHotbarIndex,
+      style: p.style,
     };
   }
 
@@ -522,6 +635,21 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'room:create') {
+      const now = Date.now();
+      const rate = roomCreateRate.get(meta.ip);
+      if (rate && now - rate.windowStart < 60_000) {
+        if (rate.count >= MAX_ROOM_CREATES_PER_MIN) {
+          sendToClient(ws, {
+            type: 'room:error',
+            code: 'RATE_LIMITED',
+            message: 'Too many rooms created recently. Please wait a moment.',
+          });
+          return;
+        }
+        rate.count += 1;
+      } else {
+        roomCreateRate.set(meta.ip, { windowStart: now, count: 1 });
+      }
       detachPlayerFromRoom(ws, true);
       if (rooms.size >= MAX_ROOMS) {
         sendToClient(ws, {
@@ -532,18 +660,18 @@ export function createMultiplayerServer(
         return;
       }
       const code = generateRoomCode();
-      const playerName = (msg.playerName || 'Farmer').trim().slice(0, 18) || 'Farmer';
+      const playerName = (typeof msg.playerName === 'string' ? msg.playerName : 'Farmer').trim().slice(0, 18) || 'Farmer';
       const roomName =
-        (msg.roomName || `${playerName}'s Farm`).trim().slice(0, 28) || `${playerName}'s Farm`;
+        (typeof msg.roomName === 'string' ? msg.roomName : `${playerName}'s Farm`).trim().slice(0, 28) ||
+        `${playerName}'s Farm`;
       const world = createInitialFarmState(Math.floor(Math.random() * 9000) + 100);
-      const clientId = (msg.clientId || `p_${Math.random().toString(36).slice(2, 10)}`).slice(
-        0,
-        32
-      );
+      const clientId = sanitizeClientId(msg.clientId);
+      const sessionToken = randomBytes(24).toString('hex');
 
       const player: RoomClient = {
         id: clientId,
         clientId,
+        sessionToken,
         name: playerName,
         colorIndex: 0,
         x: world.player.x,
@@ -569,7 +697,6 @@ export function createMultiplayerServer(
         voiceSpeaking: false,
       };
 
-      const now = Date.now();
       const room: ServerRoom = {
         code,
         name: roomName,
@@ -599,6 +726,7 @@ export function createMultiplayerServer(
         roomName: room.name,
         isPublic: room.isPublic,
         playerId: player.id,
+        sessionToken,
         hostId: room.hostId,
         world: room.world,
         players: [toPublicPlayer(player)],
@@ -613,21 +741,27 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'room:join') {
-      const code = (msg.code || '').trim().toUpperCase();
+      const code = (typeof msg.code === 'string' ? msg.code : '').trim().toUpperCase();
       const room = rooms.get(code);
       if (!room) {
         sendToClient(ws, { type: 'room:error', code: 'NOT_FOUND', message: 'Room not found' });
         return;
       }
 
-      const clientId = (msg.clientId || `p_${Math.random().toString(36).slice(2, 10)}`).slice(
-        0,
-        32
-      );
+      const clientId = sanitizeClientId(msg.clientId);
       const existing = room.players.get(clientId);
       const connectedList = getConnectedPlayers(room);
 
-      if (!existing && connectedList.length >= MAX_ROOM_PLAYERS) {
+      if (existing) {
+        if (typeof msg.sessionToken !== 'string' || !tokensMatch(existing.sessionToken, msg.sessionToken)) {
+          sendToClient(ws, {
+            type: 'room:error',
+            code: 'UNAUTHORIZED',
+            message: 'Session verification failed for this player slot.',
+          });
+          return;
+        }
+      } else if (connectedList.length >= MAX_ROOM_PLAYERS) {
         sendToClient(ws, {
           type: 'room:error',
           code: 'ROOM_FULL',
@@ -638,7 +772,7 @@ export function createMultiplayerServer(
 
       detachPlayerFromRoom(ws, true);
 
-      const playerName = (msg.playerName || 'Farmer').trim().slice(0, 18) || 'Farmer';
+      const playerName = (typeof msg.playerName === 'string' ? msg.playerName : 'Farmer').trim().slice(0, 18) || 'Farmer';
       let player: RoomClient;
       if (existing) {
         existing.ws = ws;
@@ -664,6 +798,7 @@ export function createMultiplayerServer(
         player = {
           id: clientId,
           clientId,
+          sessionToken: randomBytes(24).toString('hex'),
           name: playerName,
           colorIndex: assignNextColorIndex(room),
           x: spawnX,
@@ -706,6 +841,7 @@ export function createMultiplayerServer(
         roomName: room.name,
         isPublic: room.isPublic,
         playerId: player.id,
+        sessionToken: player.sessionToken,
         hostId: room.hostId,
         world: room.world,
         players: publicPlayers,
@@ -749,11 +885,26 @@ export function createMultiplayerServer(
     if (msg.type === 'player:move') {
       let changed = false;
       if (Number.isFinite(msg.x) && Number.isFinite(msg.y)) {
-        const nx = Math.round(Math.max(0.5, Math.min(room.world.width - 0.5, msg.x)) * 100) / 100;
-        const ny = Math.round(Math.max(0.5, Math.min(room.world.height - 0.5, msg.y)) * 100) / 100;
-        if (Math.abs(nx - player.x) > 0.005 || Math.abs(ny - player.y) > 0.005) {
-          player.x = nx;
-          player.y = ny;
+        let targetX = Math.max(0.5, Math.min(room.world.width - 0.5, msg.x));
+        let targetY = Math.max(0.5, Math.min(room.world.height - 0.5, msg.y));
+        const dx = targetX - player.x;
+        const dy = targetY - player.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > MAX_MOVE_STEP_TILES) {
+          const scale = MAX_MOVE_STEP_TILES / dist;
+          targetX = player.x + dx * scale;
+          targetY = player.y + dy * scale;
+        }
+        const nx = Math.round(targetX * 100) / 100;
+        const ny = Math.round(targetY * 100) / 100;
+        const canStandFull = isTileWalkable(room.world, Math.floor(nx), Math.floor(ny));
+        const canSlideX = !canStandFull && isTileWalkable(room.world, Math.floor(nx), Math.floor(player.y));
+        const canSlideY = !canStandFull && isTileWalkable(room.world, Math.floor(player.x), Math.floor(ny));
+        const finalX = canStandFull || canSlideX ? nx : player.x;
+        const finalY = canStandFull || canSlideY ? ny : player.y;
+        if (Math.abs(finalX - player.x) > 0.005 || Math.abs(finalY - player.y) > 0.005) {
+          player.x = finalX;
+          player.y = finalY;
           changed = true;
         }
       }
@@ -843,18 +994,15 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'voice:signal') {
-      if (typeof msg.targetId !== 'string' || !msg.signal || typeof msg.signal !== 'object') return;
-      if (msg.signal.kind !== 'offer' && msg.signal.kind !== 'answer' && msg.signal.kind !== 'ice') {
-        return;
-      }
+      if (typeof msg.targetId !== 'string') return;
+      const sanitizedSignal = sanitizeVoiceSignal(msg.signal);
+      if (!sanitizedSignal) return;
       const target = room.players.get(msg.targetId);
       if (!target || !target.connected || target.id === player.id) return;
-      const serializedSize = JSON.stringify(msg.signal).length;
-      if (serializedSize > 16_384) return;
       sendToClient(target.ws, {
         type: 'voice:signal',
         fromId: player.id,
-        signal: msg.signal,
+        signal: sanitizedSignal,
       });
       return;
     }
@@ -945,6 +1093,7 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'action:shop_buy') {
+      if (!isOwnKey(ITEMS, msg.itemId)) return;
       const rawQty = Number(msg.qty);
       const qty = Number.isFinite(rawQty) ? Math.max(1, Math.min(99, Math.floor(rawQty))) : 1;
       const res = buyShopItem(room.world, msg.itemId as ItemId, qty);
@@ -959,6 +1108,7 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'action:shop_sell') {
+      if (!isOwnKey(ITEMS, msg.itemId)) return;
       const rawQty = Number(msg.qty);
       const qty = Number.isFinite(rawQty) ? Math.max(1, Math.min(999, Math.floor(rawQty))) : 1;
       const res = sellCropItem(room.world, msg.itemId as ItemId, qty);
@@ -973,6 +1123,7 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'action:upgrade_tool') {
+      if (msg.tool !== 'hoe' && msg.tool !== 'watering_can' && msg.tool !== 'axe') return;
       const res = upgradeTool(room.world, msg.tool as ToolType);
       extractPlayerFromWorld(room, player);
       if (res.ok) {
@@ -985,6 +1136,7 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'action:craft') {
+      if (typeof msg.id !== 'string' || !CRAFT_RECIPES.some((r) => r.id === msg.id)) return;
       const res = craftItem(room.world, msg.id);
       extractPlayerFromWorld(room, player);
       if (res.ok) {
@@ -997,6 +1149,7 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'action:eat') {
+      if (!isOwnKey(ITEMS, msg.id)) return;
       const res = eatCrop(room.world, msg.id);
       extractPlayerFromWorld(room, player);
       if (res.ok) {
@@ -1034,7 +1187,7 @@ export function createMultiplayerServer(
         Number.isInteger(msg.slotIdx) &&
         msg.slotIdx >= 0 &&
         msg.slotIdx < 9 &&
-        ITEMS[msg.id]
+        isOwnKey(ITEMS, msg.id)
       ) {
         room.world.hotbar = room.world.hotbar.map((item) => (item === msg.id ? null : item));
         room.world.hotbar[msg.slotIdx] = msg.id;
@@ -1046,6 +1199,7 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'action:mission_claim') {
+      if (typeof msg.id !== 'string' || !MISSIONS.some((m) => m.id === msg.id)) return;
       const res = claimMissionReward(room.world, msg.id);
       extractPlayerFromWorld(room, player);
       if (res.ok) {
@@ -1087,6 +1241,15 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'action:buy_animal') {
+      if (
+        msg.kind !== 'chicken' &&
+        msg.kind !== 'cow' &&
+        msg.kind !== 'sheep' &&
+        msg.kind !== 'dog' &&
+        msg.kind !== 'cat'
+      ) {
+        return;
+      }
       const res =
         msg.kind === 'chicken'
           ? buyFarmChicken(room.world)
@@ -1114,8 +1277,8 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'action:unlock_realm') {
+      if (!isOwnKey(REALM_DEFS, msg.realmId)) return;
       const targetId = msg.realmId as RealmId;
-      if (!REALM_DEFS[targetId]) return;
       const res = unlockRealm(room.world, targetId);
       extractPlayerFromWorld(room, player);
       if (res.ok) {
@@ -1137,8 +1300,8 @@ export function createMultiplayerServer(
     }
 
     if (msg.type === 'action:travel_realm') {
+      if (!isOwnKey(REALM_DEFS, msg.realmId)) return;
       const targetId = msg.realmId as RealmId;
-      if (!REALM_DEFS[targetId]) return;
       const res = travelToRealm(room.world, targetId);
       if (res.ok) {
         const def = REALM_DEFS[targetId];
@@ -1164,6 +1327,135 @@ export function createMultiplayerServer(
         });
       } else {
         sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
+      }
+      return;
+    }
+
+    if (msg.type === 'action:interact_landmark') {
+      if (msg.kind !== 'elder' && msg.kind !== 'strange_zone') return;
+      const near =
+        msg.kind === 'elder'
+          ? isNearVillageElder(room.world)
+          : isNearStrangeZone(room.world);
+      if (!near) {
+        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
+        return;
+      }
+      const res =
+        msg.kind === 'elder'
+          ? interactWithVillageElder(room.world)
+          : interactWithStrangeZone(room.world);
+      extractPlayerFromWorld(room, player);
+      if (res.ok) {
+        syncWorldToRoom(room);
+        broadcastFx(room, {
+          kind: 'toast',
+          actorId: player.id,
+          wx: player.x * TILE_SIZE,
+          wy: (player.y - 1) * TILE_SIZE,
+          sfx: msg.kind === 'elder' ? 'wish' : 'portal',
+          color: msg.kind === 'elder' ? '#fde047' : '#c084fc',
+          count: 16,
+          storyRealm: res.realmId,
+          storyKind: msg.kind,
+          leveledUpTo: res.leveledUpTo,
+        });
+      } else {
+        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
+      }
+      return;
+    }
+
+    if (msg.type === 'action:set_style') {
+      player.style = normalizeFarmerStyle(msg.style);
+      room.dirtyActiveEntities = true;
+      return;
+    }
+
+    if (msg.type === 'action:rename_pet') {
+      if (msg.kind !== 'dog' && msg.kind !== 'cat') return;
+      renameFarmPet(room.world, msg.kind, msg.name);
+      syncWorldToRoom(room);
+      return;
+    }
+
+    if (msg.type === 'action:open_chest') {
+      const res = openMysteryChest(room.world);
+      extractPlayerFromWorld(room, player);
+      if (res.ok) {
+        syncWorldToRoom(room);
+        broadcastFx(room, {
+          kind: 'toast',
+          actorId: player.id,
+          wx: player.x * TILE_SIZE,
+          wy: (player.y - 1) * TILE_SIZE,
+          sfx: 'chest',
+          color: '#fde047',
+          count: 18,
+          leveledUpTo: res.leveledUpTo,
+        });
+      } else {
+        sendToClient(ws, { type: 'fx:event', fx: { kind: 'toast', sfx: 'error' } });
+      }
+      return;
+    }
+
+    if (msg.type === 'action:spin_wheel') {
+      if (!Number.isInteger(msg.rewardIndex)) return;
+      const res = spinLuckyWheel(room.world, msg.rewardIndex);
+      extractPlayerFromWorld(room, player);
+      if (res.ok) {
+        syncWorldToRoom(room);
+        broadcastFx(room, {
+          kind: 'toast',
+          actorId: player.id,
+          wx: player.x * TILE_SIZE,
+          wy: (player.y - 1) * TILE_SIZE,
+          sfx: 'quest',
+          color: '#fde047',
+          count: 16,
+        });
+      }
+      return;
+    }
+
+    if (msg.type === 'action:answer_quiz') {
+      if (!Number.isInteger(msg.choiceIndex)) return;
+      const quizIdx = getDailyQuizForDay(room.world.day).index;
+      const res = answerEcoQuiz(room.world, quizIdx, msg.choiceIndex);
+      extractPlayerFromWorld(room, player);
+      if (res.ok) {
+        syncWorldToRoom(room);
+        broadcastFx(room, {
+          kind: 'toast',
+          actorId: player.id,
+          wx: player.x * TILE_SIZE,
+          wy: (player.y - 1) * TILE_SIZE,
+          sfx: res.correct ? 'quest' : 'coin',
+          color: res.correct ? '#4ade80' : '#fbbf24',
+          count: 12,
+          leveledUpTo: res.leveledUpTo,
+        });
+      }
+      return;
+    }
+
+    if (msg.type === 'action:catch_firefly') {
+      if (!Number.isFinite(msg.id)) return;
+      const res = catchNearbyFirefly(room.world, 1.35);
+      extractPlayerFromWorld(room, player);
+      if (res.caught) {
+        syncWorldToRoom(room);
+        broadcastFx(room, {
+          kind: 'toast',
+          actorId: player.id,
+          wx: player.x * TILE_SIZE,
+          wy: (player.y - 0.6) * TILE_SIZE,
+          sfx: 'firefly',
+          color: '#bef264',
+          count: 10,
+          leveledUpTo: res.leveledUpTo,
+        });
       }
     }
   }
@@ -1300,6 +1592,7 @@ export function createMultiplayerServer(
           sfx: 'bark',
         });
       });
+      stepRealmCreatures(world, dt);
 
       if (world.wildlife.length > 0) {
         room.dirtyActiveEntities = true;
@@ -1308,7 +1601,8 @@ export function createMultiplayerServer(
         (world.cows ?? []).some((c) => c.vx !== 0 || c.vy !== 0) ||
         (world.sheep ?? []).some((s) => s.vx !== 0 || s.vy !== 0) ||
         Boolean(world.dog && (world.dog.vx !== 0 || world.dog.vy !== 0)) ||
-        Boolean(world.cat && (world.cat.vx !== 0 || world.cat.vy !== 0))
+        Boolean(world.cat && (world.cat.vx !== 0 || world.cat.vy !== 0)) ||
+        (world.realmCreatures ?? []).some((c) => c.vx !== 0 || c.vy !== 0)
       ) {
         room.dirtyPassiveEntities = true;
       }
@@ -1349,16 +1643,21 @@ export function createMultiplayerServer(
           sheep: world.sheep ?? [],
           dog: world.dog ?? null,
           cat: world.cat ?? null,
+          realmCreatures: world.realmCreatures ?? [],
         });
       }
     }
   }
 
   const app = express();
+  app.disable('x-powered-by');
 
   app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), geolocation=()');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, If-None-Match');
     if (req.method === 'OPTIONS') {
       res.sendStatus(204);
@@ -1435,9 +1734,11 @@ export function createMultiplayerServer(
 
   const aliveSockets = new WeakMap<WebSocket, boolean>();
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, request) => {
+    const ip = request?.socket?.remoteAddress || 'unknown';
+    ipConnections.set(ip, (ipConnections.get(ip) ?? 0) + 1);
     aliveSockets.set(ws, true);
-    socketMeta.set(ws, { roomCode: null, playerId: null, msgWindowStart: Date.now(), msgCount: 0 });
+    socketMeta.set(ws, { roomCode: null, playerId: null, ip, msgWindowStart: Date.now(), msgCount: 0 });
 
     ws.on('pong', () => {
       aliveSockets.set(ws, true);
@@ -1467,6 +1768,12 @@ export function createMultiplayerServer(
     });
 
     ws.on('close', () => {
+      const meta = socketMeta.get(ws);
+      if (meta) {
+        const cur = ipConnections.get(meta.ip) ?? 1;
+        if (cur <= 1) ipConnections.delete(meta.ip);
+        else ipConnections.set(meta.ip, cur - 1);
+      }
       detachPlayerFromRoom(ws, false);
       socketMeta.delete(ws);
     });
@@ -1478,6 +1785,12 @@ export function createMultiplayerServer(
       `http://${request.headers.host || 'localhost'}`
     ).pathname;
     if (pathname === '/ws') {
+      const ip = request.socket.remoteAddress || 'unknown';
+      if ((ipConnections.get(ip) ?? 0) >= MAX_WS_PER_IP) {
+        socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n');
+        socket.destroy();
+        return;
+      }
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
@@ -1518,6 +1831,7 @@ export function createMultiplayerServer(
       }
       rooms.clear();
       socketMeta.clear();
+      (server as http.Server & { closeAllConnections?: () => void }).closeAllConnections?.();
     },
   };
 }

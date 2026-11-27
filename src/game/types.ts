@@ -100,7 +100,14 @@ export type RealmId = 'homestead' | 'whispering_woods' | 'crystal_oasis' | 'sky_
 
 export type TileTerrain =
   | 'grass'
+  | 'moss_floor'
+  | 'sand_dune'
+  | 'cloud_stone'
   | 'dirt_path'
+  | 'village_plaza'
+  | 'village_hut'
+  | 'village_elder'
+  | 'strange_zone'
   | 'water'
   | 'farmhouse'
   | 'shop_stall'
@@ -187,6 +194,28 @@ export interface FarmChicken {
 
 export type LivestockKind = 'cow' | 'sheep' | 'dog' | 'cat';
 
+export type RealmCreatureKind =
+  | 'fox'
+  | 'deer'
+  | 'fennec'
+  | 'gazelle'
+  | 'scarab'
+  | 'crane'
+  | 'alpaca'
+  | 'star_owl';
+
+export interface RealmCreatureEntity {
+  id: number;
+  kind: RealmCreatureKind;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  facingX: number;
+  hopPhase: number;
+  moveTimer: number;
+}
+
 export interface LivestockEntity {
   id: number;
   kind: LivestockKind;
@@ -211,6 +240,31 @@ export interface Particle {
   size: number;
   color: string;
   gravity: number;
+}
+
+export type FarmerOutfitId = 'emerald' | 'berry' | 'sky' | 'gold' | 'midnight';
+
+export type FarmerHatId = 'straw' | 'cap' | 'wizard' | 'crown' | 'none';
+
+export interface FarmerStyle {
+  outfit: FarmerOutfitId;
+  hat: FarmerHatId;
+}
+
+export interface FireflyEntity {
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  phase: number;
+  color: string;
+}
+
+export interface MysteryChest {
+  x: number;
+  y: number;
+  kind: 'wood' | 'crystal';
 }
 
 export interface FloatingText {
@@ -330,6 +384,13 @@ export interface FarmStats {
   waterSavedLiters: number;
   heatwavesSurvivedWithShade: number;
   realmsVisited?: number;
+  villagesVisited?: number;
+  strangeZonesFound?: number;
+  firefliesCaught?: number;
+  chestsOpened?: number;
+  quizzesSolved?: number;
+  wheelSpins?: number;
+  rushCompleted?: number;
 }
 
 export type MissionId =
@@ -358,7 +419,12 @@ export type MissionId =
   | 'tea_brewer'
   | 'titanium_smith'
   | 'portal_awakener'
-  | 'realm_voyager';
+  | 'realm_voyager'
+  | 'woods_village_visit'
+  | 'woods_strange_zone'
+  | 'oasis_village_visit'
+  | 'oasis_strange_zone'
+  | 'sky_sanctuary_expedition';
 
 export type BadgeId =
   | 'time_captain'
@@ -372,7 +438,7 @@ export type BadgeId =
 
 export interface MissionDef {
   id: MissionId;
-  category?: 'core' | 'nasa' | 'extended';
+  category?: 'core' | 'nasa' | 'extended' | 'realms';
   target: number;
   rewardGold: number;
   rewardItem?: { id: ItemId; qty: number };
@@ -384,8 +450,11 @@ export interface RealmCache {
   width: number;
   height: number;
   dailyTreasure: NatureTreasure | null;
+  mysteryChest?: MysteryChest | null;
   returnX: number;
   returnY: number;
+  creatures?: RealmCreatureEntity[];
+  fireflies?: FireflyEntity[];
 }
 
 export interface GameWorldState {
@@ -402,6 +471,12 @@ export interface GameWorldState {
   activeRealm?: RealmId;
   unlockedRealms?: RealmId[];
   realmCaches?: Partial<Record<RealmId, RealmCache>>;
+  realmCreatures?: RealmCreatureEntity[];
+  visitedVillages?: RealmId[];
+  investigatedStrangeZones?: RealmId[];
+  elderGiftsToday?: RealmId[];
+  strangeZoneUsedToday?: RealmId[];
+  unlockedChapters?: RealmId[];
   player: PlayerState;
   hotbar: (ItemId | null)[]; // 9 slots
   inventory: Partial<Record<ItemId, number>>;
@@ -421,6 +496,13 @@ export interface GameWorldState {
   lastFishMs?: number;
   pettedAnimalsToday?: string[];
   dailyTreasure?: NatureTreasure | null;
+  mysteryChest?: MysteryChest | null;
+  fireflies?: FireflyEntity[];
+  luckySpinUsedToday?: boolean;
+  ecoQuizAnsweredToday?: boolean;
+  rushUsedToday?: boolean;
+  petNames?: { dog?: string; cat?: string };
+  playerStyle?: FarmerStyle;
   discoveredItems?: ItemId[];
   stats: FarmStats;
   claimedMissions: MissionId[];

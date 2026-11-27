@@ -114,6 +114,86 @@
   transform: translateY(1px);
 }
 
+@keyframes drift-cloud {
+  0%, 100% {
+    transform: translateX(0px);
+  }
+  50% {
+    transform: translateX(26px);
+  }
+}
+
+@keyframes sway-gentle {
+  0%, 100% {
+    transform: rotate(-3deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
+}
+
+@keyframes hop-cozy {
+  0%, 82%, 100% {
+    transform: translateY(0px);
+  }
+  90% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes sparkle-pulse {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.14);
+  }
+}
+
+@keyframes banner-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.94);
+  }
+  65% {
+    opacity: 1;
+    transform: translateY(2px) scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0px) scale(1);
+  }
+}
+
+.animate-drift-cloud {
+  animation: drift-cloud 11s ease-in-out infinite;
+}
+
+.animate-drift-cloud-slow {
+  animation: drift-cloud 15s ease-in-out infinite reverse;
+}
+
+.animate-sway-gentle {
+  transform-origin: center bottom;
+  animation: sway-gentle 3.8s ease-in-out infinite;
+}
+
+.animate-hop-cozy {
+  animation: hop-cozy 3.4s ease-in-out infinite;
+}
+
+.animate-sparkle-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sparkle-pulse 2.4s ease-in-out infinite;
+}
+
+.animate-banner-pop {
+  animation: banner-pop 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

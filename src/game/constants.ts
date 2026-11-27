@@ -6,6 +6,7 @@ import type {
   ItemDef,
   ItemId,
   MissionDef,
+  MissionId,
   PlaceableType,
   RealmId,
   Season,
@@ -55,6 +56,7 @@ export const SHOP_STALL_POS = { x: 21, y: 4, w: 3, h: 2 };
 export const WELL_POS = { x: 11, y: 5 };
 export const SHIPPING_BIN_POS = { x: 10, y: 7 };
 export const HOMESTEAD_PORTAL_POS = { x: 2, y: 6 };
+export const HOMESTEAD_STRANGE_ZONE_POS = { x: 25, y: 3 };
 
 export interface RealmDef {
   id: RealmId;
@@ -67,6 +69,7 @@ export interface RealmDef {
   unlockGold: number;
   unlockWood: number;
   unlockStone: number;
+  requiredMissions: MissionId[];
   accentColor: string;
 }
 
@@ -89,6 +92,7 @@ export const REALM_DEFS: Record<RealmId, RealmDef> = {
     unlockGold: 0,
     unlockWood: 0,
     unlockStone: 0,
+    requiredMissions: [],
     accentColor: '#4ade80',
   },
   whispering_woods: {
@@ -102,6 +106,7 @@ export const REALM_DEFS: Record<RealmId, RealmDef> = {
     unlockGold: 80,
     unlockWood: 0,
     unlockStone: 0,
+    requiredMissions: ['first_sow', 'eco_water', 'first_harvest'],
     accentColor: '#34d399',
   },
   crystal_oasis: {
@@ -115,6 +120,7 @@ export const REALM_DEFS: Record<RealmId, RealmDef> = {
     unlockGold: 160,
     unlockWood: 0,
     unlockStone: 10,
+    requiredMissions: ['land_steward', 'woods_village_visit', 'woods_strange_zone'],
     accentColor: '#38bdf8',
   },
   sky_sanctuary: {
@@ -128,6 +134,7 @@ export const REALM_DEFS: Record<RealmId, RealmDef> = {
     unlockGold: 300,
     unlockWood: 15,
     unlockStone: 15,
+    requiredMissions: ['oasis_village_visit', 'oasis_strange_zone', 'portal_awakener'],
     accentColor: '#c084fc',
   },
 };
@@ -1226,6 +1233,43 @@ export const MISSIONS: MissionDef[] = [
     target: 4,
     rewardGold: 320,
     rewardStamina: 40,
+  },
+  // Realm Story & Exploration Missions (27–31)
+  {
+    id: 'woods_village_visit',
+    category: 'realms',
+    target: 1,
+    rewardGold: 95,
+    rewardItem: { id: 'corn_seed', qty: 3 },
+  },
+  {
+    id: 'woods_strange_zone',
+    category: 'realms',
+    target: 1,
+    rewardGold: 110,
+    rewardItem: { id: 'bio_mulch', qty: 2 },
+  },
+  {
+    id: 'oasis_village_visit',
+    category: 'realms',
+    target: 1,
+    rewardGold: 135,
+    rewardItem: { id: 'lavender_seed', qty: 3 },
+  },
+  {
+    id: 'oasis_strange_zone',
+    category: 'realms',
+    target: 1,
+    rewardGold: 150,
+    rewardItem: { id: 'fertilizer', qty: 3 },
+  },
+  {
+    id: 'sky_sanctuary_expedition',
+    category: 'realms',
+    target: 1,
+    rewardGold: 240,
+    rewardItem: { id: 'herbal_tea', qty: 2 },
+    rewardStamina: 35,
   },
 ];
 

@@ -293,7 +293,7 @@ export interface LocalePack {
   realms: Record<RealmId, { name: string; desc: string; perk: string }>;
   items: Record<ItemId, { name: string; description: string; roleClue: string }>;
   recipes: Partial<Record<PlaceableType | 'fertilizer' | 'bio_mulch', { name: string; description: string }>>;
-  missions: Record<MissionId, { title: string; desc: string }>;
+  missions: Partial<Record<MissionId, { title: string; desc: string }>>;
   badges: Record<BadgeId, { title: string; desc: string }>;
   morning: {
     cropsGrown: string;

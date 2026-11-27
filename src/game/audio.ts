@@ -32,6 +32,7 @@ class CozyAudioEngine {
   private rainAmbienceActive = false;
   private rainSource: AudioBufferSourceNode | null = null;
   private rainGain: GainNode | null = null;
+  private activeRealm: 'homestead' | 'whispering_woods' | 'crystal_oasis' | 'sky_sanctuary' = 'homestead';
   private visibilityListenerAttached = false;
   private readonly handleVisibilityChange = () => {
     if (!this.ctx) return;
@@ -54,23 +55,39 @@ class CozyAudioEngine {
     }
   };
 
-  // Cozy C major pentatonic notes (Hz)
-  private readonly melodyNotes = [
-    523.25, // C5
-    659.25, // E5
-    587.33, // D5
-    783.99, // G5
-    659.25, // E5
-    440.0,  // A4
-    523.25, // C5
-    392.0,  // G4
-    523.25, // C5
-    587.33, // D5
-    659.25, // E5
-    523.25, // C5
-  ];
+  // Biome-reactive cozy musical themes (Hz)
+  private readonly realmThemes: Record<
+    'homestead' | 'whispering_woods' | 'crystal_oasis' | 'sky_sanctuary',
+    { melody: number[]; bass: number[]; osc: OscillatorType }
+  > = {
+    homestead: {
+      melody: [523.25, 659.25, 587.33, 783.99, 659.25, 440.0, 523.25, 392.0, 523.25, 587.33, 659.25, 523.25],
+      bass: [130.81, 130.81, 174.61, 196.0],
+      osc: 'triangle',
+    },
+    whispering_woods: {
+      melody: [587.33, 698.46, 880.0, 783.99, 659.25, 587.33, 440.0, 523.25, 587.33, 659.25, 698.46, 587.33],
+      bass: [146.83, 146.83, 174.61, 220.0],
+      osc: 'sine',
+    },
+    crystal_oasis: {
+      melody: [587.33, 622.25, 783.99, 880.0, 932.33, 783.99, 622.25, 587.33, 698.46, 783.99, 880.0, 622.25],
+      bass: [146.83, 196.0, 155.56, 146.83],
+      osc: 'triangle',
+    },
+    sky_sanctuary: {
+      melody: [659.25, 783.99, 987.77, 1174.66, 987.77, 783.99, 659.25, 587.33, 783.99, 987.77, 1318.51, 987.77],
+      bass: [164.81, 196.0, 246.94, 196.0],
+      osc: 'sine',
+    },
+  };
 
-  private readonly bassNotes = [130.81, 130.81, 174.61, 196.0]; // C3, C3, F3, G3
+  public setRealmMusic(realm?: 'homestead' | 'whispering_woods' | 'crystal_oasis' | 'sky_sanctuary'): void {
+    const next = realm ?? 'homestead';
+    if (this.activeRealm !== next) {
+      this.activeRealm = next;
+    }
+  }
 
   public init(): void {
     if (typeof window === 'undefined') return;
@@ -117,6 +134,23 @@ class CozyAudioEngine {
     return this.muted;
   }
 
+  public setVoiceDucking(duck: boolean): void {
+    if (!this.musicGain || !this.ctx) return;
+    this.musicGain.gain.setTargetAtTime(duck ? 0.08 : 0.22, this.ctx.currentTime, 0.08);
+  }
+
+  public playStoryChime(): void {
+    this.init();
+    if (this.muted || !this.ctx || !this.sfxGain) return;
+    if (this.ctx.state === 'suspended') {
+      void this.ctx.resume();
+    }
+    const now = this.ctx.currentTime;
+    this.tone(523.25, 523.25, 0.14, 'sine', 0.14, now);
+    this.tone(659.25, 659.25, 0.16, 'sine', 0.15, now + 0.09);
+    this.tone(783.99, 1046.5, 0.28, 'triangle', 0.16, now + 0.18);
+  }
+
   public startAmbientMusic(): void {
     this.isPlayingState = true;
     this.init();
@@ -130,13 +164,14 @@ class CozyAudioEngine {
       if (this.ctx.state !== 'running') return;
 
       const now = this.ctx.currentTime;
-      const noteFreq = this.melodyNotes[this.stepIndex % this.melodyNotes.length];
+      const theme = this.realmThemes[this.activeRealm] ?? this.realmThemes.homestead;
+      const noteFreq = theme.melody[this.stepIndex % theme.melody.length];
 
-      // Gentle kalimba/music-box pluck on melody
+      // Gentle biome-tuned pluck on melody
       if (this.stepIndex % 2 === 0 || this.stepIndex % 5 === 0) {
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
-        osc.type = 'triangle';
+        osc.type = theme.osc;
         osc.frequency.setValueAtTime(noteFreq, now);
         gain.gain.setValueAtTime(0.001, now);
         gain.gain.linearRampToValueAtTime(0.14, now + 0.02);
@@ -149,7 +184,7 @@ class CozyAudioEngine {
 
       // Warm bass pad every 4 steps
       if (this.stepIndex % 4 === 0) {
-        const bassFreq = this.bassNotes[Math.floor(this.stepIndex / 4) % this.bassNotes.length];
+        const bassFreq = theme.bass[Math.floor(this.stepIndex / 4) % theme.bass.length];
         const bOsc = this.ctx.createOscillator();
         const bGain = this.ctx.createGain();
         bOsc.type = 'sine';
@@ -404,7 +439,12 @@ class CozyAudioEngine {
       | 'purr'
       | 'brew'
       | 'golden_catch'
-      | 'portal',
+      | 'portal'
+      | 'fanfare'
+      | 'wheel_tick'
+      | 'chest'
+      | 'firefly'
+      | 'camera',
     comboLevel = 2
   ): void {
     this.init();
@@ -482,10 +522,42 @@ class CozyAudioEngine {
       this.tone(783.99, 1174.66, 0.28, 'sine', 0.22, now + 0.17);
       return;
     }
+    if (kind === 'fanfare') {
+      this.tone(523.25, 523.25, 0.1, 'triangle', 0.2, now);
+      this.tone(659.25, 659.25, 0.1, 'triangle', 0.2, now + 0.07);
+      this.tone(783.99, 783.99, 0.11, 'triangle', 0.22, now + 0.14);
+      this.tone(1046.5, 1046.5, 0.34, 'sine', 0.24, now + 0.22);
+      this.tone(1567.98, 1567.98, 0.26, 'sine', 0.14, now + 0.26);
+      return;
+    }
+    if (kind === 'wheel_tick') {
+      this.tone(680 * pitchJitter, 520, 0.035, 'triangle', 0.12, now);
+      return;
+    }
+    if (kind === 'firefly') {
+      this.tone(1046.5 * pitchJitter, 1396.91, 0.08, 'sine', 0.14, now);
+      this.tone(1567.98 * pitchJitter, 1975.53, 0.12, 'sine', 0.12, now + 0.05);
+      return;
+    }
+    if (kind === 'chest') {
+      this.tone(440, 554.37, 0.08, 'triangle', 0.18, now);
+      this.tone(659.25, 880, 0.1, 'triangle', 0.2, now + 0.07);
+      this.tone(1108.73, 1318.51, 0.24, 'sine', 0.22, now + 0.15);
+      return;
+    }
+    if (kind === 'camera') {
+      this.noiseBurst(0.045, 2400, 0.18, now);
+      this.tone(920, 480, 0.04, 'square', 0.08, now);
+      this.tone(1174.66, 1480, 0.07, 'sine', 0.12, now + 0.05);
+      return;
+    }
     if (kind === 'combo') {
-      const mult = Math.min(1.8, 1 + (comboLevel - 1) * 0.12);
+      const mult = Math.min(1.85, 1 + (comboLevel - 1) * 0.12);
       this.tone(523.25 * mult, 659.25 * mult, 0.1, 'triangle', 0.22, now);
-      this.tone(783.99 * mult, 1046.5 * mult, 0.16, 'sine', 0.22, now + 0.06);
+      this.tone(783.99 * mult, 1046.5 * mult, 0.16, 'sine', 0.22, now + 0.055);
+      if (comboLevel >= 3) {
+        this.tone(1318.5 * Math.min(1.5, mult * 0.85), 1567.98, 0.18, 'sine', 0.14, now + 0.11);
+      }
       return;
     }
     if (kind === 'treasure') {

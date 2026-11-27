@@ -3,8 +3,9 @@ import { registerSW } from 'virtual:pwa-register';
 import { AlmanacModal } from './components/AlmanacModal';
 import { CraftModal } from './components/CraftModal';
 import { ForceUpdateModal } from './components/ForceUpdateModal';
+import { FunHubModal, type FunHubTabId } from './components/FunHubModal';
 import { FutureMessageModal } from './components/FutureMessageModal';
-import { GameHUD, type HudSnapshot, type RoomHudState } from './components/GameHUD';
+import { GameHUD, type CelebrationBannerState, type HudSnapshot, type RoomHudState } from './components/GameHUD';
 import { MissionsModal } from './components/MissionsModal';
 import { NasaObservatoryModal } from './components/NasaObservatoryModal';
 import { NetDebugPanel } from './components/NetDebugPanel';
@@ -13,8 +14,19 @@ import { PortalModal } from './components/PortalModal';
 import { RoomsModal } from './components/RoomsModal';
 import { ShopModal } from './components/ShopModal';
 import { StatusModal } from './components/StatusModal';
+import { StoryModal, type StoryFocus } from './components/StoryModal';
 import { TitleScreen } from './components/TitleScreen';
 import { TouchControls } from './components/TouchControls';
+import {
+  captureFarmSnapshot,
+  FARMER_HATS,
+  FARMER_OUTFITS,
+  getDailyQuizForDay,
+  loadSavedFarmerStyle,
+  normalizeFarmerStyle,
+  sanitizePetName,
+  saveFarmerStyle,
+} from './game/funFeatures';
 import { audioEngine } from './game/audio';
 import { initNetDebugGlobal, netDebug } from './game/netDebug';
 import {
@@ -41,6 +53,7 @@ import {
   FARMHOUSE_DOOR,
   FARMHOUSE_POS,
   GAME_MINUTES_PER_REAL_SECOND,
+  HOMESTEAD_STRANGE_ZONE_POS,
   ITEMS,
   NIGHT_START_MINUTES,
   REALM_DEFS,
@@ -59,6 +72,7 @@ import {
   getLanguageSwitchMessage,
   getRealmLabel,
   saveLanguagePreference,
+  translateSeason,
   translateWeather,
   UI_TEXT,
   type Language,
@@ -82,12 +96,14 @@ import {
 import { VoiceChatManager } from './game/voiceChat';
 import {
   advanceDay,
+  answerEcoQuiz,
   buyDairyCow,
   buyFarmCat,
   buyFarmChicken,
   buyFluffySheep,
   buyGuardDog,
   buyShopItem,
+  catchNearbyFirefly,
   claimMissionReward,
   computeFarmRestorationPercent,
   craftItem,
@@ -105,21 +121,32 @@ import {
   getTile,
   getTimePhase,
   hasNasaStation,
+  interactWithStrangeZone,
+  interactWithVillageElder,
   isNearFarmhouse,
+  isNearMysteryChest,
   isNearPortal,
   isNearShippingBin,
   isNearShopStall,
+  isNearStrangeZone,
+  isNearVillageElder,
   isNearWell,
   isSwiftBuffActive,
   isTileWalkable,
+  openMysteryChest,
   performTileAction,
+  renameFarmPet,
   rollDailyNatureTreasure,
   rollMarketSurgeCrop,
   sellCropItem,
   spawnNightWildlife,
+  spinLuckyWheel,
   stepChickens,
+  stepFireflies,
   stepLivestockAndDog,
+  stepRealmCreatures,
   stepWildlife,
+  syncNightFireflies,
   travelToRealm,
   triggerMiddayDrought,
   triggerMiddayHeatwave,
@@ -127,8 +154,10 @@ import {
   upgradeTool,
   type ActionFeedback,
 } from './game/rules';
+import { REALM_STORIES, resolveStoryLang } from './game/story';
 import type {
   DaySummary,
+  FarmerStyle,
   FloatingText,
   FutureDispatch,
   GamePhase,
@@ -138,6 +167,7 @@ import type {
   Particle,
   PlaceableType,
   RealmId,
+  TileTerrain,
   ToolType,
 } from './game/types';
 
@@ -172,6 +202,12 @@ function buildHudSnapshot(world: GameWorldState): HudSnapshot {
     nearPrompt = { action: 'bin', label: '[E] Sell Harvested Crops' };
   } else if (isNearPortal(world)) {
     nearPrompt = { action: 'portal', label: '[E] Open World Portals' };
+  } else if (isNearVillageElder(world)) {
+    nearPrompt = { action: 'elder', label: '[E] Speak with Village Elder' };
+  } else if (isNearStrangeZone(world)) {
+    nearPrompt = { action: 'strange_zone', label: '[E] Inspect Strange Zone' };
+  } else if (isNearMysteryChest(world)) {
+    nearPrompt = { action: 'chest', label: '[E] Open Mystery Chest' };
   }
 
   return {
@@ -212,17 +248,52 @@ function buildHudSnapshot(world: GameWorldState): HudSnapshot {
   };
 }
 
+const VALID_TERRAINS = new Set<TileTerrain>([
+  'grass',
+  'dirt_path',
+  'water',
+  'forest_edge',
+  'farmhouse',
+  'shop_stall',
+  'well',
+  'shipping_bin',
+  'portal',
+  'moss_floor',
+  'sand_dune',
+  'cloud_stone',
+  'village_plaza',
+  'village_hut',
+  'village_elder',
+  'strange_zone',
+]);
+
+function stripPrototypePollution(value: unknown, depth = 0): unknown {
+  if (depth > 12 || value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => stripPrototypePollution(item, depth + 1));
+  }
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+    clean[k] = stripPrototypePollution(v, depth + 1);
+  }
+  return clean;
+}
+
 function loadSavedWorld(): GameWorldState | null {
   try {
     const raw = localStorage.getItem(SAVE_KEY) ?? localStorage.getItem(LEGACY_SAVE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as GameWorldState;
+    if (!raw || raw.length > 1_500_000) return null;
+    const parsedRaw = stripPrototypePollution(JSON.parse(raw));
+    const parsed = parsedRaw as GameWorldState;
     if (
       !parsed ||
-      !Number.isFinite(parsed.width) ||
-      !Number.isFinite(parsed.height) ||
+      !Number.isInteger(parsed.width) ||
+      !Number.isInteger(parsed.height) ||
       parsed.width <= 0 ||
+      parsed.width > 48 ||
       parsed.height <= 0 ||
+      parsed.height > 48 ||
       !Array.isArray(parsed.tiles) ||
       parsed.tiles.length !== parsed.width * parsed.height ||
       !parsed.player ||
@@ -230,6 +301,15 @@ function loadSavedWorld(): GameWorldState | null {
       !Number.isFinite(parsed.player.y)
     ) {
       return null;
+    }
+
+    for (let i = 0; i < parsed.tiles.length; i++) {
+      const tile = parsed.tiles[i];
+      if (!tile || typeof tile !== 'object' || !VALID_TERRAINS.has(tile.terrain)) {
+        return null;
+      }
+      tile.x = i % parsed.width;
+      tile.y = Math.floor(i / parsed.width);
     }
 
     const maxHealth =
@@ -380,6 +460,13 @@ function loadSavedWorld(): GameWorldState | null {
       waterSavedLiters: parsed.stats?.waterSavedLiters ?? 0,
       heatwavesSurvivedWithShade: parsed.stats?.heatwavesSurvivedWithShade ?? 0,
       realmsVisited: parsed.stats?.realmsVisited ?? 1,
+      villagesVisited: parsed.stats?.villagesVisited ?? 0,
+      strangeZonesFound: parsed.stats?.strangeZonesFound ?? 0,
+      firefliesCaught: parsed.stats?.firefliesCaught ?? 0,
+      chestsOpened: parsed.stats?.chestsOpened ?? 0,
+      quizzesSolved: parsed.stats?.quizzesSolved ?? 0,
+      wheelSpins: parsed.stats?.wheelSpins ?? 0,
+      rushCompleted: parsed.stats?.rushCompleted ?? 0,
     };
     parsed.activeRealm =
       parsed.activeRealm && REALM_ORDER.includes(parsed.activeRealm)
@@ -393,12 +480,59 @@ function loadSavedWorld(): GameWorldState | null {
     parsed.realmCaches =
       parsed.realmCaches && typeof parsed.realmCaches === 'object' ? parsed.realmCaches : {};
     ensureHomesteadPortal(parsed);
+    if (
+      parsed.activeRealm === 'homestead' &&
+      !parsed.tiles.some((t) => t.terrain === 'strange_zone')
+    ) {
+      const szTile = getTile(parsed, HOMESTEAD_STRANGE_ZONE_POS.x, HOMESTEAD_STRANGE_ZONE_POS.y);
+      if (szTile && !szTile.crop && !szTile.structure && szTile.terrain === 'grass') {
+        szTile.terrain = 'strange_zone';
+        szTile.obstacle = null;
+        szTile.tillable = false;
+      }
+    }
+    parsed.realmCreatures = Array.isArray(parsed.realmCreatures) ? parsed.realmCreatures : [];
+    parsed.visitedVillages = Array.isArray(parsed.visitedVillages)
+      ? parsed.visitedVillages.filter((id): id is RealmId => REALM_ORDER.includes(id))
+      : [];
+    parsed.investigatedStrangeZones = Array.isArray(parsed.investigatedStrangeZones)
+      ? parsed.investigatedStrangeZones.filter((id): id is RealmId => REALM_ORDER.includes(id))
+      : [];
+    parsed.elderGiftsToday = Array.isArray(parsed.elderGiftsToday)
+      ? parsed.elderGiftsToday.filter((id): id is RealmId => REALM_ORDER.includes(id))
+      : [];
+    parsed.strangeZoneUsedToday = Array.isArray(parsed.strangeZoneUsedToday)
+      ? parsed.strangeZoneUsedToday.filter((id): id is RealmId => REALM_ORDER.includes(id))
+      : [];
+    const rawChapters: RealmId[] = Array.isArray(parsed.unlockedChapters)
+      ? parsed.unlockedChapters.filter((id): id is RealmId => REALM_ORDER.includes(id))
+      : ['homestead'];
+    if (!rawChapters.includes('homestead')) rawChapters.unshift('homestead');
+    parsed.unlockedChapters = Array.from(new Set(rawChapters));
     parsed.rotationYieldProgress = parsed.rotationYieldProgress ?? 0;
     parsed.forecastWeather = parsed.forecastWeather ?? parsed.weather;
     parsed.dailyOrder =
       parsed.dailyOrder ?? generateDailyOrder(parsed.day, getSeason(parsed.seasonIndex));
     parsed.harvestCombo = 0;
     parsed.lastHarvestMs = 0;
+    parsed.luckySpinUsedToday = Boolean(parsed.luckySpinUsedToday);
+    parsed.ecoQuizAnsweredToday = Boolean(parsed.ecoQuizAnsweredToday);
+    parsed.rushUsedToday = Boolean(parsed.rushUsedToday);
+    parsed.petNames = {
+      dog: sanitizePetName(parsed.petNames?.dog ?? ''),
+      cat: sanitizePetName(parsed.petNames?.cat ?? ''),
+    };
+    parsed.playerStyle = normalizeFarmerStyle(parsed.playerStyle ?? loadSavedFarmerStyle());
+    parsed.fireflies = Array.isArray(parsed.fireflies) ? parsed.fireflies.slice(0, 12) : [];
+    if (
+      parsed.mysteryChest &&
+      (typeof parsed.mysteryChest !== 'object' ||
+        !Number.isInteger(parsed.mysteryChest.x) ||
+        !Number.isInteger(parsed.mysteryChest.y) ||
+        (parsed.mysteryChest.kind !== 'wood' && parsed.mysteryChest.kind !== 'crystal'))
+    ) {
+      parsed.mysteryChest = null;
+    }
     return parsed;
   } catch {
     return null;
@@ -422,7 +556,19 @@ export default function App() {
 
   const [phase, setPhase] = useState<GamePhase>(autostart && !initialInviteCode ? 'playing' : 'title');
   const [hasSavedFarm, setHasSavedFarm] = useState<boolean>(() => Boolean(loadSavedWorld()));
-  const [activeModal, setActiveModal] = useState<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac' | 'portals'>('none');
+  const [activeModal, setActiveModal] = useState<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac' | 'portals' | 'story' | 'fun'>('none');
+  const [funInitialTab, setFunInitialTab] = useState<FunHubTabId>('spin');
+  const [farmerStyle, setFarmerStyle] = useState<FarmerStyle>(() =>
+    normalizeFarmerStyle(worldRef.current.playerStyle ?? loadSavedFarmerStyle())
+  );
+  const [dashCooldownSec, setDashCooldownSec] = useState<number>(0);
+  const [rushState, setRushState] = useState<{
+    active: boolean;
+    progress: number;
+    target: number;
+    remainingSec: number;
+  } | null>(null);
+  const [storyFocus, setStoryFocus] = useState<StoryFocus | null>(null);
   const [shopInitialTab, setShopInitialTab] = useState<'seeds' | 'sell' | 'upgrades'>('seeds');
   const [futureDispatch, setFutureDispatch] = useState<FutureDispatch | null>(null);
   const [muted, setMuted] = useState<boolean>(false);
@@ -449,6 +595,8 @@ export default function App() {
     return mobileLike && window.innerWidth < window.innerHeight && window.innerWidth < 768;
   });
   const [morningSummary, setMorningSummary] = useState<DaySummary | null>(null);
+  const [celebrationBanner, setCelebrationBanner] = useState<CelebrationBannerState | null>(null);
+  const celebrationTimerRef = useRef<number | null>(null);
   const [hud, setHud] = useState<HudSnapshot>(() => buildHudSnapshot(worldRef.current));
   const [sprintActive, setSprintActive] = useState<boolean>(false);
   const [blindMode, setBlindMode] = useState<boolean>(() => getInitialBlindMode());
@@ -496,7 +644,19 @@ export default function App() {
   const [versionCooldownSec, setVersionCooldownSec] = useState<number>(0);
 
   const phaseRef = useRef<GamePhase>(phase);
-  const modalRef = useRef<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac' | 'portals'>(activeModal);
+  const modalRef = useRef<'none' | 'shop' | 'craft' | 'missions' | 'nasa' | 'almanac' | 'portals' | 'story' | 'fun'>(activeModal);
+  const farmerStyleRef = useRef<FarmerStyle>(farmerStyle);
+  farmerStyleRef.current = farmerStyle;
+  const dashActiveUntilRef = useRef<number>(0);
+  const dashCooldownUntilRef = useRef<number>(0);
+  const rushRef = useRef<{ active: boolean; endsAtMs: number; progress: number; target: number }>({
+    active: false,
+    endsAtMs: 0,
+    progress: 0,
+    target: 5,
+  });
+  const lastFireflySyncAtRef = useRef<number>(0);
+  const lastFireflyCatchSentAtRef = useRef<number>(0);
   const futureOpenRef = useRef<boolean>(false);
   const langRef = useRef<Language>(lang);
   const blindModeRef = useRef<boolean>(blindMode);
@@ -515,6 +675,7 @@ export default function App() {
   const activeEmotesRef = useRef<Record<string, { text: string; expiresAt: number }>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const activeRoomRef = useRef<{ code: string; playerName: string; serverUrl?: string } | null>(null);
+  const sessionTokensRef = useRef<Map<string, string>>(new Map());
   const reconnectTimerRef = useRef<number | null>(null);
   const connectTimeoutRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef<number>(0);
@@ -798,7 +959,39 @@ export default function App() {
     });
   }, []);
 
+  const spawnConfettiBurst = useCallback(
+    (wx: number, wy: number, count = 24) => {
+      const palette = ['#fde047', '#4ade80', '#38bdf8', '#f472b6', '#fb923c', '#c084fc'];
+      const perColor = Math.max(2, Math.ceil(count / palette.length));
+      for (const col of palette) {
+        spawnParticleBurst(wx, wy, col, perColor, 62, 78);
+      }
+    },
+    [spawnParticleBurst]
+  );
+
+  const triggerCelebration = useCallback(
+    (title: string, subtitle?: string, tone: 'gold' | 'emerald' | 'purple' = 'gold', confetti = true) => {
+      const id = Date.now() + Math.floor(Math.random() * 1000);
+      setCelebrationBanner({ id, title, subtitle, tone });
+      if (celebrationTimerRef.current !== null) {
+        window.clearTimeout(celebrationTimerRef.current);
+      }
+      celebrationTimerRef.current = window.setTimeout(() => {
+        celebrationTimerRef.current = null;
+        setCelebrationBanner((cur) => (cur?.id === id ? null : cur));
+      }, 3400);
+      if (confetti) {
+        const w = worldRef.current;
+        spawnConfettiBurst(w.player.x * TILE_SIZE, (w.player.y - 0.5) * TILE_SIZE, 24);
+        traumaRef.current = Math.max(traumaRef.current, 0.24);
+      }
+    },
+    [spawnConfettiBurst]
+  );
+
   const syncHud = useCallback(() => {
+    audioEngine.setRealmMusic(worldRef.current.activeRealm ?? 'homestead');
     setHud(buildHudSnapshot(worldRef.current));
   }, []);
 
@@ -826,11 +1019,18 @@ export default function App() {
         `${UI_TEXT[langRef.current].badgeUnlockedToast} ${badgeTitle}`,
         '#ffe473'
       );
+      audioEngine.playSfx('fanfare');
+      triggerCelebration(
+        UI_TEXT[langRef.current].badgeUnlockedToast,
+        badgeTitle,
+        'gold',
+        true
+      );
       if (blindModeRef.current) {
         announceBlind(`${UI_TEXT[langRef.current].badgeUnlockedToast} ${badgeTitle}`, false);
       }
     }
-  }, [addFloatingText, announceBlind]);
+  }, [addFloatingText, announceBlind, triggerCelebration]);
 
   const sendWs = useCallback((msg: ClientToServerMessage) => {
     const ws = wsRef.current;
@@ -1071,6 +1271,18 @@ export default function App() {
         if (fx.sfx) audioEngine.playSfx(fx.sfx as Parameters<typeof audioEngine.playSfx>[0], fx.sfxArg);
         if (fx.color && fx.count) spawnParticleBurst(wx, wy, fx.color, fx.count, 44);
         if (fx.text) addFloatingText(wx, wy, fx.text, fx.textColor ?? '#ffe473');
+        if (fx.storyKind && fx.storyRealm) {
+          const sLang = resolveStoryLang(langRef.current);
+          const st = REALM_STORIES[fx.storyRealm];
+          const toastLabel =
+            fx.storyKind === 'elder' ? st.elderName[sLang] : st.strangeZoneName[sLang];
+          addFloatingText(wx, wy - 14, toastLabel, fx.storyKind === 'elder' ? '#fde047' : '#e879f9');
+          if (fx.actorId === getOrCreateClientId()) {
+            setStoryFocus({ realmId: fx.storyRealm, encounter: fx.storyKind });
+            setActiveModal('story');
+          }
+          syncHud();
+        }
         if (fx.leveledUpTo) {
           audioEngine.playSfx('levelup');
           const lvlMsg = UI_TEXT[langRef.current].levelUpToast.replace('{n}', String(fx.leveledUpTo));
@@ -1394,6 +1606,7 @@ export default function App() {
             name: me.name,
             colorIndex: me.colorIndex,
             voice: localPlayerMetaRef.current?.voice,
+            style: farmerStyleRef.current,
           };
         }
         worldRef.current = serverWorld;
@@ -1502,6 +1715,9 @@ export default function App() {
               'Farmer',
             serverUrl: opts?.serverUrl,
           };
+          if (msg.sessionToken) {
+            sessionTokensRef.current.set(msg.roomCode, msg.sessionToken);
+          }
           applySyncedWorld(msg.world, msg.players, msg.playerId, false);
           earnedBadgesRef.current = new Set(getEarnedBadges(msg.world));
           cameraRef.current.x = msg.world.player.x * TILE_SIZE;
@@ -1513,6 +1729,12 @@ export default function App() {
           setUnreadChatCount(0);
           const initialVoiceStates = msg.voiceStates ?? {};
           voiceStatesRef.current = initialVoiceStates;
+          ws.send(
+            JSON.stringify({
+              type: 'action:set_style',
+              style: farmerStyleRef.current,
+            } satisfies ClientToServerMessage)
+          );
           if (voiceManagerRef.current?.isEnabled()) {
             const activeVoicePeers = Object.entries(initialVoiceStates)
               .filter(([id, s]) => id !== msg.playerId && s.enabled)
@@ -1574,6 +1796,9 @@ export default function App() {
           world.sheep = msg.sheep;
           world.dog = msg.dog;
           world.cat = msg.cat ?? null;
+          if (msg.realmCreatures) {
+            world.realmCreatures = msg.realmCreatures;
+          }
           const me = msg.players.find((p) => p.id === myId);
           if (me) {
             world.player.health = me.health;
@@ -1721,6 +1946,7 @@ export default function App() {
                   code: ctx.code,
                   playerName: ctx.playerName,
                   clientId: getOrCreateClientId(),
+                  sessionToken: sessionTokensRef.current.get(ctx.code),
                 },
                 { serverUrl: ctx.serverUrl, roomContext: ctx }
               );
@@ -2018,6 +2244,254 @@ export default function App() {
     }
   }, [announceBlind, disconnectMultiplayer, requestOptimalDisplay, syncHud]);
 
+  const handleInteractLandmark = useCallback(
+    (kind: 'elder' | 'strange_zone') => {
+      if (gameModeRef.current === 'multiplayer') {
+        sendWs({ type: 'action:interact_landmark', kind });
+        return;
+      }
+      const world = worldRef.current;
+      const res =
+        kind === 'elder' ? interactWithVillageElder(world) : interactWithStrangeZone(world);
+      if (!res.ok) {
+        audioEngine.playSfx('error');
+        return;
+      }
+      audioEngine.playSfx(kind === 'elder' ? 'wish' : 'portal');
+      const sLang = resolveStoryLang(langRef.current);
+      const st = REALM_STORIES[res.realmId];
+      const wx = world.player.x * TILE_SIZE;
+      const wy = (world.player.y - 1) * TILE_SIZE;
+      spawnParticleBurst(
+        wx,
+        world.player.y * TILE_SIZE,
+        kind === 'elder' ? '#fde047' : '#c084fc',
+        18,
+        44
+      );
+      addFloatingText(
+        wx,
+        wy,
+        kind === 'elder' ? st.elderName[sLang] : st.strangeZoneName[sLang],
+        kind === 'elder' ? '#fde047' : '#e879f9'
+      );
+      if (res.leveledUpTo) {
+        audioEngine.playSfx('levelup');
+        const lvlMsg = UI_TEXT[langRef.current].levelUpToast.replace('{n}', String(res.leveledUpTo));
+        addFloatingText(wx, wy - 20, lvlMsg, '#fde047');
+        triggerCelebration(lvlMsg, st.title[sLang], 'gold', true);
+      } else {
+        triggerCelebration(
+          kind === 'elder' ? st.elderName[sLang] : st.strangeZoneName[sLang],
+          kind === 'elder' ? st.villageName[sLang] : st.title[sLang],
+          kind === 'elder' ? 'emerald' : 'purple',
+          true
+        );
+      }
+      setStoryFocus({ realmId: res.realmId, encounter: kind });
+      setActiveModal('story');
+      checkNewBadges();
+      saveFarm();
+      syncHud();
+      if (blindModeRef.current) {
+        announceBlind(
+          kind === 'elder'
+            ? `${st.elderName[sLang]}: ${st.elderGreeting[sLang]}`
+            : `${st.strangeZoneName[sLang]}: ${st.strangeZoneLore[sLang]}`,
+          true
+        );
+      }
+    },
+    [addFloatingText, announceBlind, checkNewBadges, saveFarm, sendWs, spawnParticleBurst, syncHud, triggerCelebration]
+  );
+
+  const advanceRushProgress = useCallback(() => {
+    const r = rushRef.current;
+    if (!r.active) return;
+    if (Date.now() > r.endsAtMs) {
+      r.active = false;
+      setRushState(null);
+      return;
+    }
+    r.progress += 1;
+    if (r.progress >= r.target) {
+      r.active = false;
+      setRushState(null);
+      const world = worldRef.current;
+      world.rushUsedToday = true;
+      world.player.gold += 65;
+      world.stats.totalGoldEarned += 65;
+      world.stats.rushCompleted = (world.stats.rushCompleted ?? 0) + 1;
+      world.xp = (world.xp ?? 0) + 35;
+      while (world.xp >= Math.max(1, world.level ?? 1) * 100) {
+        world.xp -= Math.max(1, world.level ?? 1) * 100;
+        world.level = (world.level ?? 1) + 1;
+      }
+      audioEngine.playSfx('fanfare');
+      try {
+        navigator.vibrate?.(18);
+      } catch {
+        // Ignore haptics unsupported
+      }
+      const title =
+        langRef.current === 'ar'
+          ? '⚡ اكتملت ساعة الاندفاع الذهبية!'
+          : '⚡ Golden Rush Complete!';
+      const sub = langRef.current === 'ar' ? '+65 ذهب · +35 خبرة' : '+65 Gold · +35 XP';
+      triggerCelebration(title, sub, 'gold', true);
+      if (blindModeRef.current) announceBlind(`${title} ${sub}`, true);
+      saveFarm();
+      syncHud();
+    } else {
+      setRushState({
+        active: true,
+        progress: r.progress,
+        target: r.target,
+        remainingSec: Math.max(1, Math.ceil((r.endsAtMs - Date.now()) / 1000)),
+      });
+    }
+  }, [announceBlind, saveFarm, syncHud, triggerCelebration]);
+
+  const handleChangeFarmerStyle = useCallback(
+    (next: FarmerStyle) => {
+      const normalized = normalizeFarmerStyle(next);
+      setFarmerStyle(normalized);
+      saveFarmerStyle(normalized);
+      worldRef.current.playerStyle = normalized;
+      if (localPlayerMetaRef.current) {
+        localPlayerMetaRef.current = { ...localPlayerMetaRef.current, style: normalized };
+      }
+      audioEngine.playSfx('click');
+      if (gameModeRef.current === 'multiplayer') {
+        sendWs({ type: 'action:set_style', style: normalized });
+      } else {
+        saveFarm();
+      }
+    },
+    [saveFarm, sendWs]
+  );
+
+  const handleCycleTitleStyle = useCallback(() => {
+    const idx = FARMER_OUTFITS.findIndex((o) => o.id === farmerStyleRef.current.outfit);
+    const nextOutfit = FARMER_OUTFITS[(idx + 1) % FARMER_OUTFITS.length].id;
+    const hatIdx = FARMER_HATS.findIndex((h) => h.id === farmerStyleRef.current.hat);
+    const nextHat =
+      idx + 1 >= FARMER_OUTFITS.length
+        ? FARMER_HATS[(hatIdx + 1) % FARMER_HATS.length].id
+        : farmerStyleRef.current.hat;
+    handleChangeFarmerStyle({ outfit: nextOutfit, hat: nextHat });
+  }, [handleChangeFarmerStyle]);
+
+  const handleTriggerDash = useCallback(() => {
+    if (phaseRef.current !== 'playing' || modalRef.current !== 'none' || futureOpenRef.current) return;
+    const now = Date.now();
+    if (now < dashCooldownUntilRef.current) return;
+    const world = worldRef.current;
+    if (world.player.stamina < 3) {
+      audioEngine.playSfx('error');
+      return;
+    }
+    if (gameModeRef.current === 'singleplayer') {
+      world.player.stamina = Math.max(0, world.player.stamina - 3);
+    }
+    dashActiveUntilRef.current = now + 240;
+    dashCooldownUntilRef.current = now + 2500;
+    setDashCooldownSec(3);
+    audioEngine.playSfx('dash');
+    spawnParticleBurst(world.player.x * TILE_SIZE, world.player.y * TILE_SIZE, '#86efac', 12, 52);
+    try {
+      navigator.vibrate?.(12);
+    } catch {
+      // Ignore
+    }
+    syncHud();
+  }, [spawnParticleBurst, syncHud]);
+
+  const handleOpenMysteryChest = useCallback(() => {
+    const world = worldRef.current;
+    if (gameModeRef.current === 'multiplayer') {
+      sendWs({ type: 'action:open_chest' });
+      return;
+    }
+    const res = openMysteryChest(world);
+    if (!res.ok) {
+      audioEngine.playSfx('error');
+      return;
+    }
+    audioEngine.playSfx('chest');
+    try {
+      navigator.vibrate?.(16);
+    } catch {
+      // Ignore
+    }
+    const wx = world.player.x * TILE_SIZE;
+    const wy = (world.player.y - 0.8) * TILE_SIZE;
+    spawnConfettiBurst(wx, wy, 20);
+    const label = res.bonusItem
+      ? `+${res.goldDelta}g · +${res.bonusItem.qty} ${getItemLabel(res.bonusItem.id, langRef.current).name}`
+      : `+${res.goldDelta}g`;
+    addFloatingText(wx, wy, label, '#fde047');
+    triggerCelebration(
+      langRef.current === 'ar' ? '🎁 صندوق كنز مذهل!' : '🎁 Mystery Chest Opened!',
+      label,
+      'gold',
+      true
+    );
+    if (res.leveledUpTo) {
+      audioEngine.playSfx('levelup');
+      const lvlMsg = UI_TEXT[langRef.current].levelUpToast.replace('{n}', String(res.leveledUpTo));
+      addFloatingText(wx, wy - 20, lvlMsg, '#fde047');
+    }
+    if (blindModeRef.current) announceBlind(label, true);
+    advanceRushProgress();
+    checkNewBadges();
+    saveFarm();
+    syncHud();
+  }, [
+    addFloatingText,
+    advanceRushProgress,
+    announceBlind,
+    checkNewBadges,
+    saveFarm,
+    sendWs,
+    spawnConfettiBurst,
+    syncHud,
+    triggerCelebration,
+  ]);
+
+  const handleTakeSnapshot = useCallback((): boolean => {
+    const world = worldRef.current;
+    const sLang = resolveStoryLang(langRef.current);
+    const seasonLabel = translateSeason(getSeason(world.seasonIndex), langRef.current);
+    const realmLabel = getRealmLabel(world.activeRealm ?? 'homestead', langRef.current).name;
+    const ok = captureFarmSnapshot(canvasRef.current, {
+      day: world.day,
+      seasonLabel,
+      realmLabel,
+      restorationPct: computeFarmRestorationPercent(world),
+      lang: sLang,
+    });
+    audioEngine.playSfx(ok ? 'camera' : 'error');
+    if (ok) {
+      addFloatingText(
+        world.player.x * TILE_SIZE,
+        (world.player.y - 1.1) * TILE_SIZE,
+        sLang === 'ar' ? '📸 تم حفظ الصورة!' : '📸 Snapshot Saved!',
+        '#bae6fd'
+      );
+    }
+    return ok;
+  }, [addFloatingText]);
+
+  const handleStartRush = useCallback(() => {
+    const world = worldRef.current;
+    if (world.rushUsedToday) return;
+    const endsAt = Date.now() + 45_000;
+    rushRef.current = { active: true, endsAtMs: endsAt, progress: 0, target: 5 };
+    setRushState({ active: true, progress: 0, target: 5, remainingSec: 45 });
+    audioEngine.playSfx('dash');
+  }, []);
+
   const handleInteract = useCallback(() => {
     const world = worldRef.current;
     if (isNearFarmhouse(world)) {
@@ -2079,8 +2553,30 @@ export default function App() {
       if (blindModeRef.current) {
         announceBlind(UI_TEXT[langRef.current].portalModalTitle, true);
       }
+      return;
     }
-  }, [addFloatingText, announceBlind, saveFarm, sendWs, spawnParticleBurst, syncHud, triggerSleep]);
+    if (isNearVillageElder(world)) {
+      handleInteractLandmark('elder');
+      return;
+    }
+    if (isNearStrangeZone(world)) {
+      handleInteractLandmark('strange_zone');
+      return;
+    }
+    if (isNearMysteryChest(world)) {
+      handleOpenMysteryChest();
+    }
+  }, [
+    addFloatingText,
+    announceBlind,
+    handleInteractLandmark,
+    handleOpenMysteryChest,
+    saveFarm,
+    sendWs,
+    spawnParticleBurst,
+    syncHud,
+    triggerSleep,
+  ]);
 
   const handleUnlockRealm = useCallback(
     (id: RealmId) => {
@@ -2091,20 +2587,26 @@ export default function App() {
       const world = worldRef.current;
       const res = unlockRealm(world, id);
       if (res.ok) {
-        audioEngine.playSfx('portal');
+        audioEngine.playSfx('fanfare');
         const realmName = getRealmLabel(id, langRef.current).name;
         spawnParticleBurst(
           world.player.x * TILE_SIZE,
           world.player.y * TILE_SIZE,
           REALM_DEFS[id].accentColor,
-          18,
-          44
+          20,
+          50
         );
         addFloatingText(
           world.player.x * TILE_SIZE,
           (world.player.y - 1) * TILE_SIZE,
           `${UI_TEXT[langRef.current].unlockedLabel}: ${realmName}`,
           REALM_DEFS[id].accentColor
+        );
+        triggerCelebration(
+          `${UI_TEXT[langRef.current].unlockedLabel}: ${realmName}`,
+          REALM_STORIES[id].title[resolveStoryLang(langRef.current)],
+          'purple',
+          true
         );
         if (res.leveledUpTo) {
           audioEngine.playSfx('levelup');
@@ -2119,15 +2621,21 @@ export default function App() {
         }
       } else {
         audioEngine.playSfx('error');
+        const errText =
+          res.missingMissions && res.missingMissions.length > 0
+            ? langRef.current === 'ar'
+              ? `أتمم ${res.missingMissions.length} مهام مطلوبة أولاً`
+              : `Finish ${res.missingMissions.length} required mission(s) first`
+            : res.message;
         addFloatingText(
           world.player.x * TILE_SIZE,
           (world.player.y - 1) * TILE_SIZE,
-          res.message,
+          errText,
           '#ff9b85'
         );
       }
     },
-    [addFloatingText, announceBlind, checkNewBadges, saveFarm, sendWs, spawnParticleBurst, syncHud]
+    [addFloatingText, announceBlind, checkNewBadges, saveFarm, sendWs, spawnParticleBurst, syncHud, triggerCelebration]
   );
 
   const handleTravelRealm = useCallback(
@@ -2148,8 +2656,8 @@ export default function App() {
           world.player.x * TILE_SIZE,
           world.player.y * TILE_SIZE,
           '#c084fc',
-          20,
-          48
+          22,
+          52
         );
         addFloatingText(
           world.player.x * TILE_SIZE,
@@ -2157,6 +2665,17 @@ export default function App() {
           arrivalMsg,
           REALM_DEFS[id].accentColor
         );
+        if (res.newChapterUnlocked) {
+          const sLang = resolveStoryLang(langRef.current);
+          const chTitle = REALM_STORIES[id].title[sLang];
+          addFloatingText(
+            world.player.x * TILE_SIZE,
+            (world.player.y - 1.9) * TILE_SIZE,
+            chTitle,
+            '#fde047'
+          );
+          triggerCelebration(arrivalMsg, chTitle, 'purple', true);
+        }
         setActiveModal('none');
         checkNewBadges();
         saveFarm();
@@ -2168,7 +2687,7 @@ export default function App() {
         audioEngine.playSfx('error');
       }
     },
-    [addFloatingText, announceBlind, checkNewBadges, saveFarm, sendWs, spawnParticleBurst, syncHud]
+    [addFloatingText, announceBlind, checkNewBadges, saveFarm, sendWs, spawnParticleBurst, syncHud, triggerCelebration]
   );
 
   const handleQuickEat = useCallback(() => {
@@ -2238,6 +2757,31 @@ export default function App() {
         return;
       }
 
+      const clickedTile = getTile(world, tx, ty);
+      if (
+        clickedTile?.terrain === 'village_elder' &&
+        Math.hypot(tx + 0.5 - world.player.x, ty + 0.5 - world.player.y) <= 2.35
+      ) {
+        handleInteractLandmark('elder');
+        return;
+      }
+      if (
+        clickedTile?.terrain === 'strange_zone' &&
+        Math.hypot(tx + 0.5 - world.player.x, ty + 0.5 - world.player.y) <= 2.35
+      ) {
+        handleInteractLandmark('strange_zone');
+        return;
+      }
+      if (
+        world.mysteryChest &&
+        world.mysteryChest.x === tx &&
+        world.mysteryChest.y === ty &&
+        Math.hypot(tx + 0.5 - world.player.x, ty + 0.5 - world.player.y) <= 2.2
+      ) {
+        handleOpenMysteryChest();
+        return;
+      }
+
       if (gameModeRef.current === 'multiplayer') {
         const dx = tx + 0.5 - world.player.x;
         const dy = ty + 0.5 - world.player.y;
@@ -2296,10 +2840,14 @@ export default function App() {
               .replace('{n}', String(res.comboCount))
               .replace('{g}', String(res.comboGold ?? 0));
             addFloatingText(wx, wy - 22, comboMsg, '#fde047');
+            if ((res.comboCount ?? 0) >= 3) {
+              traumaRef.current = Math.max(traumaRef.current, 0.16);
+              spawnConfettiBurst(wx, wy, 14);
+            }
           } else {
             audioEngine.playSfx('harvest');
           }
-          spawnParticleBurst(wx, wy, '#ffe473', res.goldenBonus ? 22 : 14, 52);
+          spawnParticleBurst(wx, wy, '#ffe473', res.goldenBonus ? 24 : 15, 54);
           if (feedbackText) addFloatingText(wx, wy - 8, feedbackText, '#ffe675');
           if (blindModeRef.current && feedbackText) {
             announceBlind(feedbackText, true);
@@ -2388,6 +2936,7 @@ export default function App() {
           audioEngine.playSfx('levelup');
           const lvlMsg = UI_TEXT[langRef.current].levelUpToast.replace('{n}', String(res.leveledUpTo));
           addFloatingText(world.player.x * TILE_SIZE, (world.player.y - 1.6) * TILE_SIZE, lvlMsg, '#fde047');
+          triggerCelebration(lvlMsg, getRealmLabel(world.activeRealm ?? 'homestead', langRef.current).name, 'gold', true);
           if (blindModeRef.current) {
             announceBlind(lvlMsg, false);
           }
@@ -2398,9 +2947,25 @@ export default function App() {
         if (pct >= 100 && !world.restorationVictoryDismissed) {
           world.outcome = 'restored';
           setPhase('gameover');
-          audioEngine.playSfx('morning');
+          audioEngine.playSfx('fanfare');
           if (blindModeRef.current) {
             announceBlind(UI_TEXT[langRef.current].restoredTitle, true);
+          }
+        }
+        if (
+          res.kind === 'till' ||
+          res.kind === 'plant' ||
+          res.kind === 'water' ||
+          res.kind === 'harvest' ||
+          res.kind === 'clear'
+        ) {
+          advanceRushProgress();
+        }
+        if (res.kind === 'harvest' || res.kind === 'forage') {
+          try {
+            navigator.vibrate?.(12);
+          } catch {
+            // Ignore haptics unsupported
           }
         }
         checkNewBadges();
@@ -2414,7 +2979,20 @@ export default function App() {
         }
       }
     },
-    [addFloatingText, announceBlind, checkNewBadges, saveFarm, spawnParticleBurst, syncHud, triggerSleep]
+    [
+      addFloatingText,
+      advanceRushProgress,
+      announceBlind,
+      checkNewBadges,
+      handleInteractLandmark,
+      handleOpenMysteryChest,
+      saveFarm,
+      spawnConfettiBurst,
+      spawnParticleBurst,
+      syncHud,
+      triggerCelebration,
+      triggerSleep,
+    ]
   );
 
   // Keyboard Listeners (WASD/Arrows, 1-9, E, B, C, M, Esc/P) + Blur Hygiene
@@ -2592,7 +3170,35 @@ export default function App() {
         return;
       }
 
+      if (key === 'o') {
+        e.preventDefault();
+        audioEngine.playSfx('click');
+        setStoryFocus({ realmId: worldRef.current.activeRealm ?? 'homestead' });
+        setActiveModal((prev) => (prev === 'story' ? 'none' : 'story'));
+        return;
+      }
+
+      if (key === 'u') {
+        e.preventDefault();
+        audioEngine.playSfx('click');
+        setFunInitialTab('spin');
+        setActiveModal((prev) => (prev === 'fun' ? 'none' : 'fun'));
+        return;
+      }
+
       if (modalRef.current !== 'none' || futureOpenRef.current) return;
+
+      if (key === 'y') {
+        e.preventDefault();
+        handleTriggerDash();
+        return;
+      }
+
+      if (key === '0') {
+        e.preventDefault();
+        handleTakeSnapshot();
+        return;
+      }
 
       if (key === 'f') {
         e.preventDefault();
@@ -2708,7 +3314,9 @@ export default function App() {
     handleInteract,
     handleJoinOrToggleVoiceMic,
     handleQuickEat,
+    handleTakeSnapshot,
     handleTileClickAction,
+    handleTriggerDash,
     hasSavedFarm,
     saveFarm,
     startNewFarm,
@@ -2852,6 +3460,12 @@ export default function App() {
         if (keys.has('a') || keys.has('arrowleft')) mx -= 1;
         if (keys.has('d') || keys.has('arrowright')) mx += 1;
 
+        const nowWall = Date.now();
+        const isDashing = nowWall < dashActiveUntilRef.current;
+        if (isDashing && mx === 0 && my === 0) {
+          mx = world.player.facingX || 0;
+          my = world.player.facingY || 1;
+        }
         if (mx !== 0 || my !== 0) {
           const len = Math.hypot(mx, my);
           if (len > 1) {
@@ -2860,7 +3474,8 @@ export default function App() {
           }
           const sprinting = sprintActiveRef.current || keys.has('shift');
           const swiftMult = isSwiftBuffActive(world) ? 1.25 : 1;
-          const speed = (sprinting ? 4.5 * 1.45 : 4.5) * swiftMult; // tiles/sec
+          const dashMult = isDashing ? 2.5 : 1;
+          const speed = (sprinting ? 4.5 * 1.45 : 4.5) * swiftMult * dashMult; // tiles/sec
           const nx = world.player.x + mx * speed * dt;
           const ny = world.player.y + my * speed * dt;
 
@@ -3037,6 +3652,45 @@ export default function App() {
             spawnParticleBurst(dx * TILE_SIZE, dy * TILE_SIZE, '#fde047', 6, 30);
             addFloatingText(dx * TILE_SIZE, (dy - 0.8) * TILE_SIZE, UI_TEXT[langRef.current].dogBarkToast, '#fde047');
           });
+          stepRealmCreatures(world, dt);
+
+          // Glowing Night Fireflies
+          if (nowWall - lastFireflySyncAtRef.current >= 3200) {
+            lastFireflySyncAtRef.current = nowWall;
+            syncNightFireflies(world);
+          }
+          stepFireflies(world, dt);
+          const caughtFf = catchNearbyFirefly(world, 0.95);
+          if (caughtFf.caught) {
+            audioEngine.playSfx('firefly');
+            spawnParticleBurst(world.player.x * TILE_SIZE, world.player.y * TILE_SIZE, '#bef264', 12, 42);
+            addFloatingText(
+              world.player.x * TILE_SIZE,
+              (world.player.y - 0.9) * TILE_SIZE,
+              langRef.current === 'ar' ? '✨ +12 ذهب +6 طاقة' : '✨ +12g +6⚡',
+              '#d9f99d'
+            );
+            try {
+              navigator.vibrate?.(10);
+            } catch {
+              // Ignore
+            }
+            if (caughtFf.leveledUpTo) {
+              audioEngine.playSfx('levelup');
+              const lvlMsg = UI_TEXT[langRef.current].levelUpToast.replace('{n}', String(caughtFf.leveledUpTo));
+              addFloatingText(world.player.x * TILE_SIZE, (world.player.y - 1.5) * TILE_SIZE, lvlMsg, '#fde047');
+            }
+            advanceRushProgress();
+          }
+        } else if (gameModeRef.current === 'multiplayer' && world.fireflies?.length) {
+          stepFireflies(world, dt);
+          const nearFf = world.fireflies.find(
+            (f) => Math.hypot(f.x - world.player.x, f.y - world.player.y) <= 1.05
+          );
+          if (nearFf && nowWall - lastFireflyCatchSentAtRef.current >= 600) {
+            lastFireflyCatchSentAtRef.current = nowWall;
+            sendWs({ type: 'action:catch_firefly', id: nearFf.id });
+          }
         }
 
         // 4. Smoothly interpolate remote co-op players at 60Hz
@@ -3152,7 +3806,12 @@ export default function App() {
             elapsedRef.current,
             currentPhase === 'title',
             gameModeRef.current === 'multiplayer' ? remotePlayersRef.current : [],
-            gameModeRef.current === 'multiplayer' ? localPlayerMetaRef.current : undefined,
+            gameModeRef.current === 'multiplayer'
+              ? {
+                  ...(localPlayerMetaRef.current ?? { name: '', colorIndex: 0 }),
+                  style: farmerStyleRef.current,
+                }
+              : { name: '', colorIndex: 0, style: farmerStyleRef.current },
             gameModeRef.current === 'multiplayer' ? voiceStatesRef.current : undefined,
             activeEmotesMap,
             localEmote
@@ -3164,7 +3823,36 @@ export default function App() {
       hudTimer += dt;
       if (currentPhase === 'playing' && !modalOpen && hudTimer >= 0.25) {
         hudTimer = 0;
-        if ((world.harvestCombo ?? 0) >= 2 && Date.now() - (world.lastHarvestMs ?? 0) > 5000) {
+        const nowHudMs = Date.now();
+        const cdRem = Math.max(0, Math.ceil((dashCooldownUntilRef.current - nowHudMs) / 1000));
+        setDashCooldownSec((prev) => (prev === cdRem ? prev : cdRem));
+
+        if (rushRef.current.active) {
+          const rushRem = Math.max(0, Math.ceil((rushRef.current.endsAtMs - nowHudMs) / 1000));
+          if (rushRem <= 0) {
+            rushRef.current.active = false;
+            setRushState(null);
+            addFloatingText(
+              world.player.x * TILE_SIZE,
+              (world.player.y - 1.1) * TILE_SIZE,
+              langRef.current === 'ar' ? '⏱️ انتهى وقت السباق!' : '⏱️ Rush Time Up!',
+              '#fca5a5'
+            );
+          } else {
+            setRushState((prev) =>
+              prev && prev.remainingSec === rushRem && prev.progress === rushRef.current.progress
+                ? prev
+                : {
+                    active: true,
+                    progress: rushRef.current.progress,
+                    target: rushRef.current.target,
+                    remainingSec: rushRem,
+                  }
+            );
+          }
+        }
+
+        if ((world.harvestCombo ?? 0) >= 2 && nowHudMs - (world.lastHarvestMs ?? 0) > 5000) {
           world.harvestCombo = 0;
           syncHud();
         }
@@ -3182,6 +3870,12 @@ export default function App() {
             ? 'bin'
             : isNearPortal(world)
             ? 'portal'
+            : isNearVillageElder(world)
+            ? 'elder'
+            : isNearStrangeZone(world)
+            ? 'strange_zone'
+            : isNearMysteryChest(world)
+            ? 'chest'
             : null;
           if (
             prev.timeClock === nextClock &&
@@ -3209,7 +3903,7 @@ export default function App() {
       cancelAnimationFrame(rafId);
       ro.disconnect();
     };
-  }, [addFloatingText, announceBlind, saveFarm, sendWs, spawnParticleBurst, syncHud, triggerSleep]);
+  }, [addFloatingText, advanceRushProgress, announceBlind, saveFarm, sendWs, spawnParticleBurst, syncHud, triggerSleep]);
 
   const screenToTile = (clientX: number, clientY: number): { x: number; y: number } | null => {
     const container = containerRef.current;
@@ -3263,6 +3957,8 @@ export default function App() {
           blindCaption={blindCaption}
           versionCheckStatus={versionStatus}
           versionCooldownSec={versionCooldownSec}
+          farmerStyle={farmerStyle}
+          onCycleStyle={handleCycleTitleStyle}
           onRecheckVersion={() => void runStartupVersionCheck(true)}
           onSelectLanguage={selectLanguage}
           onToggleFullscreen={() => void toggleFullscreen()}
@@ -3300,14 +3996,16 @@ export default function App() {
             );
           }}
           onJoinRoom={({ code, playerName, serverUrl }) => {
+            const normalizedCode = code.trim().toUpperCase();
             connectAndSendRoomAction(
               {
                 type: 'room:join',
-                code,
+                code: normalizedCode,
                 playerName,
                 clientId: getOrCreateClientId(),
+                sessionToken: sessionTokensRef.current.get(normalizedCode),
               },
-              { serverUrl, roomContext: { code, playerName, serverUrl } }
+              { serverUrl, roomContext: { code: normalizedCode, playerName, serverUrl } }
             );
           }}
           onClose={() => {
@@ -3327,6 +4025,8 @@ export default function App() {
           blindMode={blindMode}
           blindCaption={blindCaption}
           morningSummary={morningSummary}
+          celebrationBanner={celebrationBanner}
+          onDismissCelebration={() => setCelebrationBanner(null)}
           dailyOrderReady={Boolean(
             worldRef.current.dailyOrder &&
               !worldRef.current.dailyOrder.completed &&
@@ -3423,6 +4123,25 @@ export default function App() {
               return next;
             });
           }}
+          onOpenStory={() => {
+            audioEngine.playSfx('click');
+            setStoryFocus({ realmId: worldRef.current.activeRealm ?? 'homestead' });
+            setActiveModal((prev) => (prev === 'story' ? 'none' : 'story'));
+          }}
+          onOpenFunHub={() => {
+            audioEngine.playSfx('click');
+            setFunInitialTab('spin');
+            setActiveModal((prev) => (prev === 'fun' ? 'none' : 'fun'));
+          }}
+          funDailyReadyCount={
+            (worldRef.current.luckySpinUsedToday ? 0 : 1) +
+            (worldRef.current.ecoQuizAnsweredToday ? 0 : 1) +
+            (worldRef.current.rushUsedToday ? 0 : 1)
+          }
+          onDash={handleTriggerDash}
+          dashCooldownSec={dashCooldownSec}
+          onTakeSnapshot={handleTakeSnapshot}
+          rushState={rushState}
           onSleepNow={triggerSleep}
           onToggleSprint={() => {
             setSprintActive((prev) => {
@@ -3461,6 +4180,7 @@ export default function App() {
           visible={touchControlsEnabled}
           lang={lang}
           nearPromptLabel={hud.nearPrompt?.label ?? null}
+          dashCooldownSec={dashCooldownSec}
           onVectorChange={handleJoystickVector}
           onUseTool={() => {
             const p = worldRef.current.player;
@@ -3469,6 +4189,7 @@ export default function App() {
             handleTileClickAction(Math.floor(p.x + fx * 0.85), Math.floor(p.y + fy * 0.85));
           }}
           onInteract={handleInteract}
+          onDash={handleTriggerDash}
         />
       )}
 
@@ -3482,13 +4203,19 @@ export default function App() {
               return;
             }
             const res = claimMissionReward(worldRef.current, id);
-            audioEngine.playSfx(res.ok ? 'coin' : 'error');
+            audioEngine.playSfx(res.ok ? 'fanfare' : 'error');
             if (res.ok) {
               addFloatingText(
                 worldRef.current.player.x * TILE_SIZE,
                 (worldRef.current.player.y - 1) * TILE_SIZE,
                 UI_TEXT[langRef.current].missionClaimed,
                 '#ffe473'
+              );
+              triggerCelebration(
+                UI_TEXT[langRef.current].missionClaimed,
+                `+${res.goldEarned ?? 0}g`,
+                'emerald',
+                true
               );
               saveFarm();
             }
@@ -3706,6 +4433,98 @@ export default function App() {
           lang={lang}
           onUnlockRealm={handleUnlockRealm}
           onTravelRealm={handleTravelRealm}
+          onClose={() => {
+            audioEngine.playSfx('click');
+            setActiveModal('none');
+          }}
+        />
+      )}
+
+      {phase === 'playing' && activeModal === 'story' && (
+        <StoryModal
+          world={worldRef.current}
+          lang={lang}
+          focus={storyFocus}
+          onOpenPortals={() => setActiveModal('portals')}
+          onClose={() => {
+            audioEngine.playSfx('click');
+            setActiveModal('none');
+            setStoryFocus(null);
+          }}
+        />
+      )}
+
+      {phase === 'playing' && activeModal === 'fun' && (
+        <FunHubModal
+          world={worldRef.current}
+          lang={lang}
+          initialTab={funInitialTab}
+          farmerStyle={farmerStyle}
+          rushActive={Boolean(rushState?.active)}
+          rushRemainingSec={rushState?.remainingSec ?? 0}
+          rushProgress={rushState?.progress ?? 0}
+          rushTarget={rushState?.target ?? 5}
+          onChangeStyle={handleChangeFarmerStyle}
+          onRenamePet={(kind, name) => {
+            if (gameModeRef.current === 'multiplayer') {
+              sendWs({ type: 'action:rename_pet', kind, name });
+            } else {
+              renameFarmPet(worldRef.current, kind, name);
+              saveFarm();
+            }
+            audioEngine.playSfx(kind === 'dog' ? 'bark' : 'purr');
+            syncHud();
+          }}
+          onPlayWheelTick={() => audioEngine.playSfx('wheel_tick')}
+          onSpinWheel={(rewardIndex) => {
+            if (gameModeRef.current === 'multiplayer') {
+              sendWs({ type: 'action:spin_wheel', rewardIndex });
+              audioEngine.playSfx('fanfare');
+              return;
+            }
+            const res = spinLuckyWheel(worldRef.current, rewardIndex);
+            if (res.ok && res.reward) {
+              audioEngine.playSfx('fanfare');
+              const sLang = resolveStoryLang(langRef.current);
+              triggerCelebration(
+                sLang === 'ar' ? '🎡 فزت في عجلة الحظ!' : '🎡 Lucky Wheel Prize!',
+                res.reward.label[sLang],
+                'gold',
+                true
+              );
+              saveFarm();
+            }
+            syncHud();
+          }}
+          onAnswerQuiz={(choiceIndex) => {
+            const sLang = resolveStoryLang(langRef.current);
+            if (gameModeRef.current === 'multiplayer') {
+              sendWs({ type: 'action:answer_quiz', choiceIndex });
+            }
+            const quizIdx = getDailyQuizForDay(worldRef.current.day).index;
+            const res = answerEcoQuiz(worldRef.current, quizIdx, choiceIndex);
+            if (res.ok) {
+              audioEngine.playSfx(res.correct ? 'fanfare' : 'coin');
+              if (res.correct) {
+                triggerCelebration(
+                  sLang === 'ar' ? '🌟 بطل التحدي البيئي!' : '🌟 Eco-Quiz Champion!',
+                  '+35g · +15⚡ · +25 XP',
+                  'emerald',
+                  true
+                );
+              }
+              if (gameModeRef.current === 'singleplayer') saveFarm();
+              syncHud();
+            }
+            return {
+              ok: res.ok,
+              correct: res.correct,
+              fact: res.fact?.[sLang] ?? '',
+              message: res.message,
+            };
+          }}
+          onStartRush={handleStartRush}
+          onTakeSnapshot={handleTakeSnapshot}
           onClose={() => {
             audioEngine.playSfx('click');
             setActiveModal('none');

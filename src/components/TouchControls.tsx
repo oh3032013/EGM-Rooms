@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Hand, Pickaxe } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Hand, Pickaxe, Wind } from 'lucide-react';
 import { UI_TEXT, type Language } from '../game/i18n';
 
 type Direction = 'up' | 'down' | 'left' | 'right';
@@ -9,9 +9,11 @@ interface TouchControlsProps {
   visible: boolean;
   lang: Language;
   nearPromptLabel: string | null;
+  dashCooldownSec?: number;
   onVectorChange: (vx: number, vy: number) => void;
   onUseTool: () => void;
   onInteract: () => void;
+  onDash?: () => void;
 }
 
 const DIR_VECTORS: Record<Direction, { x: number; y: number }> = {
@@ -25,9 +27,11 @@ export function TouchControls({
   visible,
   lang,
   nearPromptLabel,
+  dashCooldownSec = 0,
   onVectorChange,
   onUseTool,
   onInteract,
+  onDash,
 }: TouchControlsProps) {
   const [mode, setMode] = useState<ControlMode>('dpad');
   const [pressedDirs, setPressedDirs] = useState<Set<Direction>>(() => new Set());
@@ -252,25 +256,49 @@ export function TouchControls({
 
       {/* Right Action Buttons */}
       <div className="pointer-events-auto flex flex-col items-end gap-2">
-        <button
-          type="button"
-          onPointerDown={(e) => {
-            e.stopPropagation();
-            if (nearPromptLabel) onInteract();
-          }}
-          disabled={!nearPromptLabel}
-          aria-label={
-            nearPromptLabel ?? (lang === 'ar' ? 'تفاعل مع العنصر القريب' : 'Interact with nearby object')
-          }
-          className={`min-w-[54px] min-h-[44px] [@media(max-height:540px)]:min-h-[40px] px-3 rounded-full flex items-center justify-center gap-1.5 shadow-lg transition-opacity ${
-            nearPromptLabel
-              ? 'wood-button-primary border-2 border-[#fdf3dc]/75 cursor-pointer'
-              : 'wood-button opacity-45 cursor-default'
-          }`}
-        >
-          <Hand className="w-4 h-4 shrink-0" />
-          <span className="text-xs font-bold">{t.actLabel}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {onDash && (
+            <button
+              type="button"
+              disabled={dashCooldownSec > 0}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                if (dashCooldownSec <= 0) onDash();
+              }}
+              aria-label={lang === 'ar' ? 'اندفاع سريع' : 'Wind Dash'}
+              className={`min-w-[48px] min-h-[44px] [@media(max-height:540px)]:min-h-[40px] px-2.5 rounded-full flex items-center justify-center gap-1 shadow-lg transition-transform ${
+                dashCooldownSec > 0
+                  ? 'wood-button opacity-50 cursor-default'
+                  : 'bg-[#0284c7] hover:bg-[#0369a1] text-white border-2 border-[#bae6fd] active:scale-95 cursor-pointer'
+              }`}
+            >
+              <Wind className="w-4 h-4 shrink-0" />
+              <span className="text-[11px] font-bold font-mono-tabular">
+                {dashCooldownSec > 0 ? `${dashCooldownSec}s` : lang === 'ar' ? 'اندفاع' : 'Dash'}
+              </span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              if (nearPromptLabel) onInteract();
+            }}
+            disabled={!nearPromptLabel}
+            aria-label={
+              nearPromptLabel ?? (lang === 'ar' ? 'تفاعل مع العنصر القريب' : 'Interact with nearby object')
+            }
+            className={`min-w-[54px] min-h-[44px] [@media(max-height:540px)]:min-h-[40px] px-3 rounded-full flex items-center justify-center gap-1.5 shadow-lg transition-opacity ${
+              nearPromptLabel
+                ? 'wood-button-primary border-2 border-[#fdf3dc]/75 cursor-pointer'
+                : 'wood-button opacity-45 cursor-default'
+            }`}
+          >
+            <Hand className="w-4 h-4 shrink-0" />
+            <span className="text-xs font-bold">{t.actLabel}</span>
+          </button>
+        </div>
 
         <button
           type="button"

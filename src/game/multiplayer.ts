@@ -1,12 +1,14 @@
 import type {
   DaySummary,
   FarmChicken,
+  FarmerStyle,
   FutureDispatch,
   GameWorldState,
   ItemId,
   LivestockEntity,
   MissionId,
   PlaceableType,
+  RealmCreatureEntity,
   RealmId,
   Season,
   ToolType,
@@ -47,6 +49,7 @@ export interface RemotePlayerState {
   waterLevel: number;
   maxWaterLevel: number;
   selectedHotbarIndex: number;
+  style?: FarmerStyle;
 }
 
 export interface RoomSummary {
@@ -114,6 +117,8 @@ export interface FxPayload {
   textColor?: string;
   actionKind?: string;
   actionMessage?: string;
+  storyRealm?: RealmId;
+  storyKind?: 'elder' | 'strange_zone';
   swingTool?: ToolType | null;
   cropHarvested?: ItemId;
   goldenBonus?: boolean;
@@ -135,12 +140,14 @@ export type ClientToServerMessage =
       roomName: string;
       isPublic: boolean;
       clientId?: string;
+      sessionToken?: string;
     }
   | {
       type: 'room:join';
       code: string;
       playerName: string;
       clientId?: string;
+      sessionToken?: string;
     }
   | { type: 'room:leave' }
   | {
@@ -171,6 +178,13 @@ export type ClientToServerMessage =
   | { type: 'action:buy_animal'; kind: 'chicken' | 'cow' | 'sheep' | 'dog' | 'cat' }
   | { type: 'action:unlock_realm'; realmId: RealmId }
   | { type: 'action:travel_realm'; realmId: RealmId }
+  | { type: 'action:interact_landmark'; kind: 'elder' | 'strange_zone' }
+  | { type: 'action:set_style'; style: FarmerStyle }
+  | { type: 'action:rename_pet'; kind: 'dog' | 'cat'; name: string }
+  | { type: 'action:open_chest' }
+  | { type: 'action:spin_wheel'; rewardIndex: number }
+  | { type: 'action:answer_quiz'; choiceIndex: number }
+  | { type: 'action:catch_firefly'; id: number }
   | { type: 'action:sleep_vote'; ready: boolean }
   | { type: 'action:chat'; text: string }
   | { type: 'voice:state'; enabled: boolean; muted: boolean; speaking?: boolean }
@@ -186,6 +200,7 @@ export type ServerToClientMessage =
       roomName: string;
       isPublic: boolean;
       playerId: string;
+      sessionToken?: string;
       hostId: string;
       world: GameWorldState;
       players: RemotePlayerState[];
@@ -214,6 +229,7 @@ export type ServerToClientMessage =
       sheep: LivestockEntity[];
       dog: LivestockEntity | null;
       cat?: LivestockEntity | null;
+      realmCreatures?: RealmCreatureEntity[];
     }
   | { type: 'fx:event'; fx: FxPayload }
   | { type: 'chat:message'; message: ChatMessage }
@@ -239,8 +255,25 @@ export const DEFAULT_EXTERNAL_SERVER_URL = 'https://ecogrowmission.up.railway.ap
 export function normalizeServerBaseUrl(rawUrl: string): string {
   let clean = rawUrl.trim();
   if (!clean) return '';
+  // Reject unsafe schemes (javascript:, data:, vbscript:, file:, etc.)
+  if (/^[a-z][a-z0-9+.-]*:/i.test(clean) && !/^(https?|wss?):\/\//i.test(clean)) {
+    return '';
+  }
   if (!/^(https?|wss?):\/\//i.test(clean)) {
     clean = `https://${clean}`;
+  }
+  try {
+    const parsed = new URL(clean);
+    if (
+      parsed.protocol !== 'http:' &&
+      parsed.protocol !== 'https:' &&
+      parsed.protocol !== 'ws:' &&
+      parsed.protocol !== 'wss:'
+    ) {
+      return '';
+    }
+  } catch {
+    return '';
   }
   clean = clean
     .replace(/\/+$/, '')

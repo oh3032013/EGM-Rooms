@@ -17,6 +17,7 @@ import {
   translateWeather,
   type Language,
 } from './i18n';
+import { CREATURE_LABELS, REALM_STORIES, resolveStoryLang } from './story';
 import {
   computeFarmRestorationPercent,
   findPortalTile,
@@ -216,6 +217,18 @@ export function describeTileForBlind(
     }
   }
 
+  const nearbyCreature = world.realmCreatures?.find(
+    (c) => Math.hypot(c.x - (tx + 0.5), c.y - (ty + 0.5)) <= 1.2
+  );
+  if (nearbyCreature) {
+    const sLang = resolveStoryLang(lang);
+    const cname = CREATURE_LABELS[nearbyCreature.kind][sLang];
+    return {
+      text: lang === 'ar' ? `${cname} يتجول بالقرب منك` : `${cname} wandering nearby`,
+      cue: 'clear',
+    };
+  }
+
   if (tile.terrain === 'forest_edge') {
     return { text: lang === 'ar' ? 'غابة محيطة مغلقة' : 'Dense forest edge', cue: 'obstacle' };
   }
@@ -267,6 +280,37 @@ export function describeTileForBlind(
         lang === 'ar'
           ? 'بوابة العوالم القديمة — اضغط تفاعل للسفر بين العوالم'
           : 'Ancient World Portal — press E to travel between realms',
+      cue: 'building',
+    };
+  }
+  if (tile.terrain === 'village_elder') {
+    const story = REALM_STORIES[world.activeRealm ?? 'homestead'];
+    const sLang = resolveStoryLang(lang);
+    return {
+      text:
+        lang === 'ar'
+          ? `${story.elderName.ar} في ${story.villageName.ar} — اضغط E للتحدث`
+          : `${story.elderName.en} of ${story.villageName.en} — press E to speak`,
+      cue: 'building',
+    };
+  }
+  if (tile.terrain === 'village_hut') {
+    const story = REALM_STORIES[world.activeRealm ?? 'homestead'];
+    return {
+      text:
+        lang === 'ar'
+          ? `أحد بيوت ${story.villageName.ar}`
+          : `Dwelling in ${story.villageName.en}`,
+      cue: 'building',
+    };
+  }
+  if (tile.terrain === 'strange_zone') {
+    const story = REALM_STORIES[world.activeRealm ?? 'homestead'];
+    return {
+      text:
+        lang === 'ar'
+          ? `${story.strangeZoneName.ar} — اضغط E لفحص المنطقة الغريبة`
+          : `${story.strangeZoneName.en} — press E to investigate`,
       cue: 'building',
     };
   }

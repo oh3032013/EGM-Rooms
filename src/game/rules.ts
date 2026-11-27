@@ -18,6 +18,7 @@ import {
   GRID_HEIGHT,
   GRID_WIDTH,
   HOMESTEAD_PORTAL_POS,
+  HOMESTEAD_STRANGE_ZONE_POS,
   ITEMS,
   LITERS_PER_WATERING,
   MAX_CATS,
@@ -45,6 +46,12 @@ import {
   WINDMILL_DAILY_GOLD,
   WISHING_FOUNTAIN_COST,
 } from './constants.ts';
+import {
+  ECO_QUIZ_QUESTIONS,
+  LUCKY_WHEEL_REWARDS,
+  sanitizePetName,
+  type LuckyWheelRewardDef,
+} from './funFeatures.ts';
 import type {
   BadgeId,
   CropType,
@@ -52,15 +59,19 @@ import type {
   DaySummary,
   FarmChicken,
   FarmTile,
+  FireflyEntity,
   FutureDispatch,
   GameWorldState,
   ItemId,
   LivestockEntity,
   MissionId,
+  MysteryChest,
   NatureTreasure,
   ObstacleType,
   PlaceableType,
   RealmCache,
+  RealmCreatureEntity,
+  RealmCreatureKind,
   RealmId,
   Season,
   TimePhase,
@@ -111,7 +122,10 @@ export function isTileWalkable(state: GameWorldState, tx: number, ty: number): b
     tile.terrain === 'shop_stall' ||
     tile.terrain === 'shipping_bin' ||
     tile.terrain === 'well' ||
-    tile.terrain === 'portal'
+    tile.terrain === 'portal' ||
+    tile.terrain === 'village_hut' ||
+    tile.terrain === 'village_elder' ||
+    tile.terrain === 'strange_zone'
   ) {
     return false;
   }
@@ -156,6 +170,26 @@ export function isNearPortal(state: GameWorldState): boolean {
   return Math.hypot(state.player.x - (pt.x + 0.5), state.player.y - (pt.y + 0.5)) <= 2.05;
 }
 
+export function findVillageElderTile(state: GameWorldState): FarmTile | null {
+  return state.tiles.find((t) => t.terrain === 'village_elder') ?? null;
+}
+
+export function isNearVillageElder(state: GameWorldState): boolean {
+  const et = findVillageElderTile(state);
+  if (!et) return false;
+  return Math.hypot(state.player.x - (et.x + 0.5), state.player.y - (et.y + 0.5)) <= 2.2;
+}
+
+export function findStrangeZoneTile(state: GameWorldState): FarmTile | null {
+  return state.tiles.find((t) => t.terrain === 'strange_zone') ?? null;
+}
+
+export function isNearStrangeZone(state: GameWorldState): boolean {
+  const st = findStrangeZoneTile(state);
+  if (!st) return false;
+  return Math.hypot(state.player.x - (st.x + 0.5), state.player.y - (st.y + 0.5)) <= 2.2;
+}
+
 export function createInitialFarmState(seed = 42): GameWorldState {
   // Deterministic LCG PRNG for reproducible initial neglected farm
   let s = seed >>> 0;
@@ -196,6 +230,8 @@ export function createInitialFarmState(seed = 42): GameWorldState {
         terrain = 'shipping_bin';
       } else if (x === HOMESTEAD_PORTAL_POS.x && y === HOMESTEAD_PORTAL_POS.y) {
         terrain = 'portal';
+      } else if (x === HOMESTEAD_STRANGE_ZONE_POS.x && y === HOMESTEAD_STRANGE_ZONE_POS.y) {
+        terrain = 'strange_zone';
       } else if (x >= 22 && x <= 25 && y >= 14 && y <= 17) {
         // Cozy natural pond in bottom-right corner
         terrain = 'water';
@@ -214,9 +250,11 @@ export function createInitialFarmState(seed = 42): GameWorldState {
         tillable = true;
       }
 
-      // Starter cleared square around (13..15, 9..11) + portal approach
+      // Starter cleared square around (13..15, 9..11) + portal approach + strange cairn clearing
       const inStarterClearing =
-        (x >= 11 && x <= 16 && y >= 7 && y <= 11) || (x >= 2 && x <= 4 && y >= 5 && y <= 8);
+        (x >= 11 && x <= 16 && y >= 7 && y <= 11) ||
+        (x >= 2 && x <= 4 && y >= 5 && y <= 8) ||
+        (x >= 24 && x <= 26 && y >= 2 && y <= 4);
 
       if (terrain === 'grass' && !inStarterClearing) {
         const r = rand();
@@ -272,6 +310,12 @@ export function createInitialFarmState(seed = 42): GameWorldState {
     activeRealm: 'homestead',
     unlockedRealms: ['homestead'],
     realmCaches: {},
+    realmCreatures: [],
+    visitedVillages: [],
+    investigatedStrangeZones: [],
+    elderGiftsToday: [],
+    strangeZoneUsedToday: [],
+    unlockedChapters: ['homestead'],
     player: {
       x: 14.5,
       y: 9.2, // Open clearing right above starter tilled plots (13..15, 10)
@@ -332,6 +376,12 @@ export function createInitialFarmState(seed = 42): GameWorldState {
     lastFishMs: 0,
     pettedAnimalsToday: [],
     dailyTreasure: rollDailyNatureTreasure(tiles, 'Spring', rand),
+    mysteryChest: rollDailyMysteryChest(tiles, 'homestead', rand),
+    fireflies: [],
+    luckySpinUsedToday: false,
+    ecoQuizAnsweredToday: false,
+    rushUsedToday: false,
+    petNames: {},
     discoveredItems: ['wheat_seed', 'carrot_seed'],
     stats: {
       daysSurvived: 1,
@@ -363,6 +413,13 @@ export function createInitialFarmState(seed = 42): GameWorldState {
       waterSavedLiters: 0,
       heatwavesSurvivedWithShade: 0,
       realmsVisited: 1,
+      villagesVisited: 0,
+      strangeZonesFound: 0,
+      firefliesCaught: 0,
+      chestsOpened: 0,
+      quizzesSolved: 0,
+      wheelSpins: 0,
+      rushCompleted: 0,
     },
     claimedMissions: [],
     rotationYieldProgress: 0,
@@ -382,7 +439,10 @@ export function rollDailyNatureTreasure(
 ): NatureTreasure | null {
   const candidates = tiles.filter(
     (t) =>
-      t.terrain === 'grass' &&
+      (t.terrain === 'grass' ||
+        t.terrain === 'moss_floor' ||
+        t.terrain === 'sand_dune' ||
+        t.terrain === 'cloud_stone') &&
       !t.tilled &&
       !t.obstacle &&
       !t.crop &&
@@ -866,6 +926,26 @@ export function performTileAction(
       leveledUpTo,
       message,
     };
+  }
+
+  // Priority 1c: Open sparkling Mystery Treasure Chest on click
+  if (
+    state.mysteryChest &&
+    state.mysteryChest.x === tileX &&
+    state.mysteryChest.y === tileY
+  ) {
+    const chestRes = openMysteryChest(state);
+    if (chestRes.ok) {
+      return {
+        performed: true,
+        kind: 'forage',
+        tileX,
+        tileY,
+        goldDelta: chestRes.goldDelta,
+        leveledUpTo: chestRes.leveledUpTo,
+        message: chestRes.message,
+      };
+    }
   }
 
   // Priority 2: Draw free rainwater from placed Rain Tank (works with watering can or empty hand)
@@ -1511,6 +1591,9 @@ export function performTileAction(
   if (itemDef.category === 'placeable' && itemDef.placeableType) {
     if (
       tile.terrain !== 'grass' &&
+      tile.terrain !== 'moss_floor' &&
+      tile.terrain !== 'sand_dune' &&
+      tile.terrain !== 'cloud_stone' &&
       tile.terrain !== 'dirt_path'
     ) {
       return { performed: false, kind: 'error', message: 'Cannot build on this terrain' };
@@ -1828,7 +1911,14 @@ export function advanceDay(
   state.wishedToday = false;
   state.swiftUntilMinutes = 0;
   state.pettedAnimalsToday = [];
+  state.elderGiftsToday = [];
+  state.strangeZoneUsedToday = [];
   state.dailyTreasure = rollDailyNatureTreasure(state.tiles, newSeason, rng);
+  state.mysteryChest = rollDailyMysteryChest(state.tiles, state.activeRealm ?? 'homestead', rng);
+  state.fireflies = [];
+  state.luckySpinUsedToday = false;
+  state.ecoQuizAnsweredToday = false;
+  state.rushUsedToday = false;
   state.timeMinutes = DAY_START_MINUTES;
   state.wildlife = [];
 
@@ -2600,6 +2690,19 @@ export function getMissionProgress(state: GameWorldState, id: MissionId): number
     case 'portal_awakener':
     case 'realm_voyager':
       return state.unlockedRealms?.length ?? 1;
+    case 'woods_village_visit':
+      return (state.visitedVillages ?? []).includes('whispering_woods') ? 1 : 0;
+    case 'woods_strange_zone':
+      return (state.investigatedStrangeZones ?? []).includes('whispering_woods') ? 1 : 0;
+    case 'oasis_village_visit':
+      return (state.visitedVillages ?? []).includes('crystal_oasis') ? 1 : 0;
+    case 'oasis_strange_zone':
+      return (state.investigatedStrangeZones ?? []).includes('crystal_oasis') ? 1 : 0;
+    case 'sky_sanctuary_expedition':
+      return (state.visitedVillages ?? []).includes('sky_sanctuary') ||
+        (state.investigatedStrangeZones ?? []).includes('sky_sanctuary')
+        ? 1
+        : 0;
     default:
       return 0;
   }
@@ -2921,6 +3024,91 @@ export function ensureHomesteadPortal(state: GameWorldState): void {
   }
 }
 
+function spawnRealmCreatures(realmId: RealmId): RealmCreatureEntity[] {
+  const make = (id: number, kind: RealmCreatureKind, x: number, y: number): RealmCreatureEntity => ({
+    id,
+    kind,
+    x,
+    y,
+    vx: 0,
+    vy: 0,
+    facingX: id % 2 === 0 ? 1 : -1,
+    hopPhase: id * 1.1,
+    moveTimer: 0.8 + (id % 3) * 0.5,
+  });
+  if (realmId === 'whispering_woods') {
+    return [
+      make(501, 'fox', 6.5, 13.5),
+      make(502, 'fox', 13.5, 4.2),
+      make(503, 'deer', 8.5, 14.5),
+      make(504, 'deer', 20.5, 8.2),
+    ];
+  }
+  if (realmId === 'crystal_oasis') {
+    return [
+      make(601, 'fennec', 6.5, 5.5),
+      make(602, 'fennec', 14.5, 14.2),
+      make(603, 'gazelle', 19.5, 3.5),
+      make(604, 'gazelle', 6.5, 14.5),
+      make(605, 'scarab', 16.5, 13.2),
+    ];
+  }
+  if (realmId === 'sky_sanctuary') {
+    return [
+      make(701, 'crane', 15.2, 12.2),
+      make(702, 'crane', 12.5, 14.2),
+      make(703, 'alpaca', 6.5, 4.5),
+      make(704, 'alpaca', 14.2, 4.2),
+      make(705, 'star_owl', 10.5, 13.2),
+    ];
+  }
+  return [];
+}
+
+export function stepRealmCreatures(
+  state: GameWorldState,
+  dt: number,
+  rng: () => number = Math.random
+): void {
+  const creatures = state.realmCreatures;
+  if (!creatures || creatures.length === 0) return;
+
+  for (const c of creatures) {
+    c.moveTimer -= dt;
+    if (c.moveTimer <= 0) {
+      c.moveTimer = 1.4 + rng() * 2.2;
+      if (rng() < 0.35) {
+        c.vx = 0;
+        c.vy = 0;
+      } else {
+        const angle = rng() * Math.PI * 2;
+        const speed =
+          c.kind === 'gazelle' || c.kind === 'fox' || c.kind === 'fennec'
+            ? 1.45
+            : c.kind === 'scarab'
+            ? 0.9
+            : 1.05;
+        c.vx = Math.cos(angle) * speed;
+        c.vy = Math.sin(angle) * speed;
+        if (Math.abs(c.vx) > 0.05) c.facingX = c.vx >= 0 ? 1 : -1;
+      }
+    }
+    if (c.vx !== 0 || c.vy !== 0) {
+      const nx = Math.max(1.5, Math.min(state.width - 1.5, c.x + c.vx * dt));
+      const ny = Math.max(1.5, Math.min(state.height - 1.5, c.y + c.vy * dt));
+      if (isTileWalkable(state, Math.floor(nx), Math.floor(ny))) {
+        c.x = nx;
+        c.y = ny;
+      } else {
+        c.vx = -c.vx * 0.5;
+        c.vy = -c.vy * 0.5;
+        c.facingX = c.vx >= 0 ? 1 : -1;
+      }
+      c.hopPhase += dt * (c.kind === 'scarab' ? 12 : 8);
+    }
+  }
+}
+
 export function generateRealmCache(realmId: RealmId, seed = 101): RealmCache {
   const def = REALM_DEFS[realmId];
   let s = (seed ^ (realmId.length * 7919)) >>> 0;
@@ -2942,46 +3130,115 @@ export function generateRealmCache(realmId: RealmId, seed = 101): RealmCache {
       } else if (x === def.portalX && y === def.portalY) {
         terrain = 'portal';
       } else if (realmId === 'whispering_woods') {
-        if (x >= 17 && x <= 20 && y >= 11 && y <= 14) {
-          terrain = 'water';
-        } else if ((y === 9 && x >= 4 && x <= 14) || (x === 10 && y >= 6 && y <= 13)) {
-          terrain = 'dirt_path';
-        } else if (x >= 7 && x <= 13 && y >= 5 && y <= 8) {
+        const inVillagePlaza = x >= 15 && x <= 19 && y >= 3 && y <= 6;
+        const isHut = (x === 15 && y === 3) || (x === 19 && y === 3);
+        const isElder = x === 17 && y === 3;
+        const isStrangeZone = x === 4 && y === 3;
+        const inStrangeClearing = x >= 3 && x <= 6 && y >= 2 && y <= 5;
+        const inPond = x >= 17 && x <= 20 && y >= 12 && y <= 15;
+        const onPath =
+          (y === 9 && x >= 4 && x <= 17) ||
+          (x === 10 && y >= 6 && y <= 13) ||
+          (x === 17 && y >= 6 && y <= 9) ||
+          (x === 5 && y >= 4 && y <= 9);
+
+        if (isElder) terrain = 'village_elder';
+        else if (isHut) terrain = 'village_hut';
+        else if (inVillagePlaza) terrain = 'village_plaza';
+        else if (isStrangeZone) terrain = 'strange_zone';
+        else if (inPond) terrain = 'water';
+        else if (onPath) terrain = 'dirt_path';
+        else if (x >= 7 && x <= 13 && y >= 5 && y <= 8) {
+          terrain = 'grass';
           tillable = true;
+        } else {
+          terrain = 'moss_floor';
         }
-        if (terrain === 'grass' && Math.hypot(x - def.portalX, y - def.portalY) > 2.2) {
+
+        if (
+          terrain === 'moss_floor' &&
+          !inStrangeClearing &&
+          Math.hypot(x - def.portalX, y - def.portalY) > 2.4 &&
+          Math.hypot(x - 17, y - 5) > 3.2
+        ) {
           const r = rand();
-          if (r < 0.22) obstacle = 'stump';
-          else if (r < 0.34) obstacle = 'weed';
-          else if (r < 0.40) obstacle = 'rock';
+          if (r < 0.20) obstacle = 'stump';
+          else if (r < 0.31) obstacle = 'weed';
+          else if (r < 0.37) obstacle = 'rock';
         }
       } else if (realmId === 'crystal_oasis') {
-        if (x >= 15 && x <= 19 && y >= 6 && y <= 10) {
-          terrain = 'water';
-        } else if ((y === 9 && x >= 4 && x <= 13) || (x === 11 && y >= 9 && y <= 14)) {
-          terrain = 'dirt_path';
-        } else if (x >= 8 && x <= 13 && y >= 11 && y <= 14) {
+        const inVillagePlaza = x >= 8 && x <= 12 && y >= 3 && y <= 6;
+        const isHut = (x === 8 && y === 3) || (x === 12 && y === 3);
+        const isElder = x === 10 && y === 3;
+        const isStrangeZone = x === 20 && y === 14;
+        const inStrangeClearing = x >= 18 && x <= 22 && y >= 12 && y <= 16;
+        const inPond = x >= 15 && x <= 19 && y >= 6 && y <= 10;
+        const onPath =
+          (y === 9 && x >= 4 && x <= 14) ||
+          (x === 10 && y >= 6 && y <= 14) ||
+          (y === 14 && x >= 11 && x <= 19);
+
+        if (isElder) terrain = 'village_elder';
+        else if (isHut) terrain = 'village_hut';
+        else if (inVillagePlaza) terrain = 'village_plaza';
+        else if (isStrangeZone) terrain = 'strange_zone';
+        else if (inPond) terrain = 'water';
+        else if (onPath) terrain = 'dirt_path';
+        else if (x >= 7 && x <= 12 && y >= 11 && y <= 14) {
+          terrain = 'grass';
           tillable = true;
+        } else if (x >= 14 && x <= 20 && y >= 5 && y <= 11) {
+          terrain = 'grass';
+        } else {
+          terrain = 'sand_dune';
         }
-        if (terrain === 'grass' && Math.hypot(x - def.portalX, y - def.portalY) > 2.2) {
+
+        if (
+          terrain === 'sand_dune' &&
+          !inStrangeClearing &&
+          Math.hypot(x - def.portalX, y - def.portalY) > 2.4 &&
+          Math.hypot(x - 10, y - 5) > 3.0
+        ) {
           const r = rand();
-          if (r < 0.24) obstacle = 'rock';
-          else if (r < 0.32) obstacle = 'weed';
-          else if (r < 0.37) obstacle = 'stump';
+          if (r < 0.22) obstacle = 'rock';
+          else if (r < 0.29) obstacle = 'weed';
+          else if (r < 0.33) obstacle = 'stump';
         }
       } else if (realmId === 'sky_sanctuary') {
-        if (x >= 17 && x <= 20 && y >= 11 && y <= 14) {
-          terrain = 'water';
-        } else if (y === 9 && x >= 4 && x <= 15) {
-          terrain = 'dirt_path';
-        } else if (x >= 8 && x <= 14 && y >= 5 && y <= 8) {
+        const inVillagePlaza = x >= 17 && x <= 21 && y >= 4 && y <= 7;
+        const isHut = (x === 17 && y === 4) || (x === 21 && y === 4);
+        const isElder = x === 19 && y === 4;
+        const isStrangeZone = x === 7 && y === 14;
+        const inStrangeClearing = x >= 5 && x <= 9 && y >= 12 && y <= 16;
+        const inPond = x >= 17 && x <= 20 && y >= 12 && y <= 15;
+        const onPath =
+          (y === 9 && x >= 4 && x <= 19) ||
+          (x === 19 && y >= 7 && y <= 9) ||
+          (x === 7 && y >= 9 && y <= 13);
+
+        if (isElder) terrain = 'village_elder';
+        else if (isHut) terrain = 'village_hut';
+        else if (inVillagePlaza) terrain = 'village_plaza';
+        else if (isStrangeZone) terrain = 'strange_zone';
+        else if (inPond) terrain = 'water';
+        else if (onPath) terrain = 'dirt_path';
+        else if (x >= 7 && x <= 13 && y >= 5 && y <= 8) {
+          terrain = 'grass';
           tillable = true;
           if (y === 7 && x >= 9 && x <= 12) tilled = true;
+        } else {
+          terrain = 'cloud_stone';
         }
-        if (terrain === 'grass' && !tillable && Math.hypot(x - def.portalX, y - def.portalY) > 2.2) {
+
+        if (
+          terrain === 'cloud_stone' &&
+          !inStrangeClearing &&
+          Math.hypot(x - def.portalX, y - def.portalY) > 2.4 &&
+          Math.hypot(x - 19, y - 5) > 3.0
+        ) {
           const r = rand();
-          if (r < 0.14) obstacle = 'weed';
-          else if (r < 0.20) obstacle = 'rock';
+          if (r < 0.12) obstacle = 'weed';
+          else if (r < 0.18) obstacle = 'rock';
         }
       }
 
@@ -3009,20 +3266,43 @@ export function generateRealmCache(realmId: RealmId, seed = 101): RealmCache {
       realmId === 'whispering_woods' ? 'Autumn' : realmId === 'sky_sanctuary' ? 'Winter' : 'Spring',
       rand
     ),
+    mysteryChest: rollDailyMysteryChest(tiles, realmId, rand),
     returnX: def.spawnX,
     returnY: def.spawnY,
+    creatures: spawnRealmCreatures(realmId),
+    fireflies: [],
   };
+}
+
+export function getMissingRealmMissions(state: GameWorldState, realmId: RealmId): MissionId[] {
+  const def = REALM_DEFS[realmId];
+  if (!def || !def.requiredMissions?.length) return [];
+  const claimed = new Set(state.claimedMissions ?? []);
+  return def.requiredMissions.filter((mId) => {
+    if (claimed.has(mId)) return false;
+    const mDef = MISSIONS.find((m) => m.id === mId);
+    if (!mDef) return false;
+    return getMissionProgress(state, mId) < mDef.target;
+  });
 }
 
 export function unlockRealm(
   state: GameWorldState,
   realmId: RealmId
-): { ok: boolean; message: string; leveledUpTo?: number } {
+): { ok: boolean; message: string; leveledUpTo?: number; missingMissions?: MissionId[] } {
   const def = REALM_DEFS[realmId];
   if (!def) return { ok: false, message: 'Unknown realm' };
   if (!Array.isArray(state.unlockedRealms)) state.unlockedRealms = ['homestead'];
   if (state.unlockedRealms.includes(realmId)) {
     return { ok: false, message: 'Realm already unlocked' };
+  }
+  const missingMissions = getMissingRealmMissions(state, realmId);
+  if (missingMissions.length > 0) {
+    return {
+      ok: false,
+      missingMissions,
+      message: `Complete required missions first (${missingMissions.length} remaining)`,
+    };
   }
   if (state.player.gold < def.unlockGold) {
     return { ok: false, message: `Need ${def.unlockGold}g` };
@@ -3038,6 +3318,8 @@ export function unlockRealm(
   if (def.unlockWood > 0) consumeInventoryItem(state, 'wood', def.unlockWood);
   if (def.unlockStone > 0) consumeInventoryItem(state, 'stone', def.unlockStone);
   state.unlockedRealms.push(realmId);
+  if (!Array.isArray(state.unlockedChapters)) state.unlockedChapters = ['homestead'];
+  if (!state.unlockedChapters.includes(realmId)) state.unlockedChapters.push(realmId);
   state.stats.realmsVisited = Math.max(state.stats.realmsVisited ?? 1, state.unlockedRealms.length);
   const leveledUpTo = grantXp(state, 25);
   return { ok: true, leveledUpTo, message: `Unlocked ${realmId}!` };
@@ -3046,7 +3328,7 @@ export function unlockRealm(
 export function travelToRealm(
   state: GameWorldState,
   targetRealm: RealmId
-): { ok: boolean; message: string; realmId: RealmId } {
+): { ok: boolean; message: string; realmId: RealmId; newChapterUnlocked?: boolean } {
   const currentRealm: RealmId = state.activeRealm ?? 'homestead';
   if (!Array.isArray(state.unlockedRealms)) state.unlockedRealms = ['homestead'];
   if (!state.unlockedRealms.includes(targetRealm)) {
@@ -3062,15 +3344,24 @@ export function travelToRealm(
     width: state.width,
     height: state.height,
     dailyTreasure: state.dailyTreasure ?? null,
+    mysteryChest: state.mysteryChest ?? null,
     returnX: state.player.x,
     returnY: state.player.y,
+    creatures: state.realmCreatures ?? [],
+    fireflies: state.fireflies ?? [],
   };
 
   let nextCache = state.realmCaches[targetRealm];
   if (!nextCache) {
     nextCache = generateRealmCache(targetRealm, state.day * 97 + 42);
     state.realmCaches[targetRealm] = nextCache;
+  } else if (!nextCache.creatures && targetRealm !== 'homestead') {
+    nextCache.creatures = spawnRealmCreatures(targetRealm);
   }
+
+  if (!Array.isArray(state.unlockedChapters)) state.unlockedChapters = ['homestead'];
+  const newChapterUnlocked = !state.unlockedChapters.includes(targetRealm);
+  if (newChapterUnlocked) state.unlockedChapters.push(targetRealm);
 
   const targetDef = REALM_DEFS[targetRealm];
   state.activeRealm = targetRealm;
@@ -3078,10 +3369,442 @@ export function travelToRealm(
   state.width = nextCache.width;
   state.height = nextCache.height;
   state.dailyTreasure = nextCache.dailyTreasure;
+  if (nextCache.mysteryChest === undefined) {
+    let cs = (state.day * 131 + targetRealm.length * 17) >>> 0;
+    const chestRand = () => {
+      cs = (1664525 * cs + 1013904223) >>> 0;
+      return cs / 4294967296;
+    };
+    nextCache.mysteryChest = rollDailyMysteryChest(
+      nextCache.tiles,
+      targetRealm,
+      chestRand
+    );
+  }
+  state.mysteryChest = nextCache.mysteryChest ?? null;
+  state.realmCreatures = nextCache.creatures ?? [];
+  state.fireflies = nextCache.fireflies ?? [];
   state.wildlife = [];
   state.player.x = targetDef.spawnX;
   state.player.y = targetDef.spawnY;
   state.player.facingX = 1;
   state.player.facingY = 0;
-  return { ok: true, realmId: targetRealm, message: `Traveled to ${targetRealm}` };
+  return {
+    ok: true,
+    realmId: targetRealm,
+    newChapterUnlocked,
+    message: `Traveled to ${targetRealm}`,
+  };
 }
+
+export function interactWithVillageElder(
+  state: GameWorldState
+): {
+  ok: boolean;
+  realmId: RealmId;
+  firstVisit: boolean;
+  giftedToday: boolean;
+  leveledUpTo?: number;
+  message: string;
+} {
+  const realmId: RealmId = state.activeRealm ?? 'homestead';
+  const elder = findVillageElderTile(state);
+  if (!elder) {
+    return { ok: false, realmId, firstVisit: false, giftedToday: false, message: 'No village elder here' };
+  }
+  if (!Array.isArray(state.visitedVillages)) state.visitedVillages = [];
+  if (!Array.isArray(state.elderGiftsToday)) state.elderGiftsToday = [];
+  if (!Array.isArray(state.unlockedChapters)) state.unlockedChapters = ['homestead'];
+  if (!state.unlockedChapters.includes(realmId)) state.unlockedChapters.push(realmId);
+
+  const firstVisit = !state.visitedVillages.includes(realmId);
+  if (firstVisit) {
+    state.visitedVillages.push(realmId);
+    state.stats.villagesVisited = state.visitedVillages.length;
+  }
+
+  const alreadyGifted = state.elderGiftsToday.includes(realmId);
+  let leveledUpTo: number | undefined;
+  if (!alreadyGifted) {
+    state.elderGiftsToday.push(realmId);
+    if (realmId === 'whispering_woods') {
+      state.player.gold += 25;
+      state.stats.totalGoldEarned += 25;
+      state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 20);
+      addInventoryItem(state, 'wood', 3);
+    } else if (realmId === 'crystal_oasis') {
+      state.player.gold += 40;
+      state.stats.totalGoldEarned += 40;
+      state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 25);
+      addInventoryItem(state, 'stone', 3);
+    } else if (realmId === 'sky_sanctuary') {
+      state.player.gold += 65;
+      state.stats.totalGoldEarned += 65;
+      state.player.stamina = state.player.maxStamina;
+      state.player.health = state.player.maxHealth;
+    } else {
+      state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 12);
+    }
+    leveledUpTo = grantXp(state, firstVisit ? 25 : 10);
+  } else if (firstVisit) {
+    leveledUpTo = grantXp(state, 20);
+  }
+
+  return {
+    ok: true,
+    realmId,
+    firstVisit,
+    giftedToday: !alreadyGifted,
+    leveledUpTo,
+    message: !alreadyGifted ? `Elder blessing received in ${realmId}` : `Spoke with village elder in ${realmId}`,
+  };
+}
+
+export function interactWithStrangeZone(
+  state: GameWorldState
+): {
+  ok: boolean;
+  realmId: RealmId;
+  firstDiscovery: boolean;
+  blessedToday: boolean;
+  leveledUpTo?: number;
+  message: string;
+} {
+  const realmId: RealmId = state.activeRealm ?? 'homestead';
+  const sz = findStrangeZoneTile(state);
+  if (!sz) {
+    return {
+      ok: false,
+      realmId,
+      firstDiscovery: false,
+      blessedToday: false,
+      message: 'No strange zone here',
+    };
+  }
+  if (!Array.isArray(state.investigatedStrangeZones)) state.investigatedStrangeZones = [];
+  if (!Array.isArray(state.strangeZoneUsedToday)) state.strangeZoneUsedToday = [];
+  if (!Array.isArray(state.unlockedChapters)) state.unlockedChapters = ['homestead'];
+  if (!state.unlockedChapters.includes(realmId)) state.unlockedChapters.push(realmId);
+
+  const firstDiscovery = !state.investigatedStrangeZones.includes(realmId);
+  if (firstDiscovery) {
+    state.investigatedStrangeZones.push(realmId);
+    state.stats.strangeZonesFound = state.investigatedStrangeZones.length;
+  }
+
+  const alreadyUsed = state.strangeZoneUsedToday.includes(realmId);
+  let leveledUpTo: number | undefined;
+  if (!alreadyUsed) {
+    state.strangeZoneUsedToday.push(realmId);
+    if (realmId === 'homestead') {
+      state.player.gold += 12;
+      state.stats.totalGoldEarned += 12;
+      state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 15);
+    } else if (realmId === 'whispering_woods') {
+      state.player.gold += 25;
+      state.stats.totalGoldEarned += 25;
+      state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 20);
+      addInventoryItem(state, 'lavender_seed', 1);
+    } else if (realmId === 'crystal_oasis') {
+      state.player.gold += 40;
+      state.stats.totalGoldEarned += 40;
+      state.player.stamina = state.player.maxStamina;
+      addInventoryItem(state, 'stone', 2);
+    } else if (realmId === 'sky_sanctuary') {
+      state.player.gold += 75;
+      state.stats.totalGoldEarned += 75;
+      state.player.stamina = state.player.maxStamina;
+      addInventoryItem(state, 'fertilizer', 2);
+    }
+    leveledUpTo = grantXp(state, firstDiscovery ? 30 : 12);
+  } else if (firstDiscovery) {
+    leveledUpTo = grantXp(state, 25);
+  }
+
+  return {
+    ok: true,
+    realmId,
+    firstDiscovery,
+    blessedToday: !alreadyUsed,
+    leveledUpTo,
+    message: !alreadyUsed
+      ? `Strange Zone resonance activated in ${realmId}`
+      : `Observed Strange Zone in ${realmId}`,
+  };
+}
+
+export function rollDailyMysteryChest(
+  tiles: FarmTile[],
+  realmId: RealmId,
+  rand: () => number = Math.random
+): MysteryChest | null {
+  const candidates = tiles.filter(
+    (t) =>
+      (t.terrain === 'grass' ||
+        t.terrain === 'moss_floor' ||
+        t.terrain === 'sand_dune' ||
+        t.terrain === 'cloud_stone') &&
+      !t.obstacle &&
+      !t.crop &&
+      !t.structure &&
+      t.x >= 2 &&
+      t.y >= 2
+  );
+  if (candidates.length === 0) return null;
+  const pick = candidates[Math.floor(rand() * candidates.length) % candidates.length];
+  return {
+    x: pick.x,
+    y: pick.y,
+    kind: realmId === 'crystal_oasis' || realmId === 'sky_sanctuary' ? 'crystal' : 'wood',
+  };
+}
+
+export function isNearMysteryChest(state: GameWorldState): boolean {
+  if (!state.mysteryChest) return false;
+  return (
+    Math.hypot(
+      state.player.x - (state.mysteryChest.x + 0.5),
+      state.player.y - (state.mysteryChest.y + 0.5)
+    ) <= 2.1
+  );
+}
+
+export function openMysteryChest(
+  state: GameWorldState,
+  rand: () => number = Math.random
+): {
+  ok: boolean;
+  goldDelta: number;
+  bonusItem?: { id: ItemId; qty: number };
+  leveledUpTo?: number;
+  message: string;
+} {
+  if (!state.mysteryChest) {
+    return { ok: false, goldDelta: 0, message: 'No mystery chest nearby' };
+  }
+  const dist = Math.hypot(
+    state.player.x - (state.mysteryChest.x + 0.5),
+    state.player.y - (state.mysteryChest.y + 0.5)
+  );
+  if (dist > 2.4) {
+    return { ok: false, goldDelta: 0, message: 'Move closer to chest' };
+  }
+  const isCrystal = state.mysteryChest.kind === 'crystal';
+  state.mysteryChest = null;
+  const goldDelta = isCrystal ? 55 + Math.floor(rand() * 25) : 35 + Math.floor(rand() * 20);
+  state.player.gold += goldDelta;
+  state.stats.totalGoldEarned += goldDelta;
+  state.stats.chestsOpened = (state.stats.chestsOpened ?? 0) + 1;
+
+  const lootPool: { id: ItemId; qty: number }[] = isCrystal
+    ? [
+        { id: 'bio_mulch', qty: 2 },
+        { id: 'fertilizer', qty: 2 },
+        { id: 'lavender_seed', qty: 2 },
+        { id: 'stone', qty: 4 },
+      ]
+    : [
+        { id: 'carrot_seed', qty: 2 },
+        { id: 'sunflower_seed', qty: 2 },
+        { id: 'wood', qty: 4 },
+        { id: 'fertilizer', qty: 1 },
+      ];
+  const bonusItem = lootPool[Math.floor(rand() * lootPool.length) % lootPool.length];
+  addInventoryItem(state, bonusItem.id, bonusItem.qty);
+  const leveledUpTo = grantXp(state, 20);
+  return {
+    ok: true,
+    goldDelta,
+    bonusItem,
+    leveledUpTo,
+    message: `Mystery Chest: +${goldDelta}g & +${bonusItem.qty} ${ITEMS[bonusItem.id]?.name ?? bonusItem.id}!`,
+  };
+}
+
+let nextFireflyId = 1;
+
+export function syncNightFireflies(
+  state: GameWorldState,
+  rand: () => number = Math.random
+): void {
+  if (!Array.isArray(state.fireflies)) state.fireflies = [];
+  const realm = state.activeRealm ?? 'homestead';
+  const activeTime =
+    state.timeMinutes >= SUNSET_START_MINUTES ||
+    realm === 'whispering_woods' ||
+    realm === 'sky_sanctuary';
+  if (!activeTime) {
+    state.fireflies = [];
+    return;
+  }
+  const maxFlies = realm === 'sky_sanctuary' ? 6 : 5;
+  if (state.fireflies.length >= maxFlies) return;
+  const walkable = state.tiles.filter(
+    (t) =>
+      t.terrain !== 'water' &&
+      t.terrain !== 'forest_edge' &&
+      t.terrain !== 'farmhouse' &&
+      t.terrain !== 'village_hut'
+  );
+  if (walkable.length === 0) return;
+  const pick = walkable[Math.floor(rand() * walkable.length) % walkable.length];
+  const color =
+    realm === 'sky_sanctuary'
+      ? '#c4b5fd'
+      : realm === 'crystal_oasis'
+      ? '#67e8f9'
+      : '#bef264';
+  state.fireflies.push({
+    id: nextFireflyId++,
+    x: pick.x + 0.5,
+    y: pick.y + 0.5,
+    vx: (rand() - 0.5) * 0.65,
+    vy: (rand() - 0.5) * 0.65,
+    phase: rand() * Math.PI * 2,
+    color,
+  });
+}
+
+export function stepFireflies(state: GameWorldState, dt: number): void {
+  if (!Array.isArray(state.fireflies) || state.fireflies.length === 0) return;
+  for (const f of state.fireflies) {
+    f.phase += dt * 4.2;
+    f.x += f.vx * dt;
+    f.y += f.vy * dt;
+    if (f.x < 1.5 || f.x > state.width - 1.5) f.vx *= -1;
+    if (f.y < 1.5 || f.y > state.height - 1.5) f.vy *= -1;
+    f.x = Math.max(1.2, Math.min(state.width - 1.2, f.x));
+    f.y = Math.max(1.2, Math.min(state.height - 1.2, f.y));
+  }
+}
+
+export function catchNearbyFirefly(
+  state: GameWorldState,
+  maxDist = 1.05
+): {
+  caught: boolean;
+  x: number;
+  y: number;
+  color: string;
+  goldDelta: number;
+  leveledUpTo?: number;
+} {
+  if (!Array.isArray(state.fireflies) || state.fireflies.length === 0) {
+    return { caught: false, x: 0, y: 0, color: '#bef264', goldDelta: 0 };
+  }
+  const idx = state.fireflies.findIndex(
+    (f) => Math.hypot(state.player.x - f.x, state.player.y - f.y) <= maxDist
+  );
+  if (idx === -1) {
+    return { caught: false, x: 0, y: 0, color: '#bef264', goldDelta: 0 };
+  }
+  const [fly] = state.fireflies.splice(idx, 1);
+  const goldDelta = 12;
+  state.player.gold += goldDelta;
+  state.stats.totalGoldEarned += goldDelta;
+  state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 6);
+  state.stats.firefliesCaught = (state.stats.firefliesCaught ?? 0) + 1;
+  const leveledUpTo = grantXp(state, 8);
+  return {
+    caught: true,
+    x: fly.x,
+    y: fly.y,
+    color: fly.color,
+    goldDelta,
+    leveledUpTo,
+  };
+}
+
+export function spinLuckyWheel(
+  state: GameWorldState,
+  randOrIndex: (() => number) | number = Math.random
+): {
+  ok: boolean;
+  rewardIndex: number;
+  reward?: LuckyWheelRewardDef;
+  leveledUpTo?: number;
+  message: string;
+} {
+  if (state.luckySpinUsedToday) {
+    return { ok: false, rewardIndex: 0, message: 'Already spun today' };
+  }
+  state.luckySpinUsedToday = true;
+  const rewardIndex =
+    typeof randOrIndex === 'number'
+      ? Math.abs(Math.floor(randOrIndex)) % LUCKY_WHEEL_REWARDS.length
+      : Math.floor(randOrIndex() * LUCKY_WHEEL_REWARDS.length) % LUCKY_WHEEL_REWARDS.length;
+  const reward = LUCKY_WHEEL_REWARDS[rewardIndex];
+  if (reward.gold) {
+    state.player.gold += reward.gold;
+    state.stats.totalGoldEarned += reward.gold;
+  }
+  if (reward.stamina) {
+    state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + reward.stamina);
+  }
+  if (reward.item) {
+    addInventoryItem(state, reward.item.id, reward.item.qty);
+  }
+  state.stats.wheelSpins = (state.stats.wheelSpins ?? 0) + 1;
+  const leveledUpTo = grantXp(state, 15);
+  return {
+    ok: true,
+    rewardIndex,
+    reward,
+    leveledUpTo,
+    message: reward.label.en,
+  };
+}
+
+export function answerEcoQuiz(
+  state: GameWorldState,
+  questionIndex: number,
+  chosenIndex: number
+): {
+  ok: boolean;
+  correct: boolean;
+  fact?: { ar: string; en: string };
+  leveledUpTo?: number;
+  message: string;
+} {
+  if (state.ecoQuizAnsweredToday) {
+    return { ok: false, correct: false, message: 'Already answered today' };
+  }
+  if (
+    !Number.isInteger(questionIndex) ||
+    questionIndex < 0 ||
+    questionIndex >= ECO_QUIZ_QUESTIONS.length
+  ) {
+    return { ok: false, correct: false, message: 'Invalid question' };
+  }
+  const q = ECO_QUIZ_QUESTIONS[questionIndex];
+  const correct = chosenIndex === q.correctIndex;
+  if (!correct) {
+    return { ok: true, correct: false, fact: q.fact, message: 'Try again' };
+  }
+  state.ecoQuizAnsweredToday = true;
+  state.player.gold += 35;
+  state.stats.totalGoldEarned += 35;
+  state.player.stamina = Math.min(state.player.maxStamina, state.player.stamina + 15);
+  state.stats.quizzesSolved = (state.stats.quizzesSolved ?? 0) + 1;
+  const leveledUpTo = grantXp(state, 25);
+  return {
+    ok: true,
+    correct: true,
+    fact: q.fact,
+    leveledUpTo,
+    message: '+35g, +15 Stamina, +25 XP!',
+  };
+}
+
+export function renameFarmPet(
+  state: GameWorldState,
+  kind: 'dog' | 'cat',
+  rawName: string
+): { ok: boolean; name: string } {
+  const clean = sanitizePetName(rawName);
+  if (!clean) return { ok: false, name: '' };
+  if (!state.petNames) state.petNames = {};
+  state.petNames[kind] = clean;
+  return { ok: true, name: clean };
+}
+

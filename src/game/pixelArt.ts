@@ -15,15 +15,20 @@ import {
   WELL_POS,
 } from './constants';
 import { getSeason, getTile, getTimePhase, isSwiftBuffActive } from './rules';
+import { getFarmerOutfitColors } from './funFeatures';
 import { PLAYER_PALETTE, type RemotePlayerState, type VoicePeerState } from './multiplayer';
 import type {
   FarmChicken,
+  FarmerStyle,
   FarmTile,
+  FireflyEntity,
   FloatingText,
   GameWorldState,
   LivestockEntity,
+  MysteryChest,
   Particle,
   PlayerState,
+  RealmCreatureEntity,
   RealmId,
   Season,
   WildlifeEntity,
@@ -197,6 +202,7 @@ export interface LocalPlayerRenderMeta {
   colorIndex: number;
   voice?: VoicePeerState;
   emote?: string;
+  style?: FarmerStyle;
 }
 
 export function renderGameWorld(
@@ -302,14 +308,38 @@ export function renderGameWorld(
       const hx = targetTile.x * TILE_SIZE;
       const hy = targetTile.y * TILE_SIZE;
 
+      const isRipeTarget =
+        Boolean(ht.crop && !ht.crop.withered && ht.crop.growthDays >= CROPS[ht.crop.type].daysToGrow);
+      const isLandmarkTarget =
+        ht.terrain === 'portal' || ht.terrain === 'village_elder' || ht.terrain === 'strange_zone';
+
       ctx.save();
-      ctx.strokeStyle = hoverTile
-        ? inReach
-          ? 'rgba(255, 245, 190, 0.85)'
-          : 'rgba(255, 130, 110, 0.55)'
-        : 'rgba(255, 245, 190, 0.42)';
-      ctx.lineWidth = hoverTile ? 2 : 1.5;
-      ctx.strokeRect(hx + 1, hy + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+      const pulse = isRipeTarget || isLandmarkTarget ? 0.65 + Math.sin(elapsedSec * 7) * 0.25 : 0.85;
+      const borderCol = !inReach && hoverTile
+        ? 'rgba(255, 130, 110, 0.58)'
+        : isRipeTarget
+        ? `rgba(253, 224, 71, ${pulse.toFixed(2)})`
+        : isLandmarkTarget
+        ? `rgba(125, 211, 252, ${pulse.toFixed(2)})`
+        : hoverTile
+        ? 'rgba(255, 245, 190, 0.88)'
+        : 'rgba(255, 245, 190, 0.48)';
+      ctx.strokeStyle = borderCol;
+      ctx.lineWidth = hoverTile || isRipeTarget || isLandmarkTarget ? 2 : 1.5;
+
+      // Crisp corner brackets on active tile for tactile clarity
+      const pad = isRipeTarget || isLandmarkTarget ? Math.round(Math.sin(elapsedSec * 6)) : 0;
+      const bLen = 7;
+      const x1 = hx + 1 - pad;
+      const y1 = hy + 1 - pad;
+      const x2 = hx + TILE_SIZE - 1 + pad;
+      const y2 = hy + TILE_SIZE - 1 + pad;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1 + bLen); ctx.lineTo(x1, y1); ctx.lineTo(x1 + bLen, y1);
+      ctx.moveTo(x2 - bLen, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + bLen);
+      ctx.moveTo(x1, y2 - bLen); ctx.lineTo(x1, y2); ctx.lineTo(x1 + bLen, y2);
+      ctx.moveTo(x2 - bLen, y2); ctx.lineTo(x2, y2); ctx.lineTo(x2, y2 - bLen);
+      ctx.stroke();
 
       const selectedId = state.hotbar[state.player.selectedHotbarIndex];
       if (selectedId === 'shade_net' || selectedId === 'greenhouse') {
@@ -417,6 +447,26 @@ export function renderGameWorld(
           draw: () => drawAncientPortal(ctx, px, py, realm, elapsedSec),
         });
       }
+      if (tile.terrain === 'village_hut') {
+        drawList.push({
+          sortY: py + TILE_SIZE,
+          draw: () => drawVillageHut(ctx, px, py, realm, timePhase),
+        });
+      }
+      if (tile.terrain === 'village_elder') {
+        const visited = (state.visitedVillages ?? []).includes(realm);
+        drawList.push({
+          sortY: py + TILE_SIZE,
+          draw: () => drawVillageElder(ctx, px, py, realm, elapsedSec, visited),
+        });
+      }
+      if (tile.terrain === 'strange_zone') {
+        const discovered = (state.investigatedStrangeZones ?? []).includes(realm);
+        drawList.push({
+          sortY: py + TILE_SIZE,
+          draw: () => drawStrangeZone(ctx, px, py, realm, elapsedSec, discovered),
+        });
+      }
       if (tile.obstacle) {
         drawList.push({
           sortY: py + TILE_SIZE - 2,
@@ -450,6 +500,17 @@ export function renderGameWorld(
     }
   }
 
+  // Daily Mystery Treasure Chest
+  if (state.mysteryChest) {
+    const mc = state.mysteryChest;
+    if (mc.x >= minTX && mc.x <= maxTX && mc.y >= minTY && mc.y <= maxTY) {
+      drawList.push({
+        sortY: (mc.y + 0.85) * TILE_SIZE,
+        draw: () => drawMysteryChest(ctx, mc, elapsedSec),
+      });
+    }
+  }
+
   // Local Player & Remote Multiplayer Farmers
   if (!isTitleBackdrop) {
     const swiftActive = isSwiftBuffActive(state);
@@ -464,7 +525,8 @@ export function renderGameWorld(
           localPlayerMeta?.name,
           localPlayerMeta?.voice,
           localEmote ?? localPlayerMeta?.emote,
-          swiftActive
+          swiftActive,
+          localPlayerMeta?.style ?? state.playerStyle
         ),
     });
     for (const rp of remotePlayers) {
@@ -472,7 +534,7 @@ export function renderGameWorld(
       const rpEmote = activeEmotes?.[rp.id];
       drawList.push({
         sortY: rp.y * TILE_SIZE + 4,
-        draw: () => drawFarmerEntity(ctx, rp, elapsedSec, rp.colorIndex, rp.name, rpVoice, rpEmote),
+        draw: () => drawFarmerEntity(ctx, rp, elapsedSec, rp.colorIndex, rp.name, rpVoice, rpEmote, false, rp.style),
       });
     }
   }
@@ -499,16 +561,24 @@ export function renderGameWorld(
     }
     if (state.dog) {
       const dog = state.dog;
+      const showDogName =
+        !isTitleBackdrop &&
+        Boolean(state.petNames?.dog) &&
+        Math.hypot(state.player.x - dog.x, state.player.y - dog.y) <= 4.5;
       drawList.push({
         sortY: dog.y * TILE_SIZE + 3.8,
-        draw: () => drawLivestock(ctx, dog, elapsedSec),
+        draw: () => drawLivestock(ctx, dog, elapsedSec, showDogName ? state.petNames?.dog : undefined),
       });
     }
     if (state.cat) {
       const cat = state.cat;
+      const showCatName =
+        !isTitleBackdrop &&
+        Boolean(state.petNames?.cat) &&
+        Math.hypot(state.player.x - cat.x, state.player.y - cat.y) <= 4.5;
       drawList.push({
         sortY: cat.y * TILE_SIZE + 3.6,
-        draw: () => drawLivestock(ctx, cat, elapsedSec),
+        draw: () => drawLivestock(ctx, cat, elapsedSec, showCatName ? state.petNames?.cat : undefined),
       });
     }
   }
@@ -521,9 +591,24 @@ export function renderGameWorld(
     });
   }
 
+  // Realm-Specific Native Fauna (Foxes, Deer, Fennecs, Gazelles, Scarabs, Cranes, Alpacas, Star-Owls)
+  for (const rc of state.realmCreatures ?? []) {
+    const nearPlayer =
+      !isTitleBackdrop && Math.hypot(state.player.x - rc.x, state.player.y - rc.y) <= 2.4;
+    drawList.push({
+      sortY: rc.y * TILE_SIZE + 4,
+      draw: () => drawRealmCreature(ctx, rc, elapsedSec, nearPlayer),
+    });
+  }
+
   drawList.sort((a, b) => a.sortY - b.sortY);
   for (const item of drawList) {
     item.draw();
+  }
+
+  // 4b. Glowing Night Fireflies
+  for (const ff of state.fireflies ?? []) {
+    drawFirefly(ctx, ff, elapsedSec);
   }
 
   // 5. Particles
@@ -536,18 +621,22 @@ export function renderGameWorld(
   }
   ctx.globalAlpha = 1;
 
-  // 6. Floating Texts
+  // 6. Floating Texts with snappy bounce-in scale pop
   for (const ft of floatingTexts) {
     const alpha = Math.max(0, Math.min(1, ft.life / ft.maxLife));
+    const age = ft.maxLife - ft.life;
+    const popScale = age < 0.14 ? 0.85 + Math.sin((age / 0.14) * Math.PI) * 0.28 : 1;
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.font = 'bold 12px "Pixelify Sans", sans-serif';
+    ctx.translate(ft.x, ft.y);
+    ctx.scale(popScale, popScale);
+    ctx.font = 'bold 12px "Pixelify Sans", "Cairo", sans-serif';
     ctx.textAlign = 'center';
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3.5;
     ctx.strokeStyle = '#1b120b';
-    ctx.strokeText(ft.text, ft.x, ft.y);
+    ctx.strokeText(ft.text, 0, 0);
     ctx.fillStyle = ft.color;
-    ctx.fillText(ft.text, ft.x, ft.y);
+    ctx.fillText(ft.text, 0, 0);
     ctx.restore();
   }
 
@@ -627,6 +716,77 @@ function drawStaticTerrainTile(
     ctx.fillRect(px + 2, py + 4, TILE_SIZE - 4, TILE_SIZE - 6);
     ctx.fillStyle = '#64748b';
     ctx.fillRect(px + 4, py + 6, TILE_SIZE - 8, TILE_SIZE - 10);
+    return;
+  }
+
+  if (tile.terrain === 'village_plaza' || tile.terrain === 'village_hut' || tile.terrain === 'village_elder') {
+    if (realm === 'whispering_woods') {
+      ctx.fillStyle = checker ? '#92643d' : '#805532';
+      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+      ctx.fillStyle = '#684225';
+      ctx.fillRect(px, py + 7, TILE_SIZE, 1);
+      ctx.fillRect(px, py + 15, TILE_SIZE, 1);
+      ctx.fillRect(px, py + 23, TILE_SIZE, 1);
+    } else if (realm === 'crystal_oasis') {
+      ctx.fillStyle = checker ? '#e9d3a3' : '#dcc089';
+      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+      ctx.fillStyle = '#bfa068';
+      ctx.fillRect(px + 2, py + 2, TILE_SIZE - 4, 1);
+      ctx.fillRect(px + 2, py + 16, TILE_SIZE - 4, 1);
+    } else {
+      ctx.fillStyle = checker ? '#e2e8f0' : '#cbd5e1';
+      ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillRect(px, py + 15, TILE_SIZE, 1);
+      ctx.fillRect(px + 15, py, 1, TILE_SIZE);
+    }
+    return;
+  }
+
+  if (tile.terrain === 'strange_zone') {
+    ctx.fillStyle = checker ? pal.grassA : pal.grassB;
+    ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+    ctx.fillStyle = '#1e1b4b';
+    ctx.fillRect(px + 3, py + 4, TILE_SIZE - 6, TILE_SIZE - 7);
+    ctx.fillStyle = '#4c1d95';
+    ctx.fillRect(px + 6, py + 7, TILE_SIZE - 12, TILE_SIZE - 13);
+    return;
+  }
+
+  if (tile.terrain === 'moss_floor') {
+    ctx.fillStyle = checker ? '#235940' : '#1e4d37';
+    ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+    const mHash = (tile.x * 29 + tile.y * 19) % 7;
+    if (mHash < 3) {
+      ctx.fillStyle = '#40916c';
+      ctx.fillRect(px + 5 + mHash * 5, py + 9, 4, 3);
+      ctx.fillStyle = '#6ee7b7';
+      ctx.fillRect(px + 18, py + 20, 2, 2);
+    }
+    return;
+  }
+
+  if (tile.terrain === 'sand_dune') {
+    ctx.fillStyle = checker ? '#dcb673' : '#cfa663';
+    ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+    ctx.fillStyle = '#ebd09a';
+    ctx.fillRect(px + 3, py + 10 + ((tile.x + tile.y) % 4), 14, 2);
+    if ((tile.x * 13 + tile.y * 7) % 5 === 0) {
+      ctx.fillStyle = '#67e8f9';
+      ctx.fillRect(px + 21, py + 21, 3, 2);
+    }
+    return;
+  }
+
+  if (tile.terrain === 'cloud_stone') {
+    ctx.fillStyle = checker ? '#cfdbf0' : '#becde6';
+    ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+    ctx.fillStyle = '#eef4ff';
+    ctx.fillRect(px + 4, py + 5, 10, 3);
+    ctx.fillStyle = '#93c5fd';
+    if ((tile.x + tile.y) % 3 === 0) {
+      ctx.fillRect(px + 19, py + 21, 4, 2);
+    }
     return;
   }
 
@@ -1189,10 +1349,18 @@ function drawCrop(
     ctx.fillRect(px + 11, py + 14, 10, 10);
   }
 
-  // Ripe golden harvest sparkle
-  if (Math.sin(elapsedSec * 4.5 + tile.x + tile.y) > 0.65) {
+  // Ripe golden harvest sparkle (twinkling cross-star so ripe fields visibly gleam)
+  const spPhase = Math.sin(elapsedSec * 4.5 + tile.x * 1.1 + tile.y * 0.7);
+  if (spPhase > 0.45) {
+    const sx = px + 21;
+    const sy = py + 6;
     ctx.fillStyle = '#fff6b3';
-    ctx.fillRect(px + 22, py + 5, 3, 3);
+    ctx.fillRect(sx, sy, 3, 3);
+    if (spPhase > 0.75) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(sx + 1, sy - 2, 1, 7);
+      ctx.fillRect(sx - 2, sy + 1, 7, 1);
+    }
   }
 }
 
@@ -1715,6 +1883,60 @@ function drawDailyNatureTreasure(
   ctx.restore();
 }
 
+function drawMysteryChest(
+  ctx: CanvasRenderingContext2D,
+  chest: MysteryChest,
+  elapsedSec: number
+): void {
+  const px = chest.x * TILE_SIZE;
+  const py = chest.y * TILE_SIZE;
+  const bob = Math.round(Math.sin(elapsedSec * 3.4) * 1.5);
+  const isCrystal = chest.kind === 'crystal';
+  ctx.save();
+  ctx.fillStyle = isCrystal ? 'rgba(56, 189, 248, 0.25)' : 'rgba(250, 204, 21, 0.24)';
+  ctx.beginPath();
+  ctx.arc(px + 16, py + 17, 11 + Math.sin(elapsedSec * 4) * 1.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Chest shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.32)';
+  ctx.fillRect(px + 7, py + 23, 18, 4);
+
+  // Chest base & lid
+  ctx.fillStyle = isCrystal ? '#0369a1' : '#78350f';
+  ctx.fillRect(px + 7, py + 13 + bob, 18, 11);
+  ctx.fillStyle = isCrystal ? '#0ea5e9' : '#b45309';
+  ctx.fillRect(px + 8, py + 9 + bob, 16, 6);
+  // Trim bands & lock
+  ctx.fillStyle = isCrystal ? '#bae6fd' : '#facc15';
+  ctx.fillRect(px + 7, py + 14 + bob, 18, 2);
+  ctx.fillRect(px + 14, py + 13 + bob, 4, 5);
+  // Sparkle
+  if (Math.sin(elapsedSec * 6) > 0) {
+    ctx.fillStyle = '#fef08a';
+    ctx.fillRect(px + 22, py + 5 + bob, 3, 3);
+  }
+  ctx.restore();
+}
+
+function drawFirefly(
+  ctx: CanvasRenderingContext2D,
+  ff: FireflyEntity,
+  elapsedSec: number
+): void {
+  const fx = ff.x * TILE_SIZE;
+  const fy = ff.y * TILE_SIZE + Math.sin(elapsedSec * 4.2 + ff.phase) * 3;
+  const glow = 0.55 + Math.sin(elapsedSec * 6.5 + ff.phase) * 0.4;
+  ctx.save();
+  ctx.fillStyle = `rgba(190, 242, 100, ${(glow * 0.36).toFixed(2)})`;
+  ctx.beginPath();
+  ctx.arc(fx, fy, 7.5 + glow * 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = `rgba(254, 240, 138, ${Math.min(1, glow + 0.2).toFixed(2)})`;
+  ctx.fillRect(Math.round(fx - 1.5), Math.round(fy - 1.5), 3, 3);
+  ctx.restore();
+}
+
 function drawFarmerEntity(
   ctx: CanvasRenderingContext2D,
   p: Pick<
@@ -1726,9 +1948,15 @@ function drawFarmerEntity(
   label?: string,
   voice?: VoicePeerState,
   emote?: string,
-  swiftActive = false
+  swiftActive = false,
+  customStyle?: FarmerStyle
 ): void {
   const palette = PLAYER_PALETTE[colorIndex % PLAYER_PALETTE.length] ?? PLAYER_PALETTE[0];
+  const outfitColors = customStyle ? getFarmerOutfitColors(customStyle) : null;
+  const overallsColor = outfitColors ? outfitColors.overalls : palette.overalls;
+  const shirtColor = outfitColors ? outfitColors.shirt : palette.shirt;
+  const accentColor = outfitColors ? outfitColors.accent : palette.shirt;
+  const hatType = customStyle?.hat ?? 'straw';
   const cx = Math.round(p.x * TILE_SIZE);
   const cy = Math.round(p.y * TILE_SIZE);
   const bob = Math.round(Math.abs(Math.sin(p.walkCycle)) * -2);
@@ -1758,9 +1986,9 @@ function drawFarmerEntity(
   ctx.fillRect(cx + 1, cy + 5 + Math.max(0, -stride), 5, 5);
 
   // Overalls & shirt
-  ctx.fillStyle = flash ? '#ffffff' : palette.overalls;
+  ctx.fillStyle = flash ? '#ffffff' : overallsColor;
   ctx.fillRect(cx - 7, cy - 5 + bob, 14, 11);
-  ctx.fillStyle = flash ? '#ffffff' : palette.shirt;
+  ctx.fillStyle = flash ? '#ffffff' : shirtColor;
   ctx.fillRect(cx - 7, cy - 8 + bob, 14, 5);
 
   // Head
@@ -1775,13 +2003,44 @@ function drawFarmerEntity(
     ctx.fillRect(cx + 2 + eyeOffsetX, cy - 13 + bob, 2, 2);
   }
 
-  // Straw Sunhat with colored ribbon matching player color
-  ctx.fillStyle = '#deb15b';
-  ctx.fillRect(cx - 9, cy - 19 + bob, 18, 4);
-  ctx.fillStyle = '#c49139';
-  ctx.fillRect(cx - 6, cy - 23 + bob, 12, 5);
-  ctx.fillStyle = palette.shirt;
-  ctx.fillRect(cx - 6, cy - 20 + bob, 12, 2);
+  // Customizable Farmer Hat
+  if (hatType === 'none') {
+    // Cozy warm brown hair tuft
+    ctx.fillStyle = '#4a2c18';
+    ctx.fillRect(cx - 6, cy - 19 + bob, 12, 3);
+    ctx.fillRect(cx - 4, cy - 20 + bob, 6, 2);
+  } else if (hatType === 'cap') {
+    ctx.fillStyle = shirtColor;
+    ctx.fillRect(cx - 6, cy - 21 + bob, 12, 5);
+    ctx.fillStyle = accentColor;
+    const brimX = p.facingX < -0.2 ? cx - 9 : cx - 4;
+    ctx.fillRect(brimX, cy - 17 + bob, 12, 2);
+  } else if (hatType === 'wizard') {
+    ctx.fillStyle = '#4c1d95';
+    ctx.fillRect(cx - 9, cy - 19 + bob, 18, 3);
+    ctx.fillRect(cx - 6, cy - 24 + bob, 12, 5);
+    ctx.fillRect(cx - 3, cy - 28 + bob, 6, 4);
+    ctx.fillStyle = '#fde047';
+    ctx.fillRect(cx - 1, cy - 23 + bob, 2, 2);
+  } else if (hatType === 'crown') {
+    ctx.fillStyle = '#4a2c18';
+    ctx.fillRect(cx - 6, cy - 19 + bob, 12, 2);
+    ctx.fillStyle = '#facc15';
+    ctx.fillRect(cx - 6, cy - 22 + bob, 12, 3);
+    ctx.fillRect(cx - 6, cy - 25 + bob, 2, 3);
+    ctx.fillRect(cx - 1, cy - 26 + bob, 2, 4);
+    ctx.fillRect(cx + 4, cy - 25 + bob, 2, 3);
+    ctx.fillStyle = '#ef4444';
+    ctx.fillRect(cx - 1, cy - 22 + bob, 2, 2);
+  } else {
+    // Classic Straw Sunhat with colored ribbon matching outfit
+    ctx.fillStyle = '#deb15b';
+    ctx.fillRect(cx - 9, cy - 19 + bob, 18, 4);
+    ctx.fillStyle = '#c49139';
+    ctx.fillRect(cx - 6, cy - 23 + bob, 12, 5);
+    ctx.fillStyle = shirtColor;
+    ctx.fillRect(cx - 6, cy - 20 + bob, 12, 2);
+  }
 
   // Active Tool Swing Arc
   if (p.swingTimer > 0 && p.swingTool) {
@@ -1900,7 +2159,8 @@ function drawChicken(
 function drawLivestock(
   ctx: CanvasRenderingContext2D,
   e: LivestockEntity,
-  elapsedSec: number
+  elapsedSec: number,
+  petName?: string
 ): void {
   const cx = Math.round(e.x * TILE_SIZE);
   const cy = Math.round(e.y * TILE_SIZE);
@@ -1987,6 +2247,24 @@ function drawLivestock(
     ctx.fillStyle = '#26180f';
     ctx.fillRect(hx + (e.facingX >= 0 ? 3 : 1), cy - 6 + hop, 2, 2);
   }
+
+  if (petName) {
+    ctx.save();
+    ctx.font = 'bold 8px "Plus Jakarta Sans", "Cairo", sans-serif';
+    const w = Math.ceil(ctx.measureText(petName).width) + 6;
+    const bx = Math.round(cx - w / 2);
+    const by = cy - 22 + hop;
+    ctx.fillStyle = 'rgba(20, 14, 9, 0.72)';
+    ctx.fillRect(bx, by, w, 10);
+    ctx.strokeStyle = e.kind === 'dog' ? '#f87171' : '#4ade80';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, w, 10);
+    ctx.fillStyle = '#fdf3dc';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(petName, cx, by + 5);
+    ctx.restore();
+  }
 }
 
 function drawWildlife(
@@ -2038,6 +2316,268 @@ function drawWildlife(
     // Angry red eye
     ctx.fillStyle = '#eb483c';
     ctx.fillRect(cx + (w.facingX > 0 ? 5 : -7), cy - 3 + hop, 2, 2);
+  }
+}
+
+function drawVillageHut(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  realm: RealmId,
+  timePhase: string
+): void {
+  ctx.fillStyle = 'rgba(0,0,0,0.28)';
+  ctx.fillRect(px + 2, py + 26, 28, 5);
+  const windowLit = timePhase !== 'Day';
+
+  if (realm === 'crystal_oasis') {
+    // Sunlit desert caravan tent with teal canopy & gold trim
+    ctx.fillStyle = '#0e7490';
+    ctx.fillRect(px + 3, py + 8, 26, 14);
+    ctx.fillStyle = '#f59e0b';
+    ctx.fillRect(px + 13, py + 2, 6, 7);
+    ctx.fillStyle = '#fde68a';
+    ctx.fillRect(px + 5, py + 19, 22, 9);
+    ctx.fillStyle = '#78350f';
+    ctx.fillRect(px + 13, py + 20, 6, 8);
+    ctx.fillStyle = windowLit ? '#fde047' : '#38bdf8';
+    ctx.fillRect(px + 6, py + 11, 4, 4);
+    ctx.fillRect(px + 22, py + 11, 4, 4);
+  } else if (realm === 'sky_sanctuary') {
+    // Luminous cloud marble dome pavilion
+    ctx.fillStyle = '#e2e8f0';
+    ctx.fillRect(px + 4, py + 13, 24, 15);
+    ctx.fillStyle = '#6366f1';
+    ctx.fillRect(px + 5, py + 5, 22, 9);
+    ctx.fillStyle = '#fbbf24';
+    ctx.fillRect(px + 14, py + 2, 4, 4);
+    ctx.fillStyle = '#1e1b4b';
+    ctx.fillRect(px + 13, py + 20, 6, 8);
+    ctx.fillStyle = windowLit ? '#fde047' : '#a5b4fc';
+    ctx.fillRect(px + 7, py + 16, 4, 4);
+    ctx.fillRect(px + 21, py + 16, 4, 4);
+  } else {
+    // Sylvan oakwood timber cottage
+    ctx.fillStyle = '#8b5e34';
+    ctx.fillRect(px + 4, py + 14, 24, 14);
+    ctx.fillStyle = '#2d6a4f';
+    ctx.fillRect(px + 2, py + 6, 28, 9);
+    ctx.fillStyle = '#52b788';
+    ctx.fillRect(px + 5, py + 4, 22, 3);
+    ctx.fillStyle = '#4a2c16';
+    ctx.fillRect(px + 13, py + 20, 6, 8);
+    ctx.fillStyle = windowLit ? '#fde047' : '#fef3c7';
+    ctx.fillRect(px + 6, py + 17, 4, 4);
+    ctx.fillRect(px + 22, py + 17, 4, 4);
+  }
+}
+
+function drawVillageElder(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  realm: RealmId,
+  elapsedSec: number,
+  visited: boolean
+): void {
+  const bob = Math.round(Math.sin(elapsedSec * 2.4) * 1.2);
+  ctx.fillStyle = 'rgba(0,0,0,0.28)';
+  ctx.fillRect(px + 8, py + 25, 16, 4);
+
+  const robeColor =
+    realm === 'crystal_oasis' ? '#0284c7' : realm === 'sky_sanctuary' ? '#7c3aed' : '#15803d';
+  const trimColor =
+    realm === 'crystal_oasis' ? '#fbbf24' : realm === 'sky_sanctuary' ? '#e0e7ff' : '#bef264';
+
+  // Robe
+  ctx.fillStyle = robeColor;
+  ctx.fillRect(px + 10, py + 14 + bob, 12, 13);
+  ctx.fillStyle = trimColor;
+  ctx.fillRect(px + 14, py + 14 + bob, 4, 12);
+
+  // Face & Elder beard/hood
+  ctx.fillStyle = '#f2c8a0';
+  ctx.fillRect(px + 11, py + 6 + bob, 10, 8);
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(px + 12, py + 12 + bob, 8, 4);
+  ctx.fillStyle = trimColor;
+  ctx.fillRect(px + 10, py + 4 + bob, 12, 3);
+
+  // Eyes
+  ctx.fillStyle = '#1e293b';
+  ctx.fillRect(px + 13, py + 9 + bob, 2, 2);
+  ctx.fillRect(px + 17, py + 9 + bob, 2, 2);
+
+  // Glowing staff
+  ctx.fillStyle = '#6b4528';
+  ctx.fillRect(px + 23, py + 8 + bob, 2, 18);
+  ctx.fillStyle = realm === 'sky_sanctuary' ? '#c084fc' : realm === 'crystal_oasis' ? '#22d3ee' : '#fde047';
+  ctx.fillRect(px + 22, py + 5 + bob, 4, 4);
+
+  // Story indicator above elder
+  if (!visited || Math.sin(elapsedSec * 4) > 0) {
+    ctx.fillStyle = visited ? '#fde047' : '#38bdf8';
+    ctx.fillRect(px + 14, py - 2 + bob, 4, 4);
+  }
+}
+
+function drawStrangeZone(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  realm: RealmId,
+  elapsedSec: number,
+  discovered: boolean
+): void {
+  const pulse = 0.45 + Math.sin(elapsedSec * 3.8) * 0.25;
+  const glowColor =
+    realm === 'crystal_oasis'
+      ? `rgba(34, 211, 238, ${pulse.toFixed(2)})`
+      : realm === 'sky_sanctuary'
+      ? `rgba(192, 132, 252, ${pulse.toFixed(2)})`
+      : realm === 'whispering_woods'
+      ? `rgba(52, 211, 153, ${pulse.toFixed(2)})`
+      : `rgba(250, 204, 21, ${pulse.toFixed(2)})`;
+
+  ctx.save();
+  ctx.fillStyle = glowColor;
+  ctx.beginPath();
+  ctx.arc(px + 16, py + 16, 13 + Math.sin(elapsedSec * 4) * 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  const hover = Math.round(Math.sin(elapsedSec * 2.8) * 2);
+  // Central monolith / crystal rift
+  ctx.fillStyle = '#1e293b';
+  ctx.fillRect(px + 10, py + 4 + hover, 12, 22);
+  ctx.fillStyle =
+    realm === 'crystal_oasis'
+      ? '#22d3ee'
+      : realm === 'sky_sanctuary'
+      ? '#c084fc'
+      : realm === 'whispering_woods'
+      ? '#34d399'
+      : '#fbbf24';
+  ctx.fillRect(px + 13, py + 7 + hover, 6, 14);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(px + 15, py + 10 + hover, 2, 6);
+
+  // Orbiting rune sparks
+  for (let i = 0; i < 3; i++) {
+    const a = elapsedSec * 2.5 + (i * Math.PI * 2) / 3;
+    const sx = Math.round(px + 16 + Math.cos(a) * 11);
+    const sy = Math.round(py + 14 + Math.sin(a) * 5);
+    ctx.fillStyle = discovered ? '#fde047' : '#ffffff';
+    ctx.fillRect(sx, sy, 2, 2);
+  }
+  ctx.restore();
+}
+
+function drawRealmCreature(
+  ctx: CanvasRenderingContext2D,
+  c: RealmCreatureEntity,
+  elapsedSec: number,
+  nearPlayer = false
+): void {
+  const cx = Math.round(c.x * TILE_SIZE);
+  const cy = Math.round(c.y * TILE_SIZE);
+  const hop = Math.round(Math.abs(Math.sin(c.hopPhase)) * -2.5);
+  const dir = c.facingX >= 0 ? 1 : -1;
+
+  if (nearPlayer) {
+    const bobHeart = Math.round(Math.sin(elapsedSec * 5 + c.id) * 2);
+    ctx.fillStyle = '#f472b6';
+    ctx.fillRect(cx - 3, cy - 20 + bobHeart, 2, 2);
+    ctx.fillRect(cx + 1, cy - 20 + bobHeart, 2, 2);
+    ctx.fillRect(cx - 2, cy - 18 + bobHeart, 4, 2);
+    ctx.fillRect(cx - 1, cy - 16 + bobHeart, 2, 1);
+  }
+
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.fillRect(cx - 6, cy + 5, 12, 3);
+
+  if (c.kind === 'fox' || c.kind === 'fennec') {
+    const fur = c.kind === 'fox' ? '#ea580c' : '#f3d19c';
+    const ear = c.kind === 'fox' ? '#9a3412' : '#f4a2b8';
+    ctx.fillStyle = fur;
+    ctx.fillRect(cx - 5, cy - 3 + hop, 10, 7);
+    // Tail
+    ctx.fillRect(dir > 0 ? cx - 9 : cx + 6, cy - 4 + hop, 4, 4);
+    ctx.fillStyle = '#fff7ed';
+    ctx.fillRect(dir > 0 ? cx - 9 : cx + 8, cy - 4 + hop, 2, 2);
+    // Head + ears
+    const hx = dir > 0 ? cx + 3 : cx - 8;
+    ctx.fillStyle = fur;
+    ctx.fillRect(hx, cy - 7 + hop, 6, 5);
+    const earH = c.kind === 'fennec' ? 5 : 3;
+    ctx.fillRect(hx, cy - 7 - earH + hop, 2, earH);
+    ctx.fillRect(hx + 4, cy - 7 - earH + hop, 2, earH);
+    ctx.fillStyle = ear;
+    ctx.fillRect(hx + 1, cy - 6 - earH + hop, 1, Math.max(1, earH - 1));
+    ctx.fillStyle = '#1c1917';
+    ctx.fillRect(hx + (dir > 0 ? 4 : 1), cy - 5 + hop, 1, 1);
+  } else if (c.kind === 'deer' || c.kind === 'gazelle') {
+    const coat = c.kind === 'deer' ? '#a16207' : '#eab308';
+    ctx.fillStyle = '#78350f';
+    ctx.fillRect(cx - 4, cy + 2, 2, 4);
+    ctx.fillRect(cx + 2, cy + 2, 2, 4);
+    ctx.fillStyle = coat;
+    ctx.fillRect(cx - 6, cy - 6 + hop, 12, 8);
+    ctx.fillStyle = '#fef3c7';
+    ctx.fillRect(cx - 3, cy - 4 + hop, 2, 2);
+    ctx.fillRect(cx + 1, cy - 3 + hop, 2, 2);
+    const hx = dir > 0 ? cx + 4 : cx - 9;
+    ctx.fillStyle = coat;
+    ctx.fillRect(hx, cy - 12 + hop, 5, 7);
+    // Antlers / curved horns
+    ctx.fillStyle = c.kind === 'deer' ? '#d97706' : '#334155';
+    ctx.fillRect(hx, cy - 16 + hop, 2, 4);
+    ctx.fillRect(hx + 3, cy - 16 + hop, 2, 4);
+    ctx.fillStyle = '#1c1917';
+    ctx.fillRect(hx + (dir > 0 ? 3 : 1), cy - 10 + hop, 1, 1);
+  } else if (c.kind === 'scarab') {
+    // Iridescent crystal desert scarab
+    const shimmer = Math.sin(elapsedSec * 7 + c.id) > 0 ? '#2dd4bf' : '#10b981';
+    ctx.fillStyle = shimmer;
+    ctx.fillRect(cx - 5, cy - 3 + hop, 10, 7);
+    ctx.fillStyle = '#fde047';
+    ctx.fillRect(cx - 2, cy - 2 + hop, 4, 4);
+  } else if (c.kind === 'crane') {
+    // Graceful cloud crane
+    ctx.fillStyle = '#475569';
+    ctx.fillRect(cx - 2, cy + 1, 1, 5);
+    ctx.fillRect(cx + 2, cy + 1, 1, 5);
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(cx - 5, cy - 5 + hop, 10, 6);
+    const nx = dir > 0 ? cx + 3 : cx - 5;
+    ctx.fillRect(nx, cy - 13 + hop, 3, 9);
+    ctx.fillStyle = '#ef4444';
+    ctx.fillRect(nx + 1, cy - 14 + hop, 2, 2);
+    ctx.fillStyle = '#f59e0b';
+    ctx.fillRect(dir > 0 ? nx + 3 : nx - 3, cy - 12 + hop, 3, 1);
+  } else if (c.kind === 'alpaca') {
+    // Fluffy white sky alpaca
+    ctx.fillStyle = '#cbd5e1';
+    ctx.fillRect(cx - 5, cy + 2, 2, 4);
+    ctx.fillRect(cx + 3, cy + 2, 2, 4);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(cx - 6, cy - 6 + hop, 12, 8);
+    ctx.fillStyle = '#818cf8';
+    ctx.fillRect(cx - 3, cy - 6 + hop, 6, 4);
+    const hx = dir > 0 ? cx + 3 : cx - 8;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(hx, cy - 13 + hop, 5, 8);
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(hx + (dir > 0 ? 3 : 1), cy - 10 + hop, 1, 1);
+  } else if (c.kind === 'star_owl') {
+    // Glowing cosmic owl
+    const floatY = Math.round(Math.sin(elapsedSec * 3 + c.id) * 2);
+    ctx.fillStyle = '#4c1d95';
+    ctx.fillRect(cx - 5, cy - 8 + floatY, 10, 10);
+    ctx.fillStyle = '#a78bfa';
+    ctx.fillRect(cx - 3, cy - 5 + floatY, 6, 5);
+    ctx.fillStyle = '#fde047';
+    ctx.fillRect(cx - 3, cy - 7 + floatY, 2, 2);
+    ctx.fillRect(cx + 1, cy - 7 + floatY, 2, 2);
   }
 }
 
@@ -2135,10 +2675,16 @@ function drawLightingOverlay(
       punchLight(rp.x, rp.y, pulse);
     }
   }
-  // Placed Stone Lanterns, Smart Soil Sensors, NASA Weather Stations, Wishing Fountains & Portals
+  // Placed Stone Lanterns, Smart Soil Sensors, NASA Weather Stations, Wishing Fountains, Portals, Villages & Strange Zones
   for (const tile of state.tiles) {
     if (tile.terrain === 'portal') {
       punchLight(tile.x + 0.5, tile.y + 0.5, 4.4);
+    } else if (tile.terrain === 'village_elder') {
+      punchLight(tile.x + 0.5, tile.y + 0.5, 4.2);
+    } else if (tile.terrain === 'village_hut') {
+      punchLight(tile.x + 0.5, tile.y + 0.5, 3.0);
+    } else if (tile.terrain === 'strange_zone') {
+      punchLight(tile.x + 0.5, tile.y + 0.5, 4.6);
     } else if (tile.structure?.type === 'lantern') {
       punchLight(tile.x + 0.5, tile.y + 0.5, 4.2);
     } else if (tile.structure?.type === 'sensor' || tile.structure?.type === 'nasa_station') {
@@ -2204,17 +2750,46 @@ function drawLivingAmbience(
     return;
   }
 
-  if ((state.activeRealm ?? 'homestead') === 'sky_sanctuary') {
-    // Twinkling celestial starlight motes floating above the clouds
-    for (let i = 0; i < 20; i++) {
+  const activeRealm = state.activeRealm ?? 'homestead';
+  if (activeRealm === 'sky_sanctuary') {
+    // Twinkling celestial starlight motes & soft drifting cloud wisps above the sky islands
+    for (let i = 0; i < 22; i++) {
       const sx = ((i * 149 + elapsedSec * 14) % (w + 40)) - 20;
       const sy = ((i * 83 + Math.sin(elapsedSec * 1.1 + i) * 20) % (h + 40)) - 20;
-      ctx.globalAlpha = 0.4 + Math.max(0, Math.sin(elapsedSec * 3 + i * 1.3)) * 0.6;
+      ctx.globalAlpha = 0.42 + Math.max(0, Math.sin(elapsedSec * 3 + i * 1.3)) * 0.58;
       ctx.fillStyle = i % 2 === 0 ? '#a5b4fc' : '#fde047';
       ctx.fillRect(Math.round(sx), Math.round(sy), 3, 3);
     }
+    ctx.globalAlpha = 0.14;
+    ctx.fillStyle = '#e0e7ff';
+    for (let i = 0; i < 4; i++) {
+      const wx = ((i * 310 + elapsedSec * 18) % (w + 160)) - 80;
+      const wy = 40 + i * (h * 0.22);
+      ctx.fillRect(Math.round(wx), Math.round(wy), 64, 14);
+      ctx.fillRect(Math.round(wx + 12), Math.round(wy - 6), 38, 10);
+    }
     ctx.restore();
     return;
+  }
+
+  if (activeRealm === 'whispering_woods') {
+    // Enchanted forest pollen spores & golden sunbeam motes
+    for (let i = 0; i < 18; i++) {
+      const px = ((i * 137 + Math.sin(elapsedSec * 0.8 + i) * 26 + elapsedSec * 10) % (w + 30)) - 15;
+      const py = ((i * 97 + Math.cos(elapsedSec * 0.6 + i) * 22) % (h + 30)) - 15;
+      ctx.globalAlpha = 0.35 + Math.max(0, Math.sin(elapsedSec * 2.8 + i)) * 0.55;
+      ctx.fillStyle = i % 3 === 0 ? '#fde047' : '#86efac';
+      ctx.fillRect(Math.round(px), Math.round(py), 3, 3);
+    }
+  } else if (activeRealm === 'crystal_oasis') {
+    // Shimmering desert crystal glints & sunlit sand dust
+    for (let i = 0; i < 16; i++) {
+      const ox = ((i * 151 + elapsedSec * 20) % (w + 30)) - 15;
+      const oy = ((i * 103 + Math.sin(elapsedSec * 1.5 + i) * 16) % (h + 30)) - 15;
+      ctx.globalAlpha = 0.35 + Math.max(0, Math.sin(elapsedSec * 4 + i * 1.7)) * 0.55;
+      ctx.fillStyle = i % 2 === 0 ? '#67e8f9' : '#fde68a';
+      ctx.fillRect(Math.round(ox), Math.round(oy), 3, 3);
+    }
   }
 
   if (state.weather === 'Rainstorm') {

@@ -8,10 +8,12 @@ import path from 'node:path';
 import { WebSocket } from 'ws';
 import {
   advanceDay,
+  answerEcoQuiz,
   buyDairyCow,
   buyFarmCat,
   buyGuardDog,
   buyShopItem,
+  catchNearbyFirefly,
   claimMissionReward,
   computeFarmRestorationPercent,
   craftItem,
@@ -20,17 +22,35 @@ import {
   eatCrop,
   ensureHomesteadPortal,
   getEarnedBadges,
+  getMissingRealmMissions,
+  interactWithStrangeZone,
+  interactWithVillageElder,
+  isNearMysteryChest,
   isNearPortal,
+  isNearStrangeZone,
+  isNearVillageElder,
   isSwiftBuffActive,
+  openMysteryChest,
   performTileAction,
+  renameFarmPet,
+  rollDailyMysteryChest,
   rollDailyNatureTreasure,
   sellCropItem,
   spawnNightWildlife,
+  spinLuckyWheel,
+  stepFireflies,
+  stepRealmCreatures,
+  syncNightFireflies,
   travelToRealm,
   unlockRealm,
   upgradeTool,
 } from './rules.ts';
-import { HOMESTEAD_PORTAL_POS, REALM_DEFS, REALM_ORDER } from './constants.ts';
+import {
+  DEFAULT_FARMER_STYLE,
+  normalizeFarmerStyle,
+  sanitizePetName,
+} from './funFeatures.ts';
+import { HOMESTEAD_PORTAL_POS, HOMESTEAD_STRANGE_ZONE_POS, NIGHT_START_MINUTES, REALM_DEFS, REALM_ORDER } from './constants.ts';
 import { getSmartGuidance } from './blindAssist.ts';
 import {
   DEFAULT_EXTERNAL_SERVER_URL,
@@ -38,6 +58,7 @@ import {
   resolveHttpApiBase,
   resolveWebSocketUrl,
 } from './multiplayer.ts';
+import { CREATURE_LABELS, REALM_STORIES, resolveStoryLang } from './story.ts';
 import { getNearPromptLabel, getRealmLabel, LANGUAGE_OPTIONS, UI_TEXT } from './i18n.ts';
 import { formatSparkline, NetDebugTracker } from './netDebug.ts';
 import { audioEngine, pickNocturnalCueKind } from './audio.ts';
@@ -1202,10 +1223,20 @@ test('ancient portals, multi-world travel, realm cache preservation, and blind g
   cropTile.crop = { type: 'wheat', growthDays: 1, daysUnwatered: 0, withered: false, floodedDays: 0 };
   const homesteadRestoreScore = computeFarmRestorationPercent(world);
 
-  // Unlock & travel through all realms
+  // Unlocking Whispering Woods requires missions + gold/materials
   world.player.gold = 1000;
   world.inventory.wood = 40;
   world.inventory.stone = 40;
+  const blockedWoods = unlockRealm(world, 'whispering_woods');
+  assert.equal(blockedWoods.ok, false);
+  assert.deepEqual(blockedWoods.missingMissions, ['first_sow', 'eco_water', 'first_harvest']);
+
+  // Complete Homestead starter missions so Whispering Woods unlocks cleanly
+  world.stats.seedsPlanted = 4;
+  world.stats.cropsWatered = 6;
+  world.stats.cropsHarvested = 3;
+  assert.deepEqual(getMissingRealmMissions(world, 'whispering_woods'), []);
+
   const u1 = unlockRealm(world, 'whispering_woods');
   assert.equal(u1.ok, true);
   assert.equal(world.player.gold, 1000 - REALM_DEFS.whispering_woods.unlockGold);
@@ -1243,6 +1274,20 @@ test('ancient portals, multi-world travel, realm cache preservation, and blind g
   assert.equal(chopRes.performed, true);
   assert.equal(world.inventory.wood, woodBefore + 5);
 
+  // Crystal Oasis requires Whispering Woods village & strange zone missions + land_steward
+  const blockedOasis = unlockRealm(world, 'crystal_oasis');
+  assert.equal(blockedOasis.ok, false);
+  assert.ok((blockedOasis.missingMissions?.length ?? 0) > 0);
+  const woodsElder = world.tiles.find((t) => t.terrain === 'village_elder')!;
+  world.player.x = woodsElder.x + 0.5;
+  world.player.y = woodsElder.y + 0.5;
+  assert.equal(interactWithVillageElder(world).ok, true);
+  const woodsStrange = world.tiles.find((t) => t.terrain === 'strange_zone')!;
+  world.player.x = woodsStrange.x + 0.5;
+  world.player.y = woodsStrange.y + 0.5;
+  assert.equal(interactWithStrangeZone(world).ok, true);
+  world.stats.obstaclesCleared = 6;
+
   // Crystal Oasis biome perk: +1 bonus stone & +8g Crystal Shard on mined rock
   assert.equal(unlockRealm(world, 'crystal_oasis').ok, true);
   assert.equal(travelToRealm(world, 'crystal_oasis').ok, true);
@@ -1261,6 +1306,19 @@ test('ancient portals, multi-world travel, realm cache preservation, and blind g
   assert.equal(mineRes.performed, true);
   assert.equal(world.inventory.stone, stoneBefore + 3);
   assert.equal(world.player.gold, goldBefore + 8);
+
+  // Sky Sanctuary requires Oasis village, Oasis strange zone, and portal_awakener
+  const blockedSky = unlockRealm(world, 'sky_sanctuary');
+  assert.equal(blockedSky.ok, false);
+  assert.ok((blockedSky.missingMissions?.length ?? 0) > 0);
+  const oasisElder = world.tiles.find((t) => t.terrain === 'village_elder')!;
+  world.player.x = oasisElder.x + 0.5;
+  world.player.y = oasisElder.y + 0.5;
+  assert.equal(interactWithVillageElder(world).ok, true);
+  const oasisStrange = world.tiles.find((t) => t.terrain === 'strange_zone')!;
+  world.player.x = oasisStrange.x + 0.5;
+  world.player.y = oasisStrange.y + 0.5;
+  assert.equal(interactWithStrangeZone(world).ok, true);
 
   // Sky Sanctuary biome perks: 2x crop growth, auto-watered, immune to Heatwave/Rainstorm, no wildlife raids
   assert.equal(unlockRealm(world, 'sky_sanctuary').ok, true);
@@ -1322,10 +1380,15 @@ test('multiplayer server synchronizes realm unlocks and travel across connected 
     });
 
     const waitForMsg = (predicate: (m: any) => boolean) =>
-      new Promise<any>((resolve) => {
+      new Promise<any>((resolve, reject) => {
+        const t = setTimeout(() => {
+          ws!.off('message', handler);
+          reject(new Error('Timed out waiting for ws message'));
+        }, 2000);
         const handler = (raw: unknown) => {
           const parsed = JSON.parse(String(raw));
           if (predicate(parsed)) {
+            clearTimeout(t);
             ws!.off('message', handler);
             resolve(parsed);
           }
@@ -1343,42 +1406,388 @@ test('multiplayer server synchronizes realm unlocks and travel across connected 
         clientId: 'voyager_1',
       })
     );
-    await joinedP;
+    const joined = await joinedP;
+    assert.equal(joined.world.activeRealm, 'homestead');
+    assert.equal(joined.world.width, REALM_DEFS.homestead.width);
+    assert.equal(joined.world.height, REALM_DEFS.homestead.height);
 
-    // Starting gold is 85g: crystal_oasis (160g + 10 stone) must fail with error fx
+    // Starting gold is 85g + incomplete missions: crystal_oasis must fail with error fx
     const errFxP = waitForMsg((m) => m.type === 'fx:event' && m.fx?.sfx === 'error');
     ws.send(JSON.stringify({ type: 'action:unlock_realm', realmId: 'crystal_oasis' }));
     const errFx = await errFxP;
     assert.equal(errFx.fx.sfx, 'error');
 
-    // Unlock whispering_woods (80g <= 85g) -> broadcasts world:sync & portal fx
-    const unlockSyncP = waitForMsg(
-      (m) => m.type === 'world:sync' && m.world?.unlockedRealms?.includes('whispering_woods')
-    );
-    const unlockFxP = waitForMsg((m) => m.type === 'fx:event' && m.fx?.sfx === 'portal');
+    // Whispering Woods is also mission-locked on fresh day 1 before farming tasks -> rejected
+    const lockedWoodsFxP = waitForMsg((m) => m.type === 'fx:event' && m.fx?.sfx === 'error');
     ws.send(JSON.stringify({ type: 'action:unlock_realm', realmId: 'whispering_woods' }));
-    const [unlockSync, unlockFx] = await Promise.all([unlockSyncP, unlockFxP]);
-    assert.equal(unlockFx.fx.sfx, 'portal');
-    assert.equal(unlockSync.world.player.gold, 5);
+    const lockedWoodsFx = await lockedWoodsFxP;
+    assert.equal(lockedWoodsFx.fx.sfx, 'error');
 
-    // Travel to whispering_woods -> broadcasts world:sync with 24x18 dimensions & spawn coordinates
-    const travelSyncP = waitForMsg(
-      (m) => m.type === 'world:sync' && m.world?.activeRealm === 'whispering_woods'
-    );
-    const travelFxP = waitForMsg((m) => m.type === 'fx:event' && m.fx?.sfx === 'portal');
+    // Traveling to locked Whispering Woods or re-traveling to active Homestead returns error fx cleanly
+    const lockedTravelP = waitForMsg((m) => m.type === 'fx:event' && m.fx?.sfx === 'error');
     ws.send(JSON.stringify({ type: 'action:travel_realm', realmId: 'whispering_woods' }));
-    const [syncMsg, fxMsg] = await Promise.all([travelSyncP, travelFxP]);
-    assert.equal(syncMsg.world.activeRealm, 'whispering_woods');
-    assert.equal(syncMsg.world.width, REALM_DEFS.whispering_woods.width);
-    assert.equal(syncMsg.world.height, REALM_DEFS.whispering_woods.height);
-    assert.equal(fxMsg.fx.sfx, 'portal');
-    assert.equal(syncMsg.players[0].x, REALM_DEFS.whispering_woods.spawnX);
+    const lockedTravelFx = await lockedTravelP;
+    assert.equal(lockedTravelFx.fx.sfx, 'error');
+
+    const sameRealmTravelP = waitForMsg((m) => m.type === 'fx:event' && m.fx?.sfx === 'error');
+    ws.send(JSON.stringify({ type: 'action:travel_realm', realmId: 'homestead' }));
+    const sameRealmFx = await sameRealmTravelP;
+    assert.equal(sameRealmFx.fx.sfx, 'error');
   } finally {
     if (ws) ws.terminate();
     handle.stopSimulation();
     await new Promise<void>((resolve) => handle.server.close(() => resolve()));
   }
 });
+
+test('story chapters, villages, strange zones, biome creatures, and daily gift resets work cleanly', () => {
+  const world = createInitialFarmState(42);
+  assert.equal(resolveStoryLang('ar'), 'ar');
+  assert.equal(resolveStoryLang('en'), 'en');
+  for (const rId of REALM_ORDER) {
+    assert.ok(REALM_STORIES[rId].title.ar.length > 0);
+    assert.ok(REALM_STORIES[rId].villageName.en.length > 0);
+    assert.ok(REALM_STORIES[rId].strangeZoneName.en.length > 0);
+    for (const kind of REALM_STORIES[rId].nativeCreatures) {
+      assert.ok(CREATURE_LABELS[kind].ar.length > 0);
+      assert.ok(CREATURE_LABELS[kind].en.length > 0);
+    }
+  }
+
+  // Homestead has its strange zone at HOMESTEAD_STRANGE_ZONE_POS
+  const hsZoneTile = world.tiles[HOMESTEAD_STRANGE_ZONE_POS.y * world.width + HOMESTEAD_STRANGE_ZONE_POS.x];
+  assert.equal(hsZoneTile.terrain, 'strange_zone');
+  world.player.x = HOMESTEAD_STRANGE_ZONE_POS.x + 0.5;
+  world.player.y = HOMESTEAD_STRANGE_ZONE_POS.y + 0.8;
+  assert.equal(isNearStrangeZone(world), true);
+  const goldBefore = world.player.gold;
+  const zoneRes = interactWithStrangeZone(world);
+  assert.equal(zoneRes.ok, true);
+  assert.equal(zoneRes.blessedToday, true);
+  assert.equal(world.stats.strangeZonesFound, 1);
+  assert.ok(world.player.gold > goldBefore);
+  assert.equal(interactWithStrangeZone(world).blessedToday, false);
+
+  // Complete prerequisites & inspect Whispering Woods Village Elder, Strange Zone, and Creatures
+  world.stats.seedsPlanted = 4;
+  world.stats.cropsWatered = 6;
+  world.stats.cropsHarvested = 3;
+  world.player.gold = 500;
+  world.inventory.wood = 20;
+  world.inventory.stone = 20;
+  assert.equal(unlockRealm(world, 'whispering_woods').ok, true);
+  assert.equal(travelToRealm(world, 'whispering_woods').ok, true);
+  assert.ok(world.realmCreatures && world.realmCreatures.length >= 2);
+  stepRealmCreatures(world, 0.5);
+
+  const elderTile = world.tiles.find((t) => t.terrain === 'village_elder')!;
+  assert.ok(elderTile);
+  world.player.x = elderTile.x + 0.5;
+  world.player.y = elderTile.y + 0.8;
+  assert.equal(isNearVillageElder(world), true);
+  const elderRes = interactWithVillageElder(world);
+  assert.equal(elderRes.ok, true);
+  assert.equal(elderRes.giftedToday, true);
+  assert.equal(world.stats.villagesVisited, 1);
+  assert.equal(interactWithVillageElder(world).giftedToday, false);
+
+  // Daily elder & strange zone gifts reset after sleeping a day
+  advanceDay(world, () => 0.5);
+  assert.deepEqual(world.elderGiftsToday, []);
+  assert.deepEqual(world.strangeZoneUsedToday, []);
+  assert.equal(interactWithVillageElder(world).giftedToday, true);
+});
+
+test('multiplayer security hardening: session tokens, allowlists, movement clamp, voice signal validation, headers, and URL schemes', async () => {
+  // URL scheme blocking
+  assert.equal(normalizeServerBaseUrl('javascript:alert(1)'), '');
+  assert.equal(normalizeServerBaseUrl('data:text/html,xss'), '');
+  assert.equal(normalizeServerBaseUrl('file:///etc/passwd'), '');
+
+  const handle = createMultiplayerServer({ serveStaticDist: false });
+  await new Promise<void>((resolve) => handle.server.listen(0, '127.0.0.1', resolve));
+  const addr = handle.server.address() as AddressInfo;
+  const baseHttp = `http://127.0.0.1:${addr.port}`;
+  const baseWs = `ws://127.0.0.1:${addr.port}/ws`;
+
+  let wsHost: WebSocket | null = null;
+  let wsAttacker: WebSocket | null = null;
+  let wsPeer: WebSocket | null = null;
+  try {
+    // Verify HTTP security headers & omitted X-Powered-By
+    const healthRes = await fetch(`${baseHttp}/api/health`);
+    assert.equal(healthRes.headers.get('x-powered-by'), null);
+    assert.equal(healthRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(healthRes.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
+
+    const openWs = async () => {
+      const sock = new WebSocket(baseWs);
+      await new Promise<void>((resolve, reject) => {
+        sock.once('open', () => resolve());
+        sock.once('error', reject);
+      });
+      return sock;
+    };
+    const nextMsg = (sock: WebSocket, pred: (m: any) => boolean) =>
+      new Promise<any>((resolve, reject) => {
+        const t = setTimeout(() => {
+          sock.off('message', handler);
+          reject(new Error('Timed out waiting for ws message'));
+        }, 2000);
+        const handler = (raw: unknown) => {
+          const parsed = JSON.parse(String(raw));
+          if (pred(parsed)) {
+            clearTimeout(t);
+            sock.off('message', handler);
+            resolve(parsed);
+          }
+        };
+        sock.on('message', handler);
+      });
+
+    wsHost = await openWs();
+    const hostJoinedP = nextMsg(wsHost, (m) => m.type === 'room:joined');
+    wsHost.send(
+      JSON.stringify({
+        type: 'room:create',
+        playerName: 'HostFarmer',
+        roomName: 'SecRoom',
+        isPublic: false,
+        clientId: 'sec_host_1',
+      })
+    );
+    const hostJoined = await hostJoinedP;
+    assert.ok(typeof hostJoined.sessionToken === 'string' && hostJoined.sessionToken.length >= 32);
+    assert.equal((hostJoined.players[0] as Record<string, unknown>).sessionToken, undefined);
+
+    // 1. Hijack attempt using host's clientId without/wrong sessionToken -> UNAUTHORIZED
+    wsAttacker = await openWs();
+    const unauthP = nextMsg(wsAttacker, (m) => m.type === 'room:error');
+    wsAttacker.send(
+      JSON.stringify({
+        type: 'room:join',
+        code: hostJoined.roomCode,
+        playerName: 'Hijacker',
+        clientId: 'sec_host_1',
+        sessionToken: 'wrong_token_attempt',
+      })
+    );
+    const unauthErr = await unauthP;
+    assert.equal(unauthErr.code, 'UNAUTHORIZED');
+
+    // 2. Join legitimate second peer + verify prototype keys / invalid animal rejected cleanly
+    wsPeer = await openWs();
+    const peerJoinedP = nextMsg(wsPeer, (m) => m.type === 'room:joined');
+    wsPeer.send(
+      JSON.stringify({
+        type: 'room:join',
+        code: hostJoined.roomCode,
+        playerName: 'CoopPeer',
+        clientId: 'sec_peer_2',
+      })
+    );
+    const peerJoined = await peerJoinedP;
+    assert.ok(typeof peerJoined.sessionToken === 'string');
+    assert.equal((peerJoined.players[0] as Record<string, unknown>).sessionToken, undefined);
+
+    wsPeer.send(JSON.stringify({ type: 'action:shop_buy', itemId: '__proto__', qty: 1 }));
+    wsPeer.send(JSON.stringify({ type: 'action:buy_animal', kind: 'dragon' }));
+
+    // 3. Movement teleport attempt is clamped (<= 3.5 tiles per step)
+    const tickAfterMoveP = nextMsg(wsHost, (m) => m.type === 'tick:entities');
+    wsPeer.send(
+      JSON.stringify({
+        type: 'player:move',
+        x: 26,
+        y: 17,
+        facingX: 1,
+        facingY: 0,
+        walkCycle: 1,
+        selectedHotbarIndex: 0,
+      })
+    );
+    const tickAfterMove = await tickAfterMoveP;
+    const movedPeer = tickAfterMove.players.find((p: any) => p.id === 'sec_peer_2');
+    assert.ok(movedPeer);
+    assert.ok(Math.hypot(movedPeer.x - peerJoined.players[1].x, movedPeer.y - peerJoined.players[1].y) <= 3.6);
+
+    // 4. WebRTC signal drops extra properties while relaying valid fields
+    const relayedSignalP = nextMsg(wsHost, (m) => m.type === 'voice:signal');
+    wsPeer.send(
+      JSON.stringify({
+        type: 'voice:signal',
+        targetId: 'sec_host_1',
+        signal: {
+          kind: 'offer',
+          sdp: { type: 'offer', sdp: 'v=0', maliciousExtra: 'dropme' },
+          unexpectedField: true,
+        },
+      })
+    );
+    const relayedSignal = await relayedSignalP;
+    assert.equal(relayedSignal.fromId, 'sec_peer_2');
+    assert.equal(relayedSignal.signal.unexpectedField, undefined);
+    assert.equal(relayedSignal.signal.sdp.maliciousExtra, undefined);
+
+    // 5. Landmark interaction rejects far-away request with error
+    const farLandmarkP = nextMsg(wsHost, (m) => m.type === 'fx:event' && m.fx?.sfx === 'error');
+    wsHost.send(JSON.stringify({ type: 'action:interact_landmark', kind: 'strange_zone' }));
+    const farLandmark = await farLandmarkP;
+    assert.equal(farLandmark.fx.sfx, 'error');
+
+    // 6. Reconnect with valid host sessionToken succeeds
+    wsHost.close();
+    wsHost = await openWs();
+    const rejoinP = nextMsg(wsHost, (m) => m.type === 'room:joined');
+    wsHost.send(
+      JSON.stringify({
+        type: 'room:join',
+        code: hostJoined.roomCode,
+        playerName: 'HostFarmer',
+        clientId: 'sec_host_1',
+        sessionToken: hostJoined.sessionToken,
+      })
+    );
+    const rejoined = await rejoinP;
+    assert.equal(rejoined.playerId, 'sec_host_1');
+  } finally {
+    if (wsHost) wsHost.terminate();
+    if (wsAttacker) wsAttacker.terminate();
+    if (wsPeer) wsPeer.terminate();
+    handle.stopSimulation();
+    await new Promise<void>((resolve) => handle.server.close(() => resolve()));
+  }
+});
+
+test('Lucky Wheel & Eco-Quiz grant daily rewards once per day and reset on advanceDay', () => {
+  const world = createInitialFarmState(42);
+  world.player.gold = 100;
+  world.player.stamina = 40;
+  world.xp = 0;
+
+  // Spin Lucky Wheel (rand=0.0 -> index 0 -> +45 gold)
+  const firstSpin = spinLuckyWheel(world, () => 0);
+  assert.equal(firstSpin.ok, true);
+  assert.equal(firstSpin.rewardIndex, 0);
+  assert.equal(world.luckySpinUsedToday, true);
+  assert.equal(world.player.gold, 145);
+  assert.equal(world.stats.wheelSpins, 1);
+
+  // Second spin on same day is blocked
+  const repeatSpin = spinLuckyWheel(world, () => 0.8);
+  assert.equal(repeatSpin.ok, false);
+  assert.equal(world.player.gold, 145);
+
+  // Eco-Quiz wrong answer gives try-again without locking
+  const wrongQuiz = answerEcoQuiz(world, 0, 2);
+  assert.equal(wrongQuiz.ok, true);
+  assert.equal(wrongQuiz.correct, false);
+  assert.equal(world.ecoQuizAnsweredToday, false);
+
+  // Eco-Quiz right answer grants +35g, +15 stamina, +25 XP and locks for the day
+  const rightQuiz = answerEcoQuiz(world, 0, 0);
+  assert.equal(rightQuiz.ok, true);
+  assert.equal(rightQuiz.correct, true);
+  assert.equal(world.ecoQuizAnsweredToday, true);
+  assert.equal(world.player.gold, 180);
+  assert.equal(world.player.stamina, 55);
+  assert.equal(world.stats.quizzesSolved, 1);
+
+  const repeatQuiz = answerEcoQuiz(world, 0, 0);
+  assert.equal(repeatQuiz.ok, false);
+
+  // Morning reset unlocks both
+  advanceDay(world, () => 0.5);
+  assert.equal(world.luckySpinUsedToday, false);
+  assert.equal(world.ecoQuizAnsweredToday, false);
+});
+
+test('Mystery Chest spawns daily, unlocks when near, grants gold/loot/XP, and respawns next day', () => {
+  const world = createInitialFarmState(42);
+  assert.ok(world.mysteryChest, 'Initial farm should spawn a Mystery Chest');
+  const chest = world.mysteryChest!;
+
+  // Too far away -> cannot open
+  world.player.x = chest.x + 8;
+  world.player.y = chest.y + 8;
+  assert.equal(isNearMysteryChest(world), false);
+  assert.equal(openMysteryChest(world).ok, false);
+
+  // Move right beside chest and open
+  world.player.x = chest.x + 0.5;
+  world.player.y = chest.y + 0.5;
+  assert.equal(isNearMysteryChest(world), true);
+  const goldBefore = world.player.gold;
+  const openRes = openMysteryChest(world, () => 0.25);
+  assert.equal(openRes.ok, true);
+  assert.ok(openRes.goldDelta >= 35);
+  assert.ok(openRes.bonusItem && openRes.bonusItem.qty >= 1);
+  assert.equal(world.player.gold, goldBefore + openRes.goldDelta);
+  assert.equal(world.mysteryChest, null);
+  assert.equal(world.stats.chestsOpened, 1);
+
+  // advanceDay spawns a fresh chest
+  advanceDay(world, () => 0.5);
+  assert.ok(world.mysteryChest);
+  const oasisChest = rollDailyMysteryChest(world.tiles, 'crystal_oasis', () => 0.3);
+  assert.equal(oasisChest?.kind, 'crystal');
+});
+
+test('Night Fireflies spawn at night, drift on stepFireflies, and award perks when caught', () => {
+  const world = createInitialFarmState(42);
+  world.fireflies = [];
+
+  // Daytime in homestead clears fireflies
+  world.timeMinutes = 12 * 60;
+  syncNightFireflies(world, () => 0.4);
+  assert.equal(world.fireflies.length, 0);
+
+  // Nighttime spawns a firefly
+  world.timeMinutes = NIGHT_START_MINUTES + 15;
+  syncNightFireflies(world, () => 0.4);
+  assert.equal(world.fireflies.length, 1);
+
+  const fly = world.fireflies[0];
+  const prevX = fly.x;
+  fly.vx = 0.5;
+  stepFireflies(world, 0.2);
+  assert.notEqual(fly.x, prevX);
+
+  // Catch firefly when player is close
+  world.player.x = fly.x;
+  world.player.y = fly.y;
+  world.player.gold = 50;
+  world.player.stamina = 40;
+  const caught = catchNearbyFirefly(world);
+  assert.equal(caught.caught, true);
+  assert.equal(caught.goldDelta, 12);
+  assert.equal(world.player.gold, 62);
+  assert.equal(world.player.stamina, 46);
+  assert.equal(world.stats.firefliesCaught, 1);
+  assert.equal(world.fireflies.length, 0);
+});
+
+test('pet naming and farmer style normalization sanitize untrusted input safely', () => {
+  assert.equal(sanitizePetName('  <script>"Buddy"</script>  '), 'scriptBuddyscr');
+  assert.equal(sanitizePetName('<img src="x">Rocky1234567890'), 'img src=xRocky');
+
+  const world = createInitialFarmState(42);
+  const badRename = renameFarmPet(world, 'dog', '   <>"`\\/\n  ');
+  assert.equal(badRename.ok, false);
+
+  const okRename = renameFarmPet(world, 'cat', '  PixelCat!  ');
+  assert.equal(okRename.ok, true);
+  assert.equal(okRename.name, 'PixelCat!');
+  assert.equal(world.petNames?.cat, 'PixelCat!');
+
+  assert.deepEqual(normalizeFarmerStyle({ outfit: 'invalid_outfit', hat: 'wizard' }), {
+    outfit: DEFAULT_FARMER_STYLE.outfit,
+    hat: 'wizard',
+  });
+  assert.deepEqual(normalizeFarmerStyle(null), DEFAULT_FARMER_STYLE);
+});
+
+
 
 
 

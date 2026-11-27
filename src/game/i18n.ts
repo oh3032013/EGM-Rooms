@@ -785,6 +785,56 @@ const BASE_MISSION_TEXT: Record<
       desc: 'افتح واكتشف جميع عوالم EcoGrow الأربعة.',
     },
   },
+  woods_village_visit: {
+    en: {
+      title: '27. Sylvan Oakwood Village',
+      desc: 'Travel to Whispering Woods and speak with Elder Lyra.',
+    },
+    ar: {
+      title: '27. زيارة قرية السنديان العتيق',
+      desc: 'سافر إلى الغابة الهامسة وتحدّث مع الحكيمة ليرا.',
+    },
+  },
+  woods_strange_zone: {
+    en: {
+      title: '28. The Whispering Monolith',
+      desc: 'Investigate the glowing Strange Zone in Whispering Woods.',
+    },
+    ar: {
+      title: '28. استكشاف المسلّة الهامسة',
+      desc: 'افحص المنطقة الغريبة المتوهجة في الغابة الهامسة.',
+    },
+  },
+  oasis_village_visit: {
+    en: {
+      title: '29. Mirage Caravan Village',
+      desc: 'Visit Crystal Oasis village and meet Water-Sage Tariq.',
+    },
+    ar: {
+      title: '29. قرية قافلة السراب',
+      desc: 'قم بزيارة قرية واحة الكريستال وقابل الحكيم طارق.',
+    },
+  },
+  oasis_strange_zone: {
+    en: {
+      title: '30. Pulsing Geode Rift',
+      desc: 'Investigate the Crystal Strange Zone in Crystal Oasis.',
+    },
+    ar: {
+      title: '30. صدع الكريستال النابض',
+      desc: 'افحص المنطقة الغريبة المتوهجة في واحة الكريستال.',
+    },
+  },
+  sky_sanctuary_expedition: {
+    en: {
+      title: '31. 2040 Astral Chronicle',
+      desc: 'Meet Star-Keeper Orion or touch the 2040 Astral Rift in Sky Sanctuary.',
+    },
+    ar: {
+      title: '31. عهد صدع الزمن ٢٠٢٠/٢٠٤٠',
+      desc: 'قابل حارس النجوم أوريون أو المس مذبح صدع الزمن في ملاذ السماء.',
+    },
+  },
 };
 
 const BASE_BADGE_TEXT: Record<
@@ -882,7 +932,7 @@ export const MISSION_TEXT: Record<
     ar: BASE_MISSION_TEXT[id].ar,
   } as Record<Language, { title: string; desc: string }>;
   for (const code of Object.keys(EXTRA_LOCALES) as ExtraLanguage[]) {
-    entry[code] = EXTRA_LOCALES[code].missions[id];
+    entry[code] = EXTRA_LOCALES[code].missions[id] ?? BASE_MISSION_TEXT[id].en;
   }
   acc[id] = entry;
   return acc;
@@ -1222,9 +1272,24 @@ export function getRealmLabel(
 }
 
 export function getNearPromptLabel(
-  action: 'sleep' | 'shop' | 'well' | 'bin' | 'portal',
+  action: 'sleep' | 'shop' | 'well' | 'bin' | 'portal' | 'elder' | 'strange_zone' | 'chest',
   lang: Language
 ): string {
+  if (action === 'chest') {
+    return lang === 'ar'
+      ? 'اضغط E أو انقر لفتح صندوق الكنز اليومي'
+      : 'Press E or Tap to Open Mystery Chest';
+  }
+  if (action === 'elder') {
+    return lang === 'ar'
+      ? 'اضغط E أو انقر للتحدث مع حكيم القرية'
+      : 'Press E or Tap to Speak with Village Elder';
+  }
+  if (action === 'strange_zone') {
+    return lang === 'ar'
+      ? 'اضغط E أو انقر لفحص المنطقة الغريبة'
+      : 'Press E or Tap to Investigate Strange Zone';
+  }
   if (lang === 'en') {
     switch (action) {
       case 'sleep':
